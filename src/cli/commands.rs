@@ -146,7 +146,7 @@ pub fn context_command(path: &str, task: &str) -> Result<()> {
 pub fn initialize_server_database(in_memory: bool) -> Result<(String, Database)> {
     use std::env;
 
-    let in_memory = in_memory || env::var("CODEMAP_IN_MEMORY").map_or(false, |v| v == "1");
+    let in_memory = in_memory || env::var("CODEMAP_IN_MEMORY").is_ok_and(|v| v == "1");
 
     // Get project root from environment or current directory
     let project_root = env::var("CODEMAP_ROOT")
