@@ -9,7 +9,7 @@ keywords = ["mcp", "code-analysis", "tree-sitter", "semantic-search"]
 
 [dependencies]
 # MCP protocol
-rmcp = { version = "0.15.0", features = ["server", "server", "macros", "transport-io", "transport-streamable-http-server"] }
+rmcp = { version = "0.16.0", features = ["server", "server", "macros", "transport-io", "transport-streamable-http-server"] }
 
 # HTTP server
 axum = "0.8"
