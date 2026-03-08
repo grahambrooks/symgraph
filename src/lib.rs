@@ -22,11 +22,16 @@
 //! - `codemap_node` - Get detailed symbol information
 //! - `codemap_status` - Get index statistics
 
+#[cfg(feature = "sqlite")]
 pub mod cli;
+#[cfg(feature = "sqlite")]
 pub mod context;
+#[cfg(feature = "sqlite")]
 pub mod db;
 pub mod extraction;
+#[cfg(feature = "sqlite")]
 pub mod graph;
+#[cfg(feature = "sqlite")]
 pub mod mcp;
 pub mod types;
 
@@ -38,6 +43,7 @@ use ignore::WalkBuilder;
 use sha2::{Digest, Sha256};
 use tracing::{debug, info, warn};
 
+#[cfg(feature = "sqlite")]
 use db::Database;
 use extraction::Extractor;
 use types::{FileRecord, Language};
@@ -91,6 +97,7 @@ impl Default for IndexConfig {
 }
 
 /// Index a codebase into the database
+#[cfg(feature = "sqlite")]
 pub fn index_codebase(db: &mut Database, config: &IndexConfig) -> Result<IndexStats> {
     let root = Path::new(&config.root).canonicalize()?;
     info!("Indexing codebase at {}", root.display());
