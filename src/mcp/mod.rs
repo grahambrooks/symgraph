@@ -290,20 +290,18 @@ impl CodeMapHandler {
 #[tool_handler]
 impl ServerHandler for CodeMapHandler {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            instructions: Some(
-                "codemap provides semantic code intelligence for exploring codebases. \
-                Use codemap-context to build task-focused context, codemap-search for quick lookups, \
-                codemap-callers/callees/impact for understanding code relationships, \
-                codemap-definition to view source code, codemap-file to list symbols in a file, \
-                codemap-references for all usages of a symbol, codemap-hierarchy for class/module structure, \
-                codemap-path to find call paths between functions, codemap-unused to find dead code, \
-                codemap-implementations to find interface/trait implementations, \
-                codemap-diff-impact to analyze change impact, and codemap-reindex to refresh after edits."
-                    .into(),
-            ),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            ..Default::default()
-        }
+        let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build());
+        info.instructions = Some(
+            "codemap provides semantic code intelligence for exploring codebases. \
+            Use codemap-context to build task-focused context, codemap-search for quick lookups, \
+            codemap-callers/callees/impact for understanding code relationships, \
+            codemap-definition to view source code, codemap-file to list symbols in a file, \
+            codemap-references for all usages of a symbol, codemap-hierarchy for class/module structure, \
+            codemap-path to find call paths between functions, codemap-unused to find dead code, \
+            codemap-implementations to find interface/trait implementations, \
+            codemap-diff-impact to analyze change impact, and codemap-reindex to refresh after edits."
+                .into(),
+        );
+        info
     }
 }
