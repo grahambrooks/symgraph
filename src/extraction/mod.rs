@@ -854,4 +854,47 @@ fn third() {}
         assert!(first.start_line < second.start_line);
         assert!(second.start_line < third.start_line);
     }
+
+    #[test]
+    fn test_extract_csharp_class() {
+        let mut extractor = Extractor::new();
+        let code = r#"
+namespace MyApp
+{
+    public class Program
+    {
+        public static void Main(string[] args)
+        {
+            Console.WriteLine("Hello, World!");
+        }
+
+        private int Add(int x, int y)
+        {
+            return x + y;
+        }
+    }
+}
+"#;
+        let result = extractor.extract_file("test.cs", code);
+        assert!(result.errors.is_empty());
+        assert!(result.nodes.iter().any(|n| n.name == "Program" && n.kind == NodeKind::Class));
+        assert!(result.nodes.iter().any(|n| n.name == "Main" && n.kind == NodeKind::Method));
+        assert!(result.nodes.iter().any(|n| n.name == "Add" && n.kind == NodeKind::Method));
+        assert!(result.nodes.iter().any(|n| n.name == "MyApp" && n.kind == NodeKind::Module));
+    }
+
+    #[test]
+    fn test_extract_csharp_interface() {
+        let mut extractor = Extractor::new();
+        let code = r#"
+public interface IRepository
+{
+    void Save();
+    int GetCount();
+}
+"#;
+        let result = extractor.extract_file("test.cs", code);
+        assert!(result.errors.is_empty());
+        assert!(result.nodes.iter().any(|n| n.name == "IRepository" && n.kind == NodeKind::Interface));
+    }
 }

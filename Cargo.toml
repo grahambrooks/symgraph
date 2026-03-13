@@ -28,6 +28,7 @@ tree-sitter-go = "0.25.0"
 tree-sitter-java = "0.23"
 tree-sitter-c = "0.24"
 tree-sitter-cpp = "0.23"
+tree-sitter-c-sharp = "0.23"
 
 # Database
 rusqlite = { version = "0.38.0", features = ["bundled"], optional = true }

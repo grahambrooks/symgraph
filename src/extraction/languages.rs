@@ -88,6 +88,7 @@ pub fn get_language(lang: Language) -> Option<TsLanguage> {
         Language::Java => Some(tree_sitter_java::LANGUAGE.into()),
         Language::C => Some(tree_sitter_c::LANGUAGE.into()),
         Language::Cpp => Some(tree_sitter_cpp::LANGUAGE.into()),
+        Language::CSharp => Some(tree_sitter_c_sharp::LANGUAGE.into()),
         _ => None,
     }
 }
@@ -103,6 +104,7 @@ pub fn get_config(lang: Language) -> &'static LanguageConfig {
         Language::Java => &JAVA_CONFIG,
         Language::C => &C_CONFIG,
         Language::Cpp => &CPP_CONFIG,
+        Language::CSharp => &CSHARP_CONFIG,
         _ => &DEFAULT_CONFIG,
     }
 }
@@ -250,4 +252,25 @@ static CPP_CONFIG: LanguageConfig = LanguageConfig {
     constant_types: &["preproc_def"],
     variable_types: &["declaration"],
     module_types: &["namespace_definition"],
+};
+
+static CSHARP_CONFIG: LanguageConfig = LanguageConfig {
+    function_types: &[],
+    method_types: &[
+        "method_declaration",
+        "constructor_declaration",
+        "destructor_declaration",
+        "operator_declaration",
+        "conversion_operator_declaration",
+    ],
+    class_types: &["class_declaration", "record_declaration"],
+    struct_types: &["struct_declaration"],
+    interface_types: &["interface_declaration"],
+    enum_types: &["enum_declaration"],
+    import_types: &["using_directive"],
+    call_types: &["invocation_expression", "object_creation_expression"],
+    type_alias_types: &["delegate_declaration"],
+    constant_types: &["field_declaration"], // C# constants are field_declaration with const modifier
+    variable_types: &["variable_declaration"],
+    module_types: &["namespace_declaration"],
 };
