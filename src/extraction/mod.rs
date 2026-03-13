@@ -877,10 +877,22 @@ namespace MyApp
 "#;
         let result = extractor.extract_file("test.cs", code);
         assert!(result.errors.is_empty());
-        assert!(result.nodes.iter().any(|n| n.name == "Program" && n.kind == NodeKind::Class));
-        assert!(result.nodes.iter().any(|n| n.name == "Main" && n.kind == NodeKind::Method));
-        assert!(result.nodes.iter().any(|n| n.name == "Add" && n.kind == NodeKind::Method));
-        assert!(result.nodes.iter().any(|n| n.name == "MyApp" && n.kind == NodeKind::Module));
+        assert!(result
+            .nodes
+            .iter()
+            .any(|n| n.name == "Program" && n.kind == NodeKind::Class));
+        assert!(result
+            .nodes
+            .iter()
+            .any(|n| n.name == "Main" && n.kind == NodeKind::Method));
+        assert!(result
+            .nodes
+            .iter()
+            .any(|n| n.name == "Add" && n.kind == NodeKind::Method));
+        assert!(result
+            .nodes
+            .iter()
+            .any(|n| n.name == "MyApp" && n.kind == NodeKind::Module));
     }
 
     #[test]
@@ -895,6 +907,9 @@ public interface IRepository
 "#;
         let result = extractor.extract_file("test.cs", code);
         assert!(result.errors.is_empty());
-        assert!(result.nodes.iter().any(|n| n.name == "IRepository" && n.kind == NodeKind::Interface));
+        assert!(result
+            .nodes
+            .iter()
+            .any(|n| n.name == "IRepository" && n.kind == NodeKind::Interface));
     }
 }
