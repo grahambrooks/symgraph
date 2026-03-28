@@ -1,0 +1,80 @@
+src/server.rs
+  d97fcd478d13a9e0 64-67
+  b5c7f2d5b23e47d2 18,57
+src/mcp/handlers/graph.rs
+  b5c7f2d5b23e47d2 9,11-13,16,26,29,31-33,36,46,49,51-53,56,102
+src/db/mod.rs
+  b5c7f2d5b23e47d2 29,35-44,130-134,181-189,203-206,213-251,253-267,526-583,585-696,1400-1422,1424-1429,1431-1479
+src/mcp/handlers/context.rs
+  b5c7f2d5b23e47d2 8-12,21-22
+src/mcp/handlers/implementations.rs
+  b5c7f2d5b23e47d2 7,11,19,22
+src/mcp/handlers/diff_impact.rs
+  b5c7f2d5b23e47d2 7,11,14,56,59
+Makefile
+  d97fcd478d13a9e0 2-8,39-118
+src/mcp/handlers/reindex.rs
+  b5c7f2d5b23e47d2 11-12,16,31-32,35,40-50,58,60,71,74,76
+AGENTS.md
+  d97fcd478d13a9e0 7,10-11,61,91-92,94-95
+src/mcp/handlers/unused.rs
+  b5c7f2d5b23e47d2 5,42,45
+src/db/schema.rs
+  b5c7f2d5b23e47d2 74-75
+src/mcp/handlers/hierarchy.rs
+  b5c7f2d5b23e47d2 7,11,19,22
+Cargo.toml
+  b5c7f2d5b23e47d2 43-45
+src/mcp/handlers/symbol.rs
+  b5c7f2d5b23e47d2 11,14-15,45,48-52,55-56,63-64,71-72,74,125,128,131-132,136,139,197
+README.md
+  d97fcd478d13a9e0 73,170,172,174,176-179,181-187,189,191-196,202-204,210-218,220-224,226,228-230,232,236,238-239,241,248,250,257,263,267,269-273,279,281,284,287,291,297-302,305,346-349
+src/mcp/handlers/path.rs
+  b5c7f2d5b23e47d2 6,10,13,34,37
+src/mcp/handlers/file.rs
+  b5c7f2d5b23e47d2 7,10,13-16,51
+src/mcp/handlers/search.rs
+  b5c7f2d5b23e47d2 8-11,14,27
+.mcp.json
+  d97fcd478d13a9e0 1-8,28-30
+  b5c7f2d5b23e47d2 9-27
+src/mcp/handlers/status.rs
+  b5c7f2d5b23e47d2 5-6,32
+src/mcp/mod.rs
+  b5c7f2d5b23e47d2 26-27,39-67,72,74-75,83,85,90,95,99-104,106-119,121-124,134-135,144,153,162,171,180-181,190,199,202,205,208-215,217-225,227-241,243-244,246,255,264-271,280,289,298,307,316
+src/lib.rs
+  b5c7f2d5b23e47d2 43,50,63-64,85,99,104-120,123,127,137-138,169-173,200,207-236,238-240,242,244-245,249-253,262-265,267-270,272-274,281-286,299,301
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.20",
+  "base_commit_sha": "0ed871d88afcb451acc69bef1060f780e91fa047",
+  "prompts": {
+    "b5c7f2d5b23e47d2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8311b126-f7e9-42ce-a2b5-10485592ae30",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>",
+      "messages": [],
+      "total_additions": 725,
+      "total_deletions": 317,
+      "accepted_lines": 687,
+      "overriden_lines": 6
+    },
+    "d97fcd478d13a9e0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "72fd8592-3268-4f16-9e92-fb0485f21120",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>",
+      "messages": [],
+      "total_additions": 241,
+      "total_deletions": 93,
+      "accepted_lines": 224,
+      "overriden_lines": 1
+    }
+  }
+}
