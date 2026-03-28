@@ -4,9 +4,11 @@ Quick reference for AI agents working in this Rust MCP server repository.
 
 ## Quick Commands
 
-**Build/Test**: `cargo build` | `cargo test` | `cargo check` | `cargo fmt` | `cargo clippy --fix`
+**Build/Test**: `make build` | `make test` | `make check` | `make fmt` | `make lint`
 **Run**: `cargo run -- index .` | `cargo run -- serve` | `cargo run -- serve --port 8080`
 **Test**: `cargo test --lib` | `cargo test module::` | `cargo test --test integration_test`
+**Release**: `make release` (date-based version YYYY.M.D) | `make release-dry-run` (preview)
+**Maintenance**: `make update` | `make outdated` | `make clean`
 
 ## Project Overview
 
@@ -56,7 +58,7 @@ Add new: Edit `src/extraction/languages.rs`
 
 ## Development Guidelines
 
-**Workflow**: Test → Change → Format (`cargo fmt`) → Lint (`cargo clippy --fix`) → Test
+**Workflow**: Test → Change → `make check` (format, lint, test) → Commit
 
 **Code Style**:
 - Descriptive names, small functions (<100 lines)
@@ -86,8 +88,10 @@ Add new: Edit `src/extraction/languages.rs`
 - `cargo test test_name -- --nocapture`
 - `sqlite3 .codemap/index.db "SELECT COUNT(*) FROM nodes"`
 
+**Release**: `make release` bumps version to today's date (YYYY.M.D), updates Cargo.toml and manifest.json, commits, tags, and pushes. GitHub Actions builds and publishes artifacts. Use `make release-dry-run` to preview.
+
 **Problems**:
-- Test fails: `cargo clean && cargo test`
-- Build errors: `cargo update && cargo build`
+- Test fails: `make clean && make test`
+- Build errors: `make update && make build`
 - DB locked: `pkill codemap`
 - Slow indexing: Check .gitignore, file count

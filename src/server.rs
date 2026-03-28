@@ -15,7 +15,7 @@ use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 use codemap::cli::initialize_server_database;
-use codemap::mcp::CodeMapHandler;
+use codemap::mcp::{CodeMapHandler, SyncDatabase};
 
 fn setup_debug_logging() {
     let subscriber = FmtSubscriber::builder()
@@ -54,16 +54,17 @@ pub async fn start_http(port: u16, in_memory: bool) -> Result<()> {
     info!("Project root: {}", project_root);
 
     // Wrap database in Arc for sharing across HTTP sessions
-    let db = Arc::new(std::sync::Mutex::new(db));
+    let db = Arc::new(std::sync::RwLock::new(SyncDatabase(db)));
     let cancellation_token = tokio_util::sync::CancellationToken::new();
 
     // Create HTTP service - each session gets a handler with shared database
     let service = StreamableHttpService::new(
         move || Ok(CodeMapHandler::new_shared(db.clone(), project_root.clone())),
         LocalSessionManager::default().into(),
-        StreamableHttpServerConfig {
-            cancellation_token: cancellation_token.child_token(),
-            ..Default::default()
+        {
+            let mut config = StreamableHttpServerConfig::default();
+            config.cancellation_token = cancellation_token.child_token();
+            config
         },
     );
 

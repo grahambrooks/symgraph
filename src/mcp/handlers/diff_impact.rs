@@ -4,14 +4,14 @@ use crate::db::Database;
 use crate::mcp::format;
 use crate::mcp::types::DiffImpactRequest;
 
-pub fn handle_diff_impact(db: &Database, req: &DiffImpactRequest) -> String {
+pub fn handle_diff_impact(db: &Database, req: &DiffImpactRequest) -> Result<String, String> {
     match db.get_diff_impact(&req.file_path, req.start_line, req.end_line) {
         Ok(nodes) => {
             if nodes.is_empty() {
-                format!(
+                Ok(format!(
                     "No symbols affected by changes to {}:{}—{}",
                     req.file_path, req.start_line, req.end_line
-                )
+                ))
             } else {
                 let mut output = format!(
                     "# Impact Analysis: {}:{}—{}\n\n",
@@ -53,9 +53,9 @@ pub fn handle_diff_impact(db: &Database, req: &DiffImpactRequest) -> String {
                     }
                 }
 
-                output
+                Ok(output)
             }
         }
-        Err(e) => format!("Error: {}", e),
+        Err(e) => Err(e.to_string()),
     }
 }

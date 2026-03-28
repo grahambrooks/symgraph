@@ -26,18 +26,23 @@ impl Database {
     /// Open or create a database at the given path
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
         let conn = Connection::open(path)?;
-        // Enable foreign key constraints immediately after opening
-        conn.execute("PRAGMA foreign_keys = ON", [])?;
-        let db = Self { conn };
-        db.initialize()?;
-        Ok(db)
+        Self::from_connection(conn)
     }
 
     /// Create an in-memory database (for testing)
     pub fn in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
-        // Enable foreign key constraints immediately after opening
-        conn.execute("PRAGMA foreign_keys = ON", [])?;
+        Self::from_connection(conn)
+    }
+
+    /// Shared initialization: set PRAGMAs and create schema
+    fn from_connection(conn: Connection) -> Result<Self> {
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON; \
+             PRAGMA journal_mode = WAL; \
+             PRAGMA synchronous = NORMAL; \
+             PRAGMA cache_size = -64000;",
+        )?;
         let db = Self { conn };
         db.initialize()?;
         Ok(db)
@@ -122,6 +127,11 @@ impl Database {
             "DELETE FROM edges WHERE target_id IN (SELECT id FROM nodes WHERE file_path = ?1)",
             params![path],
         )?;
+        // Delete FTS entries for nodes in this file
+        self.conn.execute(
+            "INSERT INTO nodes_fts(nodes_fts, rowid, name, qualified_name) SELECT 'delete', id, name, qualified_name FROM nodes WHERE file_path = ?1",
+            params![path],
+        )?;
         // Delete nodes
         self.conn
             .execute("DELETE FROM nodes WHERE file_path = ?1", params![path])?;
@@ -168,7 +178,15 @@ impl Database {
                 node.language.as_str(),
             ],
         )?;
-        Ok(self.conn.last_insert_rowid())
+        let rowid = self.conn.last_insert_rowid();
+
+        // Insert into FTS index
+        self.conn.execute(
+            "INSERT INTO nodes_fts(rowid, name, qualified_name) VALUES (?1, ?2, ?3)",
+            params![rowid, node.name, node.qualified_name],
+        )?;
+
+        Ok(rowid)
     }
 
     /// Get a node by ID
@@ -182,13 +200,71 @@ impl Database {
         Ok(result)
     }
 
-    /// Search nodes by name (case-insensitive prefix match)
+    /// Search nodes by name using FTS5 full-text search with LIKE fallback.
+    ///
+    /// Uses FTS5 prefix matching for queries of 2+ characters, falling back to
+    /// LIKE-based search for single-character queries or if the FTS query fails.
     pub fn search_nodes(
         &self,
         query: &str,
         kind: Option<NodeKind>,
         limit: u32,
     ) -> Result<Vec<Node>> {
+        // FTS5 requires at least 2 characters for useful prefix matching
+        let use_fts = query.len() >= 2;
+
+        if use_fts {
+            // FTS5 prefix query: lowercase the query and append * for prefix matching
+            let fts_query = format!("\"{}\"*", query.to_lowercase());
+
+            let sql = if kind.is_some() {
+                r#"
+                SELECT n.* FROM nodes n
+                INNER JOIN nodes_fts fts ON n.id = fts.rowid
+                WHERE nodes_fts MATCH ?1 AND n.kind = ?2
+                ORDER BY LENGTH(n.name), n.name
+                LIMIT ?3
+                "#
+            } else {
+                r#"
+                SELECT n.* FROM nodes n
+                INNER JOIN nodes_fts fts ON n.id = fts.rowid
+                WHERE nodes_fts MATCH ?1
+                ORDER BY LENGTH(n.name), n.name
+                LIMIT ?2
+                "#
+            };
+
+            let result = (|| -> Result<Vec<Node>> {
+                let mut stmt = self.conn.prepare(sql)?;
+                let mut nodes = Vec::new();
+
+                if let Some(k) = kind {
+                    let rows = stmt.query_map(
+                        params![fts_query, k.as_str(), limit as i64],
+                        Self::row_to_node,
+                    )?;
+                    for row in rows {
+                        nodes.push(row?);
+                    }
+                } else {
+                    let rows =
+                        stmt.query_map(params![fts_query, limit as i64], Self::row_to_node)?;
+                    for row in rows {
+                        nodes.push(row?);
+                    }
+                }
+
+                Ok(nodes)
+            })();
+
+            // If FTS succeeds, return results; otherwise fall through to LIKE
+            if let Ok(nodes) = result {
+                return Ok(nodes);
+            }
+        }
+
+        // Fallback: LIKE-based search for short queries or FTS failures
         let pattern = format!("{}%", query.to_lowercase());
 
         let sql = if kind.is_some() {
@@ -445,6 +521,177 @@ impl Database {
         self.conn.execute("DELETE FROM unresolved_refs", [])?;
 
         Ok(resolved)
+    }
+
+    /// Resolve references only for specific files (scoped resolution).
+    ///
+    /// This is more efficient than `resolve_references()` for incremental
+    /// reindexing — it only processes unresolved refs whose source node
+    /// belongs to one of the given files, and only deletes those refs
+    /// from the unresolved_refs table.
+    pub fn resolve_references_for_files(&self, files: &[String]) -> Result<u32> {
+        if files.is_empty() {
+            return Ok(0);
+        }
+
+        let mut resolved = 0;
+
+        for file_path in files {
+            let mut stmt = self.conn.prepare(
+                "SELECT source_node_id, reference_name, kind, file_path, line, column \
+                 FROM unresolved_refs WHERE file_path = ?1",
+            )?;
+
+            let refs: Vec<UnresolvedReference> = stmt
+                .query_map(params![file_path], |row| {
+                    Ok(UnresolvedReference {
+                        source_node_id: row.get(0)?,
+                        reference_name: row.get::<_, String>(1)?,
+                        kind: EdgeKind::parse(&row.get::<_, String>(2)?).unwrap_or(EdgeKind::Calls),
+                        file_path: row.get(3)?,
+                        line: row.get::<_, i64>(4)? as u32,
+                        column: row.get::<_, i64>(5)? as u32,
+                    })
+                })?
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+
+            for uref in &refs {
+                if let Some(target) = self.find_node_by_name(&uref.reference_name)? {
+                    let edge = Edge {
+                        id: 0,
+                        source_id: uref.source_node_id,
+                        target_id: target.id,
+                        kind: uref.kind,
+                        file_path: Some(uref.file_path.clone()),
+                        line: Some(uref.line),
+                        column: Some(uref.column),
+                    };
+                    self.insert_edge(&edge)?;
+                    resolved += 1;
+                }
+            }
+
+            // Clear only this file's unresolved refs
+            self.conn.execute(
+                "DELETE FROM unresolved_refs WHERE file_path = ?1",
+                params![file_path],
+            )?;
+        }
+
+        Ok(resolved)
+    }
+
+    // =========================================================================
+    // Batch Insert Operations
+    // =========================================================================
+
+    /// Insert multiple nodes using a single prepared statement.
+    /// Each node's `id` field is set to 0 before insertion (DB assigns the real id).
+    /// Returns a map from old (extraction-time) id to new (database) id.
+    pub fn insert_nodes_batch(
+        &self,
+        nodes: &mut [Node],
+    ) -> Result<std::collections::HashMap<i64, i64>> {
+        let mut id_map = std::collections::HashMap::with_capacity(nodes.len());
+        let mut stmt = self.conn.prepare(
+            r#"
+            INSERT INTO nodes (
+                kind, name, qualified_name, file_path, start_line, end_line,
+                start_column, end_column, signature, visibility, docstring,
+                is_async, is_static, is_exported, language
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+            "#,
+        )?;
+        for node in nodes.iter_mut() {
+            let old_id = node.id;
+            node.id = 0;
+            stmt.execute(params![
+                node.kind.as_str(),
+                node.name,
+                node.qualified_name,
+                node.file_path,
+                node.start_line as i64,
+                node.end_line as i64,
+                node.start_column as i64,
+                node.end_column as i64,
+                node.signature,
+                node.visibility.as_str(),
+                node.docstring,
+                node.is_async,
+                node.is_static,
+                node.is_exported,
+                node.language.as_str(),
+            ])?;
+            let new_id = self.conn.last_insert_rowid();
+            id_map.insert(old_id, new_id);
+        }
+        Ok(id_map)
+    }
+
+    /// Insert multiple edges using a single prepared statement.
+    /// Maps source_id and target_id through `id_map`; edges whose ids
+    /// cannot be mapped are silently skipped.
+    /// Returns the number of edges actually inserted.
+    pub fn insert_edges_batch(
+        &self,
+        edges: &mut [Edge],
+        id_map: &std::collections::HashMap<i64, i64>,
+    ) -> Result<u64> {
+        let mut count: u64 = 0;
+        let mut stmt = self.conn.prepare(
+            r#"
+            INSERT INTO edges (source_id, target_id, kind, file_path, line, column)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "#,
+        )?;
+        for edge in edges.iter_mut() {
+            if let (Some(&new_source), Some(&new_target)) =
+                (id_map.get(&edge.source_id), id_map.get(&edge.target_id))
+            {
+                edge.source_id = new_source;
+                edge.target_id = new_target;
+                stmt.execute(params![
+                    edge.source_id,
+                    edge.target_id,
+                    edge.kind.as_str(),
+                    edge.file_path,
+                    edge.line.map(|l| l as i64),
+                    edge.column.map(|c| c as i64),
+                ])?;
+                count += 1;
+            }
+        }
+        Ok(count)
+    }
+
+    /// Insert multiple unresolved references using a single prepared statement.
+    /// Maps source_node_id through `id_map`; refs whose id cannot be mapped
+    /// are silently skipped.
+    pub fn insert_unresolved_refs_batch(
+        &self,
+        refs: &mut [UnresolvedReference],
+        id_map: &std::collections::HashMap<i64, i64>,
+    ) -> Result<()> {
+        let mut stmt = self.conn.prepare(
+            r#"
+            INSERT INTO unresolved_refs (source_node_id, reference_name, kind, file_path, line, column)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            "#,
+        )?;
+        for uref in refs.iter_mut() {
+            if let Some(&new_source) = id_map.get(&uref.source_node_id) {
+                uref.source_node_id = new_source;
+                stmt.execute(params![
+                    uref.source_node_id,
+                    uref.reference_name,
+                    uref.kind.as_str(),
+                    uref.file_path,
+                    uref.line as i64,
+                    uref.column as i64,
+                ])?;
+            }
+        }
+        Ok(())
     }
 
     // =========================================================================
@@ -1147,6 +1394,87 @@ mod tests {
         // Check that unresolved refs are cleared
         let refs = db.get_unresolved_refs().unwrap();
         assert!(refs.is_empty());
+    }
+
+    #[test]
+    fn test_resolve_references_for_files() {
+        let db = Database::in_memory().unwrap();
+
+        // Set up two files
+        let file1 = create_test_file("src/a.rs");
+        let file2 = create_test_file("src/b.rs");
+        db.insert_or_update_file(&file1).unwrap();
+        db.insert_or_update_file(&file2).unwrap();
+
+        // Create target node in file2
+        let _target_id = db
+            .insert_node(&create_test_node(
+                "target_func",
+                NodeKind::Function,
+                "src/b.rs",
+            ))
+            .unwrap();
+
+        // Create callers in both files, each with an unresolved ref to target_func
+        let caller_a = db
+            .insert_node(&create_test_node(
+                "caller_a",
+                NodeKind::Function,
+                "src/a.rs",
+            ))
+            .unwrap();
+        let caller_b = db
+            .insert_node(&create_test_node(
+                "caller_b",
+                NodeKind::Function,
+                "src/b.rs",
+            ))
+            .unwrap();
+
+        db.insert_unresolved_ref(&UnresolvedReference {
+            source_node_id: caller_a,
+            reference_name: "target_func".to_string(),
+            kind: EdgeKind::Calls,
+            file_path: "src/a.rs".to_string(),
+            line: 10,
+            column: 5,
+        })
+        .unwrap();
+        db.insert_unresolved_ref(&UnresolvedReference {
+            source_node_id: caller_b,
+            reference_name: "target_func".to_string(),
+            kind: EdgeKind::Calls,
+            file_path: "src/b.rs".to_string(),
+            line: 20,
+            column: 5,
+        })
+        .unwrap();
+
+        // Resolve only for file a
+        let resolved = db
+            .resolve_references_for_files(&["src/a.rs".to_string()])
+            .unwrap();
+        assert_eq!(resolved, 1);
+
+        // caller_a should now have an edge
+        let outgoing_a = db.get_outgoing_edges(caller_a).unwrap();
+        assert_eq!(outgoing_a.len(), 1);
+
+        // caller_b should still have no edge (its ref is still unresolved)
+        let outgoing_b = db.get_outgoing_edges(caller_b).unwrap();
+        assert_eq!(outgoing_b.len(), 0);
+
+        // Only file b's ref should remain unresolved
+        let refs = db.get_unresolved_refs().unwrap();
+        assert_eq!(refs.len(), 1);
+        assert_eq!(refs[0].file_path, "src/b.rs");
+    }
+
+    #[test]
+    fn test_resolve_references_for_files_empty() {
+        let db = Database::in_memory().unwrap();
+        let resolved = db.resolve_references_for_files(&[]).unwrap();
+        assert_eq!(resolved, 0);
     }
 
     #[test]

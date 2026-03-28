@@ -6,15 +6,14 @@ use crate::mcp::constants::{DEFAULT_GRAPH_LIMIT, DEFAULT_IMPACT_DEPTH};
 use crate::mcp::format::format_node_simple;
 use crate::mcp::types::SymbolRequest;
 
-pub fn handle_callers(db: &Database, req: &SymbolRequest) -> String {
+pub fn handle_callers(db: &Database, req: &SymbolRequest) -> Result<String, String> {
     let graph = Graph::new(db);
-    let callers = match graph.find_callers(&req.symbol, DEFAULT_GRAPH_LIMIT) {
-        Ok(c) => c,
-        Err(e) => return format!("Error: {}", e),
-    };
+    let callers = graph
+        .find_callers(&req.symbol, DEFAULT_GRAPH_LIMIT)
+        .map_err(|e| e.to_string())?;
 
     if callers.is_empty() {
-        return format!("No callers found for '{}'", req.symbol);
+        return Ok(format!("No callers found for '{}'", req.symbol));
     }
 
     let mut output = format!("Found {} callers of '{}':\n\n", callers.len(), req.symbol);
@@ -24,18 +23,17 @@ pub fn handle_callers(db: &Database, req: &SymbolRequest) -> String {
         output.push('\n');
     }
 
-    output
+    Ok(output)
 }
 
-pub fn handle_callees(db: &Database, req: &SymbolRequest) -> String {
+pub fn handle_callees(db: &Database, req: &SymbolRequest) -> Result<String, String> {
     let graph = Graph::new(db);
-    let callees = match graph.find_callees(&req.symbol, DEFAULT_GRAPH_LIMIT) {
-        Ok(c) => c,
-        Err(e) => return format!("Error: {}", e),
-    };
+    let callees = graph
+        .find_callees(&req.symbol, DEFAULT_GRAPH_LIMIT)
+        .map_err(|e| e.to_string())?;
 
     if callees.is_empty() {
-        return format!("No callees found for '{}'", req.symbol);
+        return Ok(format!("No callees found for '{}'", req.symbol));
     }
 
     let mut output = format!("'{}' calls {} functions:\n\n", req.symbol, callees.len());
@@ -45,18 +43,17 @@ pub fn handle_callees(db: &Database, req: &SymbolRequest) -> String {
         output.push('\n');
     }
 
-    output
+    Ok(output)
 }
 
-pub fn handle_impact(db: &Database, req: &SymbolRequest) -> String {
+pub fn handle_impact(db: &Database, req: &SymbolRequest) -> Result<String, String> {
     let graph = Graph::new(db);
-    let analysis = match graph.analyze_impact(&req.symbol, DEFAULT_IMPACT_DEPTH) {
-        Ok(a) => a,
-        Err(e) => return format!("Error: {}", e),
-    };
+    let analysis = graph
+        .analyze_impact(&req.symbol, DEFAULT_IMPACT_DEPTH)
+        .map_err(|e| e.to_string())?;
 
     if analysis.root.is_none() {
-        return format!("Symbol '{}' not found", req.symbol);
+        return Ok(format!("Symbol '{}' not found", req.symbol));
     }
 
     let root = analysis.root.unwrap();
@@ -102,5 +99,5 @@ pub fn handle_impact(db: &Database, req: &SymbolRequest) -> String {
         }
     }
 
-    output
+    Ok(output)
 }

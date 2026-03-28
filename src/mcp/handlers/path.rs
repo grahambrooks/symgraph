@@ -3,11 +3,14 @@
 use crate::db::Database;
 use crate::mcp::types::PathRequest;
 
-pub fn handle_path(db: &Database, req: &PathRequest) -> String {
+pub fn handle_path(db: &Database, req: &PathRequest) -> Result<String, String> {
     match db.find_call_path(&req.from, &req.to) {
         Ok(paths) => {
             if paths.is_empty() {
-                format!("No call path found from '{}' to '{}'", req.from, req.to)
+                Ok(format!(
+                    "No call path found from '{}' to '{}'",
+                    req.from, req.to
+                ))
             } else {
                 let mut output = format!("# Call Paths from '{}' to '{}'\n\n", req.from, req.to);
                 output.push_str(&format!("Found {} path(s):\n\n", paths.len()));
@@ -28,9 +31,9 @@ pub fn handle_path(db: &Database, req: &PathRequest) -> String {
                     }
                     output.push('\n');
                 }
-                output
+                Ok(output)
             }
         }
-        Err(e) => format!("Error: {}", e),
+        Err(e) => Err(e.to_string()),
     }
 }

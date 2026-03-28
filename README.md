@@ -18,11 +18,11 @@ binary deployment of MCP Servers.
 - **Relationship tracking**: calls, contains, imports, exports, extends, implements
 - **Impact analysis**: trace the effect of changes through the codebase
 - **Advanced code intelligence**:
-  - Find call paths between functions
-  - Detect unused/dead code
-  - Explore class hierarchies
-  - Locate all interface implementations
-  - Analyze change impact by line range
+    - Find call paths between functions
+    - Detect unused/dead code
+    - Explore class hierarchies
+    - Locate all interface implementations
+    - Analyze change impact by line range
 - **Incremental indexing**: only re-indexes changed files using content hashing
 - **Dual transport**: stdio (default) and HTTP server modes
 
@@ -70,8 +70,7 @@ sudo mv codemap /usr/local/bin/
 ```bash
 git clone https://github.com/grahambrooks/codemap
 cd codemap
-cargo build --release
-sudo cp target/release/codemap /usr/local/bin/
+make install
 ```
 
 ## Usage
@@ -111,77 +110,133 @@ codemap context <task>         # Build context for a task
 
 ### Core Tools
 
-| Tool                     | Description                                              |
-|--------------------------|----------------------------------------------------------|
-| `codemap-context`        | Build focused code context for a specific task           |
-| `codemap-search`         | Quick symbol search by name                              |
-| `codemap-callers`        | Find all callers of a symbol                             |
-| `codemap-callees`        | Find all callees of a symbol                             |
-| `codemap-impact`         | Analyze the impact radius of changes                     |
-| `codemap-node`           | Get detailed symbol information                          |
-| `codemap-definition`     | Get the full source code of a symbol with context        |
-| `codemap-file`           | List all symbols defined in a specific file              |
-| `codemap-references`     | Find all references to a symbol                          |
-| `codemap-reindex`        | Trigger incremental reindexing of changed files          |
-| `codemap-status`         | Get index statistics                                     |
+| Tool                 | Description                                       |
+|----------------------|---------------------------------------------------|
+| `codemap-context`    | Build focused code context for a specific task    |
+| `codemap-search`     | Quick symbol search by name                       |
+| `codemap-callers`    | Find all callers of a symbol                      |
+| `codemap-callees`    | Find all callees of a symbol                      |
+| `codemap-impact`     | Analyze the impact radius of changes              |
+| `codemap-node`       | Get detailed symbol information                   |
+| `codemap-definition` | Get the full source code of a symbol with context |
+| `codemap-file`       | List all symbols defined in a specific file       |
+| `codemap-references` | Find all references to a symbol                   |
+| `codemap-reindex`    | Trigger incremental reindexing of changed files   |
+| `codemap-status`     | Get index statistics                              |
 
 ### Advanced Tools
 
-| Tool                     | Description                                              |
-|--------------------------|----------------------------------------------------------|
-| `codemap-hierarchy`      | Get class/module hierarchy (parent/child relationships)  |
-| `codemap-path`           | Find call paths between two symbols                      |
-| `codemap-unused`         | Find unused/dead code with no incoming references        |
-| `codemap-implementations`| Find all implementations of an interface/trait           |
-| `codemap-diff-impact`    | Analyze the impact of changing a specific code region    |
+| Tool                      | Description                                             |
+|---------------------------|---------------------------------------------------------|
+| `codemap-hierarchy`       | Get class/module hierarchy (parent/child relationships) |
+| `codemap-path`            | Find call paths between two symbols                     |
+| `codemap-unused`          | Find unused/dead code with no incoming references       |
+| `codemap-implementations` | Find all implementations of an interface/trait          |
+| `codemap-diff-impact`     | Analyze the impact of changing a specific code region   |
 
 ### Example Use Cases
 
 **Find dead code for cleanup:**
+
 ```
 Use codemap-unused to find all unused functions and classes
 ```
 
 **Understand function call chains:**
+
 ```
 Use codemap-path with from="main" and to="database_query" to see how data flows
 ```
 
 **Assess change impact:**
+
 ```
 Use codemap-diff-impact with file_path="src/auth.rs" start_line=45 end_line=60
 to see what would be affected by changes in that region
 ```
 
 **Explore OOP hierarchies:**
+
 ```
 Use codemap-hierarchy with symbol="BaseHandler" to see all parent/child relationships
 ```
 
 **Find all trait implementations:**
+
 ```
 Use codemap-implementations with symbol="Iterator" to find all structs implementing Iterator
 ```
 
-## Configuration
+## Project Setup
 
-### Claude Desktop (MCPB)
+Add codemap to your project in two steps: index your code, then configure your AI tool.
 
-When installed via MCPB bundle, codemap is automatically configured. You can set the project root in Claude Desktop's
-MCP server settings.
+### Step 1: Index Your Project
 
-### Claude Desktop (Manual)
+```bash
+cd /path/to/your/project
+codemap index
+```
 
-For standalone binary installations, add to your Claude Desktop configuration (`claude_desktop_config.json`):
+This creates a `.codemap/` directory containing the SQLite knowledge graph. Add `.codemap/` to your `.gitignore`.
+
+Re-run `codemap index` after significant code changes, or use the `codemap-reindex` MCP tool to incrementally update from within your AI tool.
+
+### Step 2: Configure Your AI Tool
+
+#### Claude Code
+
+Register codemap as an MCP server for your project:
+
+```bash
+cd /path/to/your/project
+claude mcp add codemap -- codemap serve
+```
+
+Or add `.mcp.json` to your project root:
 
 ```json
 {
   "mcpServers": {
     "codemap": {
-      "command": "/usr/local/bin/codemap",
-      "args": [
-        "serve"
-      ],
+      "type": "stdio",
+      "command": "codemap",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+**Optional: Add the `/explore-code` skill** for guided code exploration:
+
+```bash
+mkdir -p .claude/skills
+cp -r /path/to/codemap/.claude/skills/explore-code .claude/skills/
+```
+
+Then use it in Claude Code:
+
+```
+/explore-code how does the authentication middleware work?
+/explore-code what would break if I changed the User struct?
+```
+
+#### Claude Desktop
+
+**Via MCPB bundle (easiest):**
+
+1. Download the `.mcpb` file for your platform from [Releases](https://github.com/grahambrooks/codemap/releases/latest)
+2. Drag and drop onto Claude Desktop, or use **File > Install MCP Server**
+3. Set the project root when prompted
+
+**Via manual config** — add to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "codemap": {
+      "command": "codemap",
+      "args": ["serve"],
       "env": {
         "CODEMAP_ROOT": "/path/to/your/project"
       }
@@ -190,20 +245,29 @@ For standalone binary installations, add to your Claude Desktop configuration (`
 }
 ```
 
-### GitHub Copilot
+#### GitHub Copilot
 
-Configure codemap as an MCP server for GitHub Copilot in VS Code or the CLI.
+**Per-repository** — add `.copilot/mcp.json` to your project:
 
-**VS Code** - Add to your VS Code settings (`settings.json`):
+```json
+{
+  "mcpServers": {
+    "codemap": {
+      "command": "codemap",
+      "args": ["serve"]
+    }
+  }
+}
+```
+
+**VS Code user settings** — add to `settings.json`:
 
 ```json
 {
   "github.copilot.chat.mcp.servers": {
     "codemap": {
-      "command": "/usr/local/bin/codemap",
-      "args": [
-        "serve"
-      ],
+      "command": "codemap",
+      "args": ["serve"],
       "env": {
         "CODEMAP_ROOT": "${workspaceFolder}"
       }
@@ -212,88 +276,39 @@ Configure codemap as an MCP server for GitHub Copilot in VS Code or the CLI.
 }
 ```
 
-**Repository Config** - Add `.copilot/mcp.json` to your repository:
+See [GitHub Copilot MCP documentation](https://docs.github.com/copilot/customizing-copilot/using-model-context-protocol/extending-copilot-chat-with-mcp) for more details.
 
-```json
-{
-  "mcpServers": {
-    "codemap": {
-      "command": "codemap",
-      "args": [
-        "serve"
-      ],
-      "env": {
-        "CODEMAP_ROOT": "."
-      }
-    }
-  }
-}
-```
-
-**HTTP Mode** - For remote MCP server support:
-
-```json
-{
-  "mcpServers": {
-    "codemap": {
-      "type": "http",
-      "url": "http://localhost:8080/mcp"
-    }
-  }
-}
-```
-
-See [GitHub Copilot MCP documentation](https://docs.github.com/copilot/customizing-copilot/using-model-context-protocol/extending-copilot-chat-with-mcp)
-for more details.
-
-### OpenAI Codex
-
-Configure codemap for OpenAI Codex CLI or VS Code extension. Codex uses TOML configuration at `~/.codex/config.toml`.
-
-**Add via CLI:**
+#### OpenAI Codex
 
 ```bash
-codex mcp add codemap --command "/usr/local/bin/codemap" --args "serve"
+codex mcp add codemap --command "codemap" --args "serve"
 ```
 
-**Manual Configuration** - Add to `~/.codex/config.toml`:
+Or add to `~/.codex/config.toml`:
 
 ```toml
 [mcp_servers.codemap]
-command = "/usr/local/bin/codemap"
+command = "codemap"
 args = ["serve"]
-
-[mcp_servers.codemap.env]
-CODEMAP_ROOT = "/path/to/your/project"
-```
-
-**HTTP Mode:**
-
-```toml
-[mcp_servers.codemap]
-type = "url"
-url = "http://localhost:8080/mcp"
 ```
 
 See [OpenAI Codex MCP documentation](https://developers.openai.com/codex/mcp/) for more details.
+
+#### HTTP Mode (Any MCP Client)
+
+For shared or remote setups, run codemap as an HTTP server:
+
+```bash
+codemap serve --port 8080
+```
+
+Then point your MCP client at `http://localhost:8080/mcp`.
 
 ### Environment Variables
 
 | Variable       | Description            | Default           |
 |----------------|------------------------|-------------------|
 | `CODEMAP_ROOT` | Project root directory | Current directory |
-
-### First-Time Setup
-
-Before using codemap, index your project:
-
-```bash
-cd /path/to/your/project
-codemap index
-```
-
-This creates a `.codemap/` directory with the SQLite index. Re-run `codemap index` after significant code changes to
-update the index.
 
 ## Architecture
 
@@ -328,9 +343,10 @@ codemap/
 ### Building
 
 ```bash
-cargo build          # Debug build
-cargo build --release # Release build
-cargo test           # Run tests
+make build           # Release build
+make test            # Run tests
+make check           # Format, lint, and test
+make install         # Build and install to /usr/local/bin
 ```
 
 ### Project Structure

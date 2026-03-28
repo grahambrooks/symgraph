@@ -5,14 +5,13 @@ use crate::mcp::constants::DEFAULT_SEARCH_LIMIT;
 use crate::mcp::format::format_node_with_signature;
 use crate::mcp::types::SearchRequest;
 
-pub fn handle_search(db: &Database, req: &SearchRequest) -> String {
-    let results = match db.search_nodes(&req.query, None, DEFAULT_SEARCH_LIMIT) {
-        Ok(r) => r,
-        Err(e) => return format!("Error: {}", e),
-    };
+pub fn handle_search(db: &Database, req: &SearchRequest) -> Result<String, String> {
+    let results = db
+        .search_nodes(&req.query, None, DEFAULT_SEARCH_LIMIT)
+        .map_err(|e| e.to_string())?;
 
     if results.is_empty() {
-        return format!("No symbols found matching '{}'", req.query);
+        return Ok(format!("No symbols found matching '{}'", req.query));
     }
 
     let mut output = format!(
@@ -25,5 +24,5 @@ pub fn handle_search(db: &Database, req: &SearchRequest) -> String {
         output.push_str(&format_node_with_signature(&node));
     }
 
-    output
+    Ok(output)
 }

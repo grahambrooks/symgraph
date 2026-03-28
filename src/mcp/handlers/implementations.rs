@@ -4,11 +4,11 @@ use crate::db::Database;
 use crate::mcp::format;
 use crate::mcp::types::SymbolRequest;
 
-pub fn handle_implementations(db: &Database, req: &SymbolRequest) -> String {
+pub fn handle_implementations(db: &Database, req: &SymbolRequest) -> Result<String, String> {
     match db.find_implementations(&req.symbol) {
         Ok(nodes) => {
             if nodes.is_empty() {
-                format!("No implementations found for '{}'", req.symbol)
+                Ok(format!("No implementations found for '{}'", req.symbol))
             } else {
                 let mut output = format!("# Implementations of '{}'\n\n", req.symbol);
                 output.push_str(&format!("Found {} implementation(s):\n\n", nodes.len()));
@@ -16,9 +16,9 @@ pub fn handle_implementations(db: &Database, req: &SymbolRequest) -> String {
                     output.push_str(&format::format_node(&node));
                     output.push_str("\n\n");
                 }
-                output
+                Ok(output)
             }
         }
-        Err(e) => format!("Error: {}", e),
+        Err(e) => Err(e.to_string()),
     }
 }

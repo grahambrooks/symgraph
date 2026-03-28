@@ -1,0 +1,30 @@
+{
+  "mcpServers": {
+    "codemap": {
+      "type": "stdio",
+      "command": "cargo",
+      "args": ["run", "--", "serve"],
+      "env": {
+        "CODEMAP_ROOT": "."
+      },
+      "autoApprove": [
+        "codemap-context",
+        "codemap-search",
+        "codemap-callers",
+        "codemap-callees",
+        "codemap-impact",
+        "codemap-definition",
+        "codemap-file",
+        "codemap-references",
+        "codemap-reindex",
+        "codemap-node",
+        "codemap-status",
+        "codemap-hierarchy",
+        "codemap-path",
+        "codemap-unused",
+        "codemap-implementations",
+        "codemap-diff-impact"
+      ]
+    }
+  }
+}

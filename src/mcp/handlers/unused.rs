@@ -2,11 +2,11 @@
 
 use crate::db::Database;
 
-pub fn handle_unused(db: &Database) -> String {
+pub fn handle_unused(db: &Database) -> Result<String, String> {
     match db.find_unused_symbols() {
         Ok(nodes) => {
             if nodes.is_empty() {
-                "No unused symbols found (all symbols are referenced or exported)".to_string()
+                Ok("No unused symbols found (all symbols are referenced or exported)".to_string())
             } else {
                 let mut output = format!(
                     "# Unused Symbols\n\nFound {} unused symbols:\n\n",
@@ -39,9 +39,9 @@ pub fn handle_unused(db: &Database) -> String {
                     }
                     output.push('\n');
                 }
-                output
+                Ok(output)
             }
         }
-        Err(e) => format!("Error: {}", e),
+        Err(e) => Err(e.to_string()),
     }
 }

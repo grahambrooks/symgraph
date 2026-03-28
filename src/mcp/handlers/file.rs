@@ -4,16 +4,16 @@ use crate::db::Database;
 use crate::mcp::format::normalize_path;
 use crate::mcp::types::FileRequest;
 
-pub fn handle_file(db: &Database, req: &FileRequest) -> String {
+pub fn handle_file(db: &Database, req: &FileRequest) -> Result<String, String> {
     let path = normalize_path(&req.path);
 
-    let nodes = match db.get_nodes_by_file(path) {
-        Ok(n) => n,
-        Err(e) => return format!("Error: {}", e),
-    };
+    let nodes = db.get_nodes_by_file(path).map_err(|e| e.to_string())?;
 
     if nodes.is_empty() {
-        return format!("No symbols found in '{}'. File may not be indexed.", path);
+        return Ok(format!(
+            "No symbols found in '{}'. File may not be indexed.",
+            path
+        ));
     }
 
     let mut output = format!("## Symbols in `{}`\n\n", path);
@@ -48,5 +48,5 @@ pub fn handle_file(db: &Database, req: &FileRequest) -> String {
         output.push('\n');
     }
 
-    output
+    Ok(output)
 }

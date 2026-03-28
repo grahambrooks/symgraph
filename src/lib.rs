@@ -40,13 +40,14 @@ use std::time::SystemTime;
 
 use anyhow::Result;
 use ignore::WalkBuilder;
+use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use tracing::{debug, info, warn};
 
 #[cfg(feature = "sqlite")]
 use db::Database;
 use extraction::Extractor;
-use types::{FileRecord, Language};
+use types::{ExtractionResult, FileRecord, Language};
 
 /// Configuration for indexing
 #[derive(Debug, Clone)]
@@ -59,6 +60,8 @@ pub struct IndexConfig {
     pub exclude_dirs: Vec<String>,
     /// Whether to follow gitignore rules
     pub respect_gitignore: bool,
+    /// Skip the global resolve_references pass (for scoped resolution)
+    pub skip_resolve: bool,
 }
 
 impl Default for IndexConfig {
@@ -79,6 +82,7 @@ impl Default for IndexConfig {
                 "cpp".to_string(),
                 "cc".to_string(),
                 "hpp".to_string(),
+                "cs".to_string(),
             ],
             exclude_dirs: vec![
                 "node_modules".to_string(),
@@ -92,18 +96,35 @@ impl Default for IndexConfig {
                 "vendor".to_string(),
             ],
             respect_gitignore: true,
+            skip_resolve: false,
         }
     }
 }
 
+/// Collected file metadata ready for extraction
+#[cfg(feature = "sqlite")]
+struct FileEntry {
+    rel_path: String,
+    content: String,
+    content_hash: String,
+    language: Language,
+    modified_at: i64,
+}
+
+/// Result of parallel extraction for a single file
+#[cfg(feature = "sqlite")]
+struct ExtractedFile {
+    entry: FileEntry,
+    result: ExtractionResult,
+}
+
 /// Index a codebase into the database
 #[cfg(feature = "sqlite")]
-pub fn index_codebase(db: &mut Database, config: &IndexConfig) -> Result<IndexStats> {
+pub fn index_codebase(db: &mut Database, config: &IndexConfig) -> Result<IndexingStats> {
     let root = Path::new(&config.root).canonicalize()?;
     info!("Indexing codebase at {}", root.display());
 
-    let mut extractor = Extractor::new();
-    let mut stats = IndexStats::default();
+    let mut stats = IndexingStats::default();
 
     // Build the walker
     let mut walker = WalkBuilder::new(&root);
@@ -113,8 +134,8 @@ pub fn index_codebase(db: &mut Database, config: &IndexConfig) -> Result<IndexSt
         .git_global(config.respect_gitignore)
         .git_exclude(config.respect_gitignore);
 
-    // Begin transaction
-    db.begin_transaction()?;
+    // Phase 1a: Sequentially walk directory, read files, compute hashes, check reindex need
+    let mut entries_to_extract: Vec<FileEntry> = Vec::new();
 
     for entry in walker.build() {
         let entry = match entry {
@@ -145,9 +166,11 @@ pub fn index_codebase(db: &mut Database, config: &IndexConfig) -> Result<IndexSt
         }
 
         // Check excluded directories
-        let path_str = path.display().to_string();
-        if config.exclude_dirs.iter().any(|d| {
-            path_str.contains(&format!("/{}/", d)) || path_str.contains(&format!("\\{}\\", d))
+        if path.components().any(|c| {
+            config
+                .exclude_dirs
+                .iter()
+                .any(|d| c.as_os_str() == d.as_str())
         }) {
             continue;
         }
@@ -174,34 +197,60 @@ pub fn index_codebase(db: &mut Database, config: &IndexConfig) -> Result<IndexSt
             .display()
             .to_string();
 
-        // Check if file needs reindexing
+        // Check if file needs reindexing (requires DB access, done sequentially)
         if !db.needs_reindex(&rel_path, &content_hash)? {
             debug!("Skipping unchanged file: {}", rel_path);
             stats.skipped += 1;
             continue;
         }
 
-        debug!("Indexing: {}", rel_path);
+        let modified_at = entry
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+
+        entries_to_extract.push(FileEntry {
+            rel_path,
+            content,
+            content_hash,
+            language,
+            modified_at,
+        });
+    }
+
+    // Phase 1b: Parallel tree-sitter extraction using rayon
+    // Each thread creates its own Extractor (Parser is not Send)
+    let extracted: Vec<ExtractedFile> = entries_to_extract
+        .into_par_iter()
+        .map(|entry| {
+            let mut extractor = Extractor::new();
+            let result = extractor.extract_file(&entry.rel_path, &entry.content);
+            ExtractedFile { entry, result }
+        })
+        .collect();
+
+    // Phase 2: Sequential database operations inside a transaction
+    db.begin_transaction()?;
+
+    for extracted_file in extracted {
+        let entry = extracted_file.entry;
+        let result = extracted_file.result;
+
+        debug!("Indexing: {}", entry.rel_path);
 
         // Delete existing data for this file
-        db.delete_file(&rel_path)?;
-
-        // Extract symbols
-        let result = extractor.extract_file(&rel_path, &content);
+        db.delete_file(&entry.rel_path)?;
 
         // Store file record FIRST (nodes have FK to files)
         let file_record = FileRecord {
-            path: rel_path.clone(),
-            content_hash,
-            language,
-            size: content.len() as u64,
-            modified_at: entry
-                .metadata()
-                .ok()
-                .and_then(|m| m.modified().ok())
-                .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0),
+            path: entry.rel_path.clone(),
+            content_hash: entry.content_hash,
+            language: entry.language,
+            size: entry.content.len() as u64,
+            modified_at: entry.modified_at,
             indexed_at: SystemTime::now()
                 .duration_since(SystemTime::UNIX_EPOCH)
                 .map(|d| d.as_secs() as i64)
@@ -210,59 +259,31 @@ pub fn index_codebase(db: &mut Database, config: &IndexConfig) -> Result<IndexSt
         };
         db.insert_or_update_file(&file_record)?;
 
-        // Store nodes
-        let mut node_count = 0;
-        let mut id_map: std::collections::HashMap<i64, i64> = std::collections::HashMap::new();
+        // Store nodes (batch: prepare statement once, reuse for all rows)
+        let node_count = file_record.node_count;
+        let mut nodes = result.nodes;
+        let id_map = db.insert_nodes_batch(&mut nodes)?;
 
-        for mut node in result.nodes {
-            let old_id = node.id;
-            node.id = 0; // Will be assigned by DB
-            let new_id = db.insert_node(&node)?;
-            id_map.insert(old_id, new_id);
-            node_count += 1;
-        }
+        // Store edges with mapped IDs (batch)
+        let mut edges = result.edges;
+        let edge_count = db.insert_edges_batch(&mut edges, &id_map)?;
+        stats.edges += edge_count;
 
-        // Store edges with mapped IDs
-        for mut edge in result.edges {
-            if let (Some(&new_source), Some(&new_target)) =
-                (id_map.get(&edge.source_id), id_map.get(&edge.target_id))
-            {
-                edge.source_id = new_source;
-                edge.target_id = new_target;
-                db.insert_edge(&edge)?;
-                stats.edges += 1;
-            }
-        }
-
-        // Store unresolved references with mapped IDs
-        for mut uref in result.unresolved_refs {
-            if let Some(&new_source) = id_map.get(&uref.source_node_id) {
-                uref.source_node_id = new_source;
-                db.insert_unresolved_ref(&uref)?;
-            }
-        }
-
-        // Update node count in file record
-        let file_record = FileRecord {
-            path: rel_path.clone(),
-            content_hash: file_record.content_hash,
-            language,
-            size: content.len() as u64,
-            modified_at: file_record.modified_at,
-            indexed_at: file_record.indexed_at,
-            node_count,
-        };
-        db.insert_or_update_file(&file_record)?;
+        // Store unresolved references with mapped IDs (batch)
+        let mut unresolved_refs = result.unresolved_refs;
+        db.insert_unresolved_refs_batch(&mut unresolved_refs, &id_map)?;
 
         stats.files += 1;
         stats.nodes += node_count as u64;
         stats.errors += result.errors.len() as u64;
     }
 
-    // Resolve references
-    info!("Resolving references...");
-    let resolved = db.resolve_references()?;
-    stats.resolved_refs = resolved as u64;
+    // Resolve references (unless caller will handle scoped resolution)
+    if !config.skip_resolve {
+        info!("Resolving references...");
+        let resolved = db.resolve_references()?;
+        stats.resolved_refs = resolved as u64;
+    }
 
     // Commit transaction
     db.commit()?;
@@ -275,9 +296,9 @@ pub fn index_codebase(db: &mut Database, config: &IndexConfig) -> Result<IndexSt
     Ok(stats)
 }
 
-/// Statistics from indexing
+/// Statistics from an indexing operation
 #[derive(Debug, Default)]
-pub struct IndexStats {
+pub struct IndexingStats {
     pub files: u64,
     pub nodes: u64,
     pub edges: u64,

@@ -2,11 +2,8 @@
 
 use crate::db::Database;
 
-pub fn handle_status(db: &Database) -> String {
-    let stats = match db.get_stats() {
-        Ok(s) => s,
-        Err(e) => return format!("Error: {}", e),
-    };
+pub fn handle_status(db: &Database) -> Result<String, String> {
+    let stats = db.get_stats().map_err(|e| e.to_string())?;
 
     let mut output = String::from("## codemap Index Status\n\n");
 
@@ -32,5 +29,5 @@ pub fn handle_status(db: &Database) -> String {
         }
     }
 
-    output
+    Ok(output)
 }

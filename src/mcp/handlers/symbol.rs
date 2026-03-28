@@ -8,11 +8,11 @@ use crate::mcp::constants::{DEFAULT_CONTEXT_LINES, MAX_REFERENCES_PER_KIND};
 use crate::mcp::types::{DefinitionRequest, SymbolRequest};
 use crate::types::EdgeKind;
 
-pub fn handle_node(db: &Database, req: &SymbolRequest) -> String {
+pub fn handle_node(db: &Database, req: &SymbolRequest) -> Result<String, String> {
     let node = match db.find_node_by_name(&req.symbol) {
         Ok(Some(n)) => n,
-        Ok(None) => return format!("Symbol '{}' not found", req.symbol),
-        Err(e) => return format!("Error: {}", e),
+        Ok(None) => return Ok(format!("Symbol '{}' not found", req.symbol)),
+        Err(e) => return Err(e.to_string()),
     };
 
     let mut output = format!("## {}: `{}`\n\n", node.kind.as_str(), node.name);
@@ -42,34 +42,36 @@ pub fn handle_node(db: &Database, req: &SymbolRequest) -> String {
         output.push_str(&format!("\n**Documentation:**\n{}\n", doc));
     }
 
-    output
+    Ok(output)
 }
 
-pub fn handle_definition(db: &Database, project_root: &str, req: &DefinitionRequest) -> String {
+pub fn handle_definition(
+    db: &Database,
+    project_root: &str,
+    req: &DefinitionRequest,
+) -> Result<String, String> {
     let node = match db.find_node_by_name(&req.symbol) {
         Ok(Some(n)) => n,
-        Ok(None) => return format!("Symbol '{}' not found", req.symbol),
-        Err(e) => return format!("Error: {}", e),
+        Ok(None) => return Ok(format!("Symbol '{}' not found", req.symbol)),
+        Err(e) => return Err(e.to_string()),
     };
 
     let context_lines = req.context_lines.unwrap_or(DEFAULT_CONTEXT_LINES) as usize;
 
     // Read the source file
     let file_path = Path::new(project_root).join(&node.file_path);
-    let content = match fs::read_to_string(&file_path) {
-        Ok(c) => c,
-        Err(e) => return format!("Error reading file {}: {}", node.file_path, e),
-    };
+    let content = fs::read_to_string(&file_path)
+        .map_err(|e| format!("reading file {}: {}", node.file_path, e))?;
 
     let lines: Vec<&str> = content.lines().collect();
     let start = (node.start_line as usize).saturating_sub(1);
     let end = (node.end_line as usize).min(lines.len());
 
     if start >= lines.len() {
-        return format!(
-            "Error: line range {}-{} out of bounds",
+        return Err(format!(
+            "line range {}-{} out of bounds",
             node.start_line, node.end_line
-        );
+        ));
     }
 
     // Build output with context
@@ -120,24 +122,21 @@ pub fn handle_definition(db: &Database, project_root: &str, req: &DefinitionRequ
 
     output.push_str("```\n");
 
-    output
+    Ok(output)
 }
 
-pub fn handle_references(db: &Database, req: &SymbolRequest) -> String {
+pub fn handle_references(db: &Database, req: &SymbolRequest) -> Result<String, String> {
     let node = match db.find_node_by_name(&req.symbol) {
         Ok(Some(n)) => n,
-        Ok(None) => return format!("Symbol '{}' not found", req.symbol),
-        Err(e) => return format!("Error: {}", e),
+        Ok(None) => return Ok(format!("Symbol '{}' not found", req.symbol)),
+        Err(e) => return Err(e.to_string()),
     };
 
     // Get all incoming edges (references TO this symbol)
-    let edges = match db.get_incoming_edges(node.id) {
-        Ok(e) => e,
-        Err(e) => return format!("Error: {}", e),
-    };
+    let edges = db.get_incoming_edges(node.id).map_err(|e| e.to_string())?;
 
     if edges.is_empty() {
-        return format!("No references found for '{}'", req.symbol);
+        return Ok(format!("No references found for '{}'", req.symbol));
     }
 
     let mut output = format!(
@@ -195,5 +194,5 @@ pub fn handle_references(db: &Database, req: &SymbolRequest) -> String {
 
     output.push_str(&format!("**Total references:** {}\n", total));
 
-    output
+    Ok(output)
 }

@@ -71,6 +71,6 @@ CREATE INDEX IF NOT EXISTS idx_edges_kind ON edges(kind);
 
 CREATE INDEX IF NOT EXISTS idx_unresolved_name ON unresolved_refs(reference_name);
 
--- Full-text search for symbol names (optional, can be enabled later)
--- CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(name, qualified_name, docstring, content=nodes, content_rowid=id);
+-- Full-text search for symbol names (external-content FTS5 table mirroring nodes)
+CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(name, qualified_name, content=nodes, content_rowid=id);
 "#;
