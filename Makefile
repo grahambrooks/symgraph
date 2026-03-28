@@ -111,7 +111,7 @@ release: check
 	sed -i '' 's/^version = ".*"/version = "$(VERSION)"/' Cargo.toml
 	cargo check --quiet 2>/dev/null || (echo "Cargo.toml version update failed"; exit 1)
 	jq --arg v "$(VERSION)" '.version = $$v' manifest.json > manifest.json.tmp && mv manifest.json.tmp manifest.json
-	git add Cargo.toml Cargo.lock manifest.json
+	git add Cargo.toml manifest.json
 	git commit -m "release $(TAG)"
 	git tag "$(TAG)"
 	git push origin main --tags

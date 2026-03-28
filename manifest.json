@@ -1,7 +1,7 @@
 {
   "manifest_version": "1",
   "name": "codemap",
-  "version": "0.1.1",
+  "version": "2026.3.28",
   "display_name": "Code Map",
   "description": "Semantic code intelligence - build knowledge graphs of codebases for AI-assisted exploration",
   "long_description": "Code Map uses tree-sitter to parse source code and build a knowledge graph of symbols and their relationships. It provides MCP tools for searching symbols, finding callers/callees, analyzing change impact, and building focused context for AI tasks.\n\nSupported languages: Rust, TypeScript, JavaScript, Python, Go, Java, C, C++",
@@ -26,7 +26,9 @@
   },
   "mcp_config": {
     "command": "${__dirname}/bin/codemap",
-    "args": ["serve"],
+    "args": [
+      "serve"
+    ],
     "env": {},
     "platform_overrides": {
       "win32": {
@@ -75,7 +77,14 @@
     }
   ],
   "compatibility": {
-    "platforms": ["darwin", "linux", "win32"],
-    "architectures": ["x64", "arm64"]
+    "platforms": [
+      "darwin",
+      "linux",
+      "win32"
+    ],
+    "architectures": [
+      "x64",
+      "arm64"
+    ]
   }
 }
