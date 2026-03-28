@@ -1,0 +1,23 @@
+Makefile
+  b5c7f2d5b23e47d2 114
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.22",
+  "base_commit_sha": "7479b4e505f4b4fa5197bb3b1b79235339d271f4",
+  "prompts": {
+    "b5c7f2d5b23e47d2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "8311b126-f7e9-42ce-a2b5-10485592ae30",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>",
+      "messages": [],
+      "total_additions": 1,
+      "total_deletions": 1,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    }
+  }
+}
