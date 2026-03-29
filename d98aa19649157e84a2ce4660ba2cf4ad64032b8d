@@ -1,0 +1,25 @@
+.github/workflows/release.yml
+  e44b800cc3b405da 25-27,46-51,54-55,133-139,196-200
+.github/workflows/ci.yml
+  e44b800cc3b405da 63-64,77-81,83-84
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.22",
+  "base_commit_sha": "d98aa19649157e84a2ce4660ba2cf4ad64032b8d",
+  "prompts": {
+    "e44b800cc3b405da": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f86f081f-7455-4944-883e-b63dd6f0c920",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>",
+      "messages": [],
+      "total_additions": 32,
+      "total_deletions": 0,
+      "accepted_lines": 32,
+      "overriden_lines": 0
+    }
+  }
+}
