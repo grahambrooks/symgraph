@@ -1,0 +1,31 @@
+devcontainer-feature/test/codemap/test.sh
+  e44b800cc3b405da 1-18
+devcontainer-feature/src/codemap/README.md
+  e44b800cc3b405da 1-33
+devcontainer-feature/src/codemap/devcontainer-feature.json
+  e44b800cc3b405da 1-16
+devcontainer-feature/src/codemap/install.sh
+  e44b800cc3b405da 1-53
+.github/workflows/release.yml
+  e44b800cc3b405da 10,196-217
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.22",
+  "base_commit_sha": "c86c778ab9458c976f78967f480bf9873e48b4c9",
+  "prompts": {
+    "e44b800cc3b405da": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "f86f081f-7455-4944-883e-b63dd6f0c920",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>",
+      "messages": [],
+      "total_additions": 143,
+      "total_deletions": 0,
+      "accepted_lines": 143,
+      "overriden_lines": 0
+    }
+  }
+}
