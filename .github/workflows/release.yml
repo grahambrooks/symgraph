@@ -22,6 +22,9 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact: codemap-linux-x64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            artifact: codemap-linux-arm64
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact: codemap-darwin-x64
@@ -40,8 +43,16 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Install cross-compilation tools
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
       - name: Prepare artifact (Unix)
         if: runner.os != 'Windows'
@@ -119,6 +130,13 @@ jobs:
           chmod +x bundle-linux-x64/bin/codemap
           cd bundle-linux-x64 && zip -r ../codemap-${VERSION}-linux-x64.mcpb . && cd ..
 
+          # Linux arm64
+          mkdir -p bundle-linux-arm64/bin
+          cp bundle/manifest.json bundle-linux-arm64/
+          cp artifacts/codemap-linux-arm64/codemap bundle-linux-arm64/bin/
+          chmod +x bundle-linux-arm64/bin/codemap
+          cd bundle-linux-arm64 && zip -r ../codemap-${VERSION}-linux-arm64.mcpb . && cd ..
+
           # Windows x64
           mkdir -p bundle-windows-x64/bin
           cp bundle/manifest.json bundle-windows-x64/
@@ -173,6 +191,11 @@ jobs:
           cp manifest-versioned.json artifacts/codemap-linux-x64/manifest.json
           cd artifacts/codemap-linux-x64
           tar -czf ../../release/codemap-${VERSION}-linux-x64.tar.gz codemap manifest.json
+          cd ../..
+
+          cp manifest-versioned.json artifacts/codemap-linux-arm64/manifest.json
+          cd artifacts/codemap-linux-arm64
+          tar -czf ../../release/codemap-${VERSION}-linux-arm64.tar.gz codemap manifest.json
           cd ../..
 
           cp manifest-versioned.json artifacts/codemap-darwin-x64/manifest.json
