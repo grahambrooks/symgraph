@@ -159,26 +159,35 @@ jobs:
         with:
           path: artifacts
 
+      - name: Prepare versioned manifest
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          jq --arg v "$VERSION" '.version = $v' manifest.json > manifest-versioned.json
+
       - name: Prepare release assets
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
           mkdir -p release
 
-          # Create tarballs for standalone binaries
+          # Create tarballs for standalone binaries (include manifest.json)
+          cp manifest-versioned.json artifacts/codemap-linux-x64/manifest.json
           cd artifacts/codemap-linux-x64
-          tar -czf ../../release/codemap-${VERSION}-linux-x64.tar.gz codemap
+          tar -czf ../../release/codemap-${VERSION}-linux-x64.tar.gz codemap manifest.json
           cd ../..
 
+          cp manifest-versioned.json artifacts/codemap-darwin-x64/manifest.json
           cd artifacts/codemap-darwin-x64
-          tar -czf ../../release/codemap-${VERSION}-darwin-x64.tar.gz codemap
+          tar -czf ../../release/codemap-${VERSION}-darwin-x64.tar.gz codemap manifest.json
           cd ../..
 
+          cp manifest-versioned.json artifacts/codemap-darwin-arm64/manifest.json
           cd artifacts/codemap-darwin-arm64
-          tar -czf ../../release/codemap-${VERSION}-darwin-arm64.tar.gz codemap
+          tar -czf ../../release/codemap-${VERSION}-darwin-arm64.tar.gz codemap manifest.json
           cd ../..
 
+          cp manifest-versioned.json artifacts/codemap-windows-x64/manifest.json
           cd artifacts/codemap-windows-x64
-          zip ../../release/codemap-${VERSION}-windows-x64.zip codemap.exe
+          zip ../../release/codemap-${VERSION}-windows-x64.zip codemap.exe manifest.json
           cd ../..
 
           # Copy MCPB bundles
