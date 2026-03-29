@@ -1,0 +1,16 @@
+{
+  "id": "codemap",
+  "version": "1.0.0",
+  "name": "Codemap",
+  "documentationURL": "https://github.com/grahambrooks/codemap",
+  "description": "Installs the codemap semantic code intelligence MCP server for AI-assisted code exploration.",
+  "options": {
+    "version": {
+      "type": "string",
+      "proposals": ["latest"],
+      "default": "latest",
+      "description": "Version of codemap to install (e.g. '2026.3.28' or 'latest')."
+    }
+  },
+  "installsAfter": ["ghcr.io/devcontainers/features/common-utils"]
+}

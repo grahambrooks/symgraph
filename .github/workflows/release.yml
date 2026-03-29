@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  packages: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -190,5 +191,27 @@ jobs:
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref, '-') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  devcontainer-feature:
+    name: Publish Devcontainer Feature
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Update feature version from tag
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          jq --arg v "$VERSION" '.version = $v' \
+            devcontainer-feature/src/codemap/devcontainer-feature.json > tmp.json
+          mv tmp.json devcontainer-feature/src/codemap/devcontainer-feature.json
+
+      - name: Publish devcontainer feature
+        uses: devcontainers/action@v1
+        with:
+          publish-features: true
+          base-path-to-features: devcontainer-feature/src
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
