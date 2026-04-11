@@ -1,0 +1,48 @@
+src/extraction/manifest.rs
+  7531285b881b944f 1-1301
+Cargo.toml
+  7531285b881b944f 32-34,42
+src/lib.rs
+  7531285b881b944f 86-89,160-163,166-169,172-177
+src/types.rs
+  7531285b881b944f 182-183,205-206,228-229,251-252
+src/extraction/mod.rs
+  7531285b881b944f 8,35-41,923-1087
+src/extraction/languages.rs
+  7531285b881b944f 92-94,111-113,283-327
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "92288fdeedbbc5266be039503ba7996df9343f52",
+  "prompts": {
+    "7531285b881b944f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ce8c8d36-538b-49a5-8035-912b1f2d4922",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Graham Brooks",
+      "messages": [],
+      "total_additions": 1557,
+      "total_deletions": 6,
+      "accepted_lines": 1555,
+      "overriden_lines": 0,
+      "messages_url": "https://usegitai.com/cas/511b19e802cf7a4f5325db07615c40fa68cca94d6574723f3ae27480ecf46d45"
+    },
+    "fcc11754e9c29391": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cc5df5ba-1ec8-460d-ae43-f5bf6a358e32",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Graham Brooks",
+      "messages": [],
+      "total_additions": 332,
+      "total_deletions": 22,
+      "accepted_lines": 332,
+      "overriden_lines": 0,
+      "messages_url": "https://usegitai.com/cas/640a3b3f9be693b23dcd1a89acf8e85c045b68c358831a2de8a14be9416db859"
+    }
+  }
+}
