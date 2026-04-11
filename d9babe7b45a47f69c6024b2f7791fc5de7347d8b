@@ -1,0 +1,42 @@
+install.ps1
+  fcc11754e9c29391 1-137
+README.md
+  fcc11754e9c29391 31,33-69
+install.sh
+  fcc11754e9c29391 1-156
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "d9babe7b45a47f69c6024b2f7791fc5de7347d8b",
+  "prompts": {
+    "7531285b881b944f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ce8c8d36-538b-49a5-8035-912b1f2d4922",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Graham Brooks",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 17,
+      "overriden_lines": 0,
+      "messages_url": "https://usegitai.com/cas/6a03f59e2ca890b85eda61bf0f8941ee95269efee8d0f15c7320d08a629ed647"
+    },
+    "fcc11754e9c29391": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "cc5df5ba-1ec8-460d-ae43-f5bf6a358e32",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Graham Brooks",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 332,
+      "overriden_lines": 0,
+      "messages_url": "https://usegitai.com/cas/640a3b3f9be693b23dcd1a89acf8e85c045b68c358831a2de8a14be9416db859"
+    }
+  }
+}
