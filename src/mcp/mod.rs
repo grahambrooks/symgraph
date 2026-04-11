@@ -68,6 +68,7 @@ impl std::ops::DerefMut for SyncDatabase {
 /// MCP server handler for codemap
 #[derive(Clone)]
 pub struct CodeMapHandler {
+    #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
     db: Arc<RwLock<SyncDatabase>>,
     project_root: String,

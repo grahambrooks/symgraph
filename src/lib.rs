@@ -163,10 +163,11 @@ pub fn index_codebase(db: &mut Database, config: &IndexConfig) -> Result<Indexin
 
         // Check extension
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        if !is_manifest {
-            if !config.extensions.is_empty() && !config.extensions.iter().any(|e| e == ext) {
-                continue;
-            }
+        if !is_manifest
+            && !config.extensions.is_empty()
+            && !config.extensions.iter().any(|e| e == ext)
+        {
+            continue;
         }
 
         // Check if language is supported (manifest files use their ecosystem language)

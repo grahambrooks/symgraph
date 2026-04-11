@@ -319,7 +319,11 @@ static GROOVY_CONFIG: LanguageConfig = LanguageConfig {
     interface_types: &["interface_declaration"],
     enum_types: &["enum_declaration"],
     import_types: &["import_declaration"],
-    call_types: &["method_invocation", "juxt_function_call", "object_creation_expression"],
+    call_types: &[
+        "method_invocation",
+        "juxt_function_call",
+        "object_creation_expression",
+    ],
     type_alias_types: &[],
     constant_types: &["constant_declaration", "field_declaration"],
     variable_types: &["local_variable_declaration"],

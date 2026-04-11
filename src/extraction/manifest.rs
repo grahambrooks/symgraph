@@ -14,9 +14,7 @@
 
 use std::path::Path;
 
-use crate::types::{
-    Edge, EdgeKind, ExtractionResult, Language, Node, NodeKind, Visibility,
-};
+use crate::types::{Edge, EdgeKind, ExtractionResult, Language, Node, NodeKind, Visibility};
 
 /// Known manifest filenames
 const MANIFEST_FILES: &[&str] = &[
@@ -58,10 +56,7 @@ pub fn manifest_language(filename: &str) -> Language {
 /// Extract symbols from a package manager manifest file
 pub fn extract_manifest<P: AsRef<Path>>(path: P, content: &str) -> ExtractionResult {
     let path = path.as_ref();
-    let filename = path
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
+    let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
     let language = manifest_language(filename);
     let file_path = path.display().to_string();
 
@@ -92,22 +87,93 @@ pub fn extract_manifest<P: AsRef<Path>>(path: P, content: &str) -> ExtractionRes
     result.nodes.push(file_node);
 
     match filename {
-        "package.json" => extract_package_json(content, &file_path, language, file_id, &mut next_id, &mut result),
-        "Cargo.toml" => extract_cargo_toml(content, &file_path, language, file_id, &mut next_id, &mut result),
-        "go.mod" => extract_go_mod(content, &file_path, language, file_id, &mut next_id, &mut result),
-        "pyproject.toml" => extract_pyproject_toml(content, &file_path, language, file_id, &mut next_id, &mut result),
-        "requirements.txt" => extract_requirements_txt(content, &file_path, language, file_id, &mut next_id, &mut result),
-        "Gemfile" => extract_gemfile(content, &file_path, language, file_id, &mut next_id, &mut result),
-        "composer.json" => extract_composer_json(content, &file_path, language, file_id, &mut next_id, &mut result),
-        "pom.xml" => extract_pom_xml(content, &file_path, language, file_id, &mut next_id, &mut result),
-        "build.gradle" | "build.gradle.kts" => extract_gradle(content, &file_path, language, file_id, &mut next_id, &mut result),
-        "build.sbt" => extract_build_sbt(content, &file_path, language, file_id, &mut next_id, &mut result),
+        "package.json" => extract_package_json(
+            content,
+            &file_path,
+            language,
+            file_id,
+            &mut next_id,
+            &mut result,
+        ),
+        "Cargo.toml" => extract_cargo_toml(
+            content,
+            &file_path,
+            language,
+            file_id,
+            &mut next_id,
+            &mut result,
+        ),
+        "go.mod" => extract_go_mod(
+            content,
+            &file_path,
+            language,
+            file_id,
+            &mut next_id,
+            &mut result,
+        ),
+        "pyproject.toml" => extract_pyproject_toml(
+            content,
+            &file_path,
+            language,
+            file_id,
+            &mut next_id,
+            &mut result,
+        ),
+        "requirements.txt" => extract_requirements_txt(
+            content,
+            &file_path,
+            language,
+            file_id,
+            &mut next_id,
+            &mut result,
+        ),
+        "Gemfile" => extract_gemfile(
+            content,
+            &file_path,
+            language,
+            file_id,
+            &mut next_id,
+            &mut result,
+        ),
+        "composer.json" => extract_composer_json(
+            content,
+            &file_path,
+            language,
+            file_id,
+            &mut next_id,
+            &mut result,
+        ),
+        "pom.xml" => extract_pom_xml(
+            content,
+            &file_path,
+            language,
+            file_id,
+            &mut next_id,
+            &mut result,
+        ),
+        "build.gradle" | "build.gradle.kts" => extract_gradle(
+            content,
+            &file_path,
+            language,
+            file_id,
+            &mut next_id,
+            &mut result,
+        ),
+        "build.sbt" => extract_build_sbt(
+            content,
+            &file_path,
+            language,
+            file_id,
+            &mut next_id,
+            &mut result,
+        ),
         _ => {}
     }
 
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 fn add_node(
     result: &mut ExtractionResult,
     next_id: &mut i64,
@@ -172,15 +238,40 @@ fn extract_package_json(
     if let Some(name) = json.get("name").and_then(|v| v.as_str()) {
         let version = json.get("version").and_then(|v| v.as_str());
         let sig = version.map(|v| format!("{name}@{v}"));
-        add_node(result, next_id, file_id, NodeKind::Module, name.to_string(), file_path, language, 1, sig);
+        add_node(
+            result,
+            next_id,
+            file_id,
+            NodeKind::Module,
+            name.to_string(),
+            file_path,
+            language,
+            1,
+            sig,
+        );
     }
 
     // Dependencies
-    for dep_key in &["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"] {
+    for dep_key in &[
+        "dependencies",
+        "devDependencies",
+        "peerDependencies",
+        "optionalDependencies",
+    ] {
         if let Some(deps) = json.get(*dep_key).and_then(|v| v.as_object()) {
             for (name, version) in deps {
                 let sig = version.as_str().map(|v| format!("{dep_key}: {v}"));
-                add_node(result, next_id, file_id, NodeKind::Import, name.clone(), file_path, language, 1, sig);
+                add_node(
+                    result,
+                    next_id,
+                    file_id,
+                    NodeKind::Import,
+                    name.clone(),
+                    file_path,
+                    language,
+                    1,
+                    sig,
+                );
             }
         }
     }
@@ -189,7 +280,17 @@ fn extract_package_json(
     if let Some(scripts) = json.get("scripts").and_then(|v| v.as_object()) {
         for (name, cmd) in scripts {
             let sig = cmd.as_str().map(|c| c.to_string());
-            add_node(result, next_id, file_id, NodeKind::Function, name.clone(), file_path, language, 1, sig);
+            add_node(
+                result,
+                next_id,
+                file_id,
+                NodeKind::Function,
+                name.clone(),
+                file_path,
+                language,
+                1,
+                sig,
+            );
         }
     }
 }
@@ -209,10 +310,27 @@ fn extract_cargo_toml(
     };
 
     // Package name
-    if let Some(name) = toml.get("package").and_then(|p| p.get("name")).and_then(|n| n.as_str()) {
-        let version = toml.get("package").and_then(|p| p.get("version")).and_then(|v| v.as_str());
+    if let Some(name) = toml
+        .get("package")
+        .and_then(|p| p.get("name"))
+        .and_then(|n| n.as_str())
+    {
+        let version = toml
+            .get("package")
+            .and_then(|p| p.get("version"))
+            .and_then(|v| v.as_str());
         let sig = version.map(|v| format!("{name}@{v}"));
-        add_node(result, next_id, file_id, NodeKind::Module, name.to_string(), file_path, language, 1, sig);
+        add_node(
+            result,
+            next_id,
+            file_id,
+            NodeKind::Module,
+            name.to_string(),
+            file_path,
+            language,
+            1,
+            sig,
+        );
     }
 
     // Dependencies, dev-dependencies, build-dependencies
@@ -221,12 +339,23 @@ fn extract_cargo_toml(
             for (name, spec) in deps {
                 let sig = match spec {
                     toml::Value::String(v) => Some(format!("{dep_key}: {v}")),
-                    toml::Value::Table(t) => {
-                        t.get("version").and_then(|v| v.as_str()).map(|v| format!("{dep_key}: {v}"))
-                    }
+                    toml::Value::Table(t) => t
+                        .get("version")
+                        .and_then(|v| v.as_str())
+                        .map(|v| format!("{dep_key}: {v}")),
                     _ => None,
                 };
-                add_node(result, next_id, file_id, NodeKind::Import, name.clone(), file_path, language, 1, sig);
+                add_node(
+                    result,
+                    next_id,
+                    file_id,
+                    NodeKind::Import,
+                    name.clone(),
+                    file_path,
+                    language,
+                    1,
+                    sig,
+                );
             }
         }
     }
@@ -234,7 +363,17 @@ fn extract_cargo_toml(
     // Features
     if let Some(features) = toml.get("features").and_then(|v| v.as_table()) {
         for (name, _) in features {
-            add_node(result, next_id, file_id, NodeKind::Constant, name.clone(), file_path, language, 1, Some("feature".to_string()));
+            add_node(
+                result,
+                next_id,
+                file_id,
+                NodeKind::Constant,
+                name.clone(),
+                file_path,
+                language,
+                1,
+                Some("feature".to_string()),
+            );
         }
     }
 }
@@ -257,13 +396,33 @@ fn extract_go_mod(
         // Module declaration
         if let Some(module) = trimmed.strip_prefix("module ") {
             let module = module.trim();
-            add_node(result, next_id, file_id, NodeKind::Module, module.to_string(), file_path, language, line_num as u32 + 1, None);
+            add_node(
+                result,
+                next_id,
+                file_id,
+                NodeKind::Module,
+                module.to_string(),
+                file_path,
+                language,
+                line_num as u32 + 1,
+                None,
+            );
             continue;
         }
 
         // Go version
         if let Some(version) = trimmed.strip_prefix("go ") {
-            add_node(result, next_id, file_id, NodeKind::Constant, "go".to_string(), file_path, language, line_num as u32 + 1, Some(version.trim().to_string()));
+            add_node(
+                result,
+                next_id,
+                file_id,
+                NodeKind::Constant,
+                "go".to_string(),
+                file_path,
+                language,
+                line_num as u32 + 1,
+                Some(version.trim().to_string()),
+            );
             continue;
         }
 
@@ -281,7 +440,17 @@ fn extract_go_mod(
         if let Some(req) = trimmed.strip_prefix("require ") {
             let req = req.trim();
             if let Some((path, version)) = req.split_once(' ') {
-                add_node(result, next_id, file_id, NodeKind::Import, path.trim().to_string(), file_path, language, line_num as u32 + 1, Some(version.trim().to_string()));
+                add_node(
+                    result,
+                    next_id,
+                    file_id,
+                    NodeKind::Import,
+                    path.trim().to_string(),
+                    file_path,
+                    language,
+                    line_num as u32 + 1,
+                    Some(version.trim().to_string()),
+                );
             }
             continue;
         }
@@ -291,7 +460,17 @@ fn extract_go_mod(
             let parts: Vec<&str> = trimmed.splitn(2, ' ').collect();
             if let Some(&path) = parts.first() {
                 let version = parts.get(1).map(|v| v.trim().to_string());
-                add_node(result, next_id, file_id, NodeKind::Import, path.to_string(), file_path, language, line_num as u32 + 1, version);
+                add_node(
+                    result,
+                    next_id,
+                    file_id,
+                    NodeKind::Import,
+                    path.to_string(),
+                    file_path,
+                    language,
+                    line_num as u32 + 1,
+                    version,
+                );
             }
         }
     }
@@ -312,39 +491,107 @@ fn extract_pyproject_toml(
     };
 
     // Project name (PEP 621)
-    if let Some(name) = toml.get("project").and_then(|p| p.get("name")).and_then(|n| n.as_str()) {
-        let version = toml.get("project").and_then(|p| p.get("version")).and_then(|v| v.as_str());
+    if let Some(name) = toml
+        .get("project")
+        .and_then(|p| p.get("name"))
+        .and_then(|n| n.as_str())
+    {
+        let version = toml
+            .get("project")
+            .and_then(|p| p.get("version"))
+            .and_then(|v| v.as_str());
         let sig = version.map(|v| format!("{name}@{v}"));
-        add_node(result, next_id, file_id, NodeKind::Module, name.to_string(), file_path, language, 1, sig);
+        add_node(
+            result,
+            next_id,
+            file_id,
+            NodeKind::Module,
+            name.to_string(),
+            file_path,
+            language,
+            1,
+            sig,
+        );
     }
 
     // Poetry project name
-    if let Some(name) = toml.get("tool").and_then(|t| t.get("poetry")).and_then(|p| p.get("name")).and_then(|n| n.as_str()) {
-        if !result.nodes.iter().any(|n| n.kind == NodeKind::Module && n.name != filename_from_path(file_path)) {
-            let version = toml.get("tool").and_then(|t| t.get("poetry")).and_then(|p| p.get("version")).and_then(|v| v.as_str());
+    if let Some(name) = toml
+        .get("tool")
+        .and_then(|t| t.get("poetry"))
+        .and_then(|p| p.get("name"))
+        .and_then(|n| n.as_str())
+    {
+        if !result
+            .nodes
+            .iter()
+            .any(|n| n.kind == NodeKind::Module && n.name != filename_from_path(file_path))
+        {
+            let version = toml
+                .get("tool")
+                .and_then(|t| t.get("poetry"))
+                .and_then(|p| p.get("version"))
+                .and_then(|v| v.as_str());
             let sig = version.map(|v| format!("{name}@{v}"));
-            add_node(result, next_id, file_id, NodeKind::Module, name.to_string(), file_path, language, 1, sig);
+            add_node(
+                result,
+                next_id,
+                file_id,
+                NodeKind::Module,
+                name.to_string(),
+                file_path,
+                language,
+                1,
+                sig,
+            );
         }
     }
 
     // PEP 621 dependencies
-    if let Some(deps) = toml.get("project").and_then(|p| p.get("dependencies")).and_then(|d| d.as_array()) {
+    if let Some(deps) = toml
+        .get("project")
+        .and_then(|p| p.get("dependencies"))
+        .and_then(|d| d.as_array())
+    {
         for dep in deps {
             if let Some(dep_str) = dep.as_str() {
                 let (name, version) = parse_pep508_dependency(dep_str);
-                add_node(result, next_id, file_id, NodeKind::Import, name, file_path, language, 1, version);
+                add_node(
+                    result,
+                    next_id,
+                    file_id,
+                    NodeKind::Import,
+                    name,
+                    file_path,
+                    language,
+                    1,
+                    version,
+                );
             }
         }
     }
 
     // PEP 621 optional-dependencies
-    if let Some(groups) = toml.get("project").and_then(|p| p.get("optional-dependencies")).and_then(|d| d.as_table()) {
+    if let Some(groups) = toml
+        .get("project")
+        .and_then(|p| p.get("optional-dependencies"))
+        .and_then(|d| d.as_table())
+    {
         for (_group, deps) in groups {
             if let Some(deps) = deps.as_array() {
                 for dep in deps {
                     if let Some(dep_str) = dep.as_str() {
                         let (name, version) = parse_pep508_dependency(dep_str);
-                        add_node(result, next_id, file_id, NodeKind::Import, name, file_path, language, 1, version);
+                        add_node(
+                            result,
+                            next_id,
+                            file_id,
+                            NodeKind::Import,
+                            name,
+                            file_path,
+                            language,
+                            1,
+                            version,
+                        );
                     }
                 }
             }
@@ -353,27 +600,60 @@ fn extract_pyproject_toml(
 
     // Poetry dependencies
     for dep_key in &["dependencies", "dev-dependencies"] {
-        if let Some(deps) = toml.get("tool").and_then(|t| t.get("poetry")).and_then(|p| p.get(*dep_key)).and_then(|d| d.as_table()) {
+        if let Some(deps) = toml
+            .get("tool")
+            .and_then(|t| t.get("poetry"))
+            .and_then(|p| p.get(*dep_key))
+            .and_then(|d| d.as_table())
+        {
             for (name, spec) in deps {
                 if name == "python" {
                     continue;
                 }
                 let sig = match spec {
                     toml::Value::String(v) => Some(v.clone()),
-                    toml::Value::Table(t) => t.get("version").and_then(|v| v.as_str()).map(|v| v.to_string()),
+                    toml::Value::Table(t) => t
+                        .get("version")
+                        .and_then(|v| v.as_str())
+                        .map(|v| v.to_string()),
                     _ => None,
                 };
-                add_node(result, next_id, file_id, NodeKind::Import, name.clone(), file_path, language, 1, sig);
+                add_node(
+                    result,
+                    next_id,
+                    file_id,
+                    NodeKind::Import,
+                    name.clone(),
+                    file_path,
+                    language,
+                    1,
+                    sig,
+                );
             }
         }
     }
 
     // uv dependencies (tool.uv.dev-dependencies)
-    if let Some(deps) = toml.get("tool").and_then(|t| t.get("uv")).and_then(|u| u.get("dev-dependencies")).and_then(|d| d.as_array()) {
+    if let Some(deps) = toml
+        .get("tool")
+        .and_then(|t| t.get("uv"))
+        .and_then(|u| u.get("dev-dependencies"))
+        .and_then(|d| d.as_array())
+    {
         for dep in deps {
             if let Some(dep_str) = dep.as_str() {
                 let (name, version) = parse_pep508_dependency(dep_str);
-                add_node(result, next_id, file_id, NodeKind::Import, name, file_path, language, 1, version);
+                add_node(
+                    result,
+                    next_id,
+                    file_id,
+                    NodeKind::Import,
+                    name,
+                    file_path,
+                    language,
+                    1,
+                    version,
+                );
             }
         }
     }
@@ -386,18 +666,24 @@ fn filename_from_path(path: &str) -> &str {
 /// Parse a PEP 508 dependency string like "requests>=2.25.0" into (name, version_spec)
 fn parse_pep508_dependency(dep: &str) -> (String, Option<String>) {
     // Split on first version specifier character
-    let name_end = dep.find(|c: char| matches!(c, '>' | '<' | '=' | '!' | '~' | '[' | ';' | ' '));
+    let name_end = dep.find(['>', '<', '=', '!', '~', '[', ';', ' ']);
     match name_end {
         Some(pos) => {
             let name = dep[..pos].trim().to_string();
             let rest = dep[pos..].trim();
             // Strip extras like [dev] and environment markers
             let version = if rest.starts_with('[') {
-                rest.find(']').map(|end| rest[end + 1..].trim().to_string()).filter(|s| !s.is_empty())
+                rest.find(']')
+                    .map(|end| rest[end + 1..].trim().to_string())
+                    .filter(|s| !s.is_empty())
             } else {
                 // Strip environment markers (after ;)
                 let version_part = rest.split(';').next().unwrap_or(rest).trim();
-                if version_part.is_empty() { None } else { Some(version_part.to_string()) }
+                if version_part.is_empty() {
+                    None
+                } else {
+                    Some(version_part.to_string())
+                }
             };
             (name, version)
         }
@@ -425,7 +711,17 @@ fn extract_requirements_txt(
 
         let (name, version) = parse_pep508_dependency(trimmed);
         if !name.is_empty() {
-            add_node(result, next_id, file_id, NodeKind::Import, name, file_path, language, line_num as u32 + 1, version);
+            add_node(
+                result,
+                next_id,
+                file_id,
+                NodeKind::Import,
+                name,
+                file_path,
+                language,
+                line_num as u32 + 1,
+                version,
+            );
         }
     }
 }
@@ -451,14 +747,34 @@ fn extract_gemfile(
         // source declaration
         if let Some(source) = trimmed.strip_prefix("source ") {
             let source = source.trim().trim_matches(|c| c == '\'' || c == '"');
-            add_node(result, next_id, file_id, NodeKind::Constant, "source".to_string(), file_path, language, line_num as u32 + 1, Some(source.to_string()));
+            add_node(
+                result,
+                next_id,
+                file_id,
+                NodeKind::Constant,
+                "source".to_string(),
+                file_path,
+                language,
+                line_num as u32 + 1,
+                Some(source.to_string()),
+            );
             continue;
         }
 
         // ruby version
         if let Some(version) = trimmed.strip_prefix("ruby ") {
             let version = version.trim().trim_matches(|c| c == '\'' || c == '"');
-            add_node(result, next_id, file_id, NodeKind::Constant, "ruby".to_string(), file_path, language, line_num as u32 + 1, Some(version.to_string()));
+            add_node(
+                result,
+                next_id,
+                file_id,
+                NodeKind::Constant,
+                "ruby".to_string(),
+                file_path,
+                language,
+                line_num as u32 + 1,
+                Some(version.to_string()),
+            );
             continue;
         }
 
@@ -468,7 +784,17 @@ fn extract_gemfile(
             // Parse gem name (first quoted string)
             let (name, version) = parse_gem_declaration(rest);
             if !name.is_empty() {
-                add_node(result, next_id, file_id, NodeKind::Import, name, file_path, language, line_num as u32 + 1, version);
+                add_node(
+                    result,
+                    next_id,
+                    file_id,
+                    NodeKind::Import,
+                    name,
+                    file_path,
+                    language,
+                    line_num as u32 + 1,
+                    version,
+                );
             }
         }
     }
@@ -476,10 +802,18 @@ fn extract_gemfile(
 
 fn parse_gem_declaration(s: &str) -> (String, Option<String>) {
     // Extract gem name from first quoted string
-    let quote_char = if s.starts_with('\'') { '\'' } else if s.starts_with('"') { '"' } else { return (String::new(), None) };
+    let quote_char = if s.starts_with('\'') {
+        '\''
+    } else if s.starts_with('"') {
+        '"'
+    } else {
+        return (String::new(), None);
+    };
 
     let rest = &s[1..];
-    let Some(end) = rest.find(quote_char) else { return (String::new(), None) };
+    let Some(end) = rest.find(quote_char) else {
+        return (String::new(), None);
+    };
     let name = rest[..end].to_string();
 
     // Look for version string (second quoted string)
@@ -519,7 +853,17 @@ fn extract_composer_json(
     if let Some(name) = json.get("name").and_then(|v| v.as_str()) {
         let version = json.get("version").and_then(|v| v.as_str());
         let sig = version.map(|v| format!("{name}@{v}"));
-        add_node(result, next_id, file_id, NodeKind::Module, name.to_string(), file_path, language, 1, sig);
+        add_node(
+            result,
+            next_id,
+            file_id,
+            NodeKind::Module,
+            name.to_string(),
+            file_path,
+            language,
+            1,
+            sig,
+        );
     }
 
     // Dependencies
@@ -527,7 +871,17 @@ fn extract_composer_json(
         if let Some(deps) = json.get(*dep_key).and_then(|v| v.as_object()) {
             for (name, version) in deps {
                 let sig = version.as_str().map(|v| format!("{dep_key}: {v}"));
-                add_node(result, next_id, file_id, NodeKind::Import, name.clone(), file_path, language, 1, sig);
+                add_node(
+                    result,
+                    next_id,
+                    file_id,
+                    NodeKind::Import,
+                    name.clone(),
+                    file_path,
+                    language,
+                    1,
+                    sig,
+                );
             }
         }
     }
@@ -536,7 +890,17 @@ fn extract_composer_json(
     if let Some(scripts) = json.get("scripts").and_then(|v| v.as_object()) {
         for (name, cmd) in scripts {
             let sig = cmd.as_str().map(|c| c.to_string());
-            add_node(result, next_id, file_id, NodeKind::Function, name.clone(), file_path, language, 1, sig);
+            add_node(
+                result,
+                next_id,
+                file_id,
+                NodeKind::Function,
+                name.clone(),
+                file_path,
+                language,
+                1,
+                sig,
+            );
         }
     }
 }
@@ -563,7 +927,17 @@ fn extract_pom_xml(
             None => artifact.clone(),
         };
         let sig = project_version.as_ref().map(|v| format!("{name}@{v}"));
-        add_node(result, next_id, file_id, NodeKind::Module, name, file_path, language, 1, sig);
+        add_node(
+            result,
+            next_id,
+            file_id,
+            NodeKind::Module,
+            name,
+            file_path,
+            language,
+            1,
+            sig,
+        );
     }
 
     // Extract dependencies
@@ -592,7 +966,17 @@ fn extract_pom_xml(
                 (None, Some(s)) => Some(s.clone()),
                 (None, None) => None,
             };
-            add_node(result, next_id, file_id, NodeKind::Import, name, file_path, language, 1, sig);
+            add_node(
+                result,
+                next_id,
+                file_id,
+                NodeKind::Import,
+                name,
+                file_path,
+                language,
+                1,
+                sig,
+            );
         }
 
         search_from = dep_start + dep_end + "</dependency>".len();
@@ -617,7 +1001,17 @@ fn extract_pom_xml(
                 None => artifact,
             };
             let sig = version.map(|v| format!("plugin: {v}"));
-            add_node(result, next_id, file_id, NodeKind::Import, name, file_path, language, 1, sig);
+            add_node(
+                result,
+                next_id,
+                file_id,
+                NodeKind::Import,
+                name,
+                file_path,
+                language,
+                1,
+                sig,
+            );
         }
 
         search_from = plugin_start + plugin_end + "</plugin>".len();
@@ -653,7 +1047,11 @@ fn extract_gradle(
         let trimmed = line.trim();
 
         // Skip empty lines and comments
-        if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+        if trimmed.is_empty()
+            || trimmed.starts_with("//")
+            || trimmed.starts_with("/*")
+            || trimmed.starts_with('*')
+        {
             continue;
         }
 
@@ -662,7 +1060,17 @@ fn extract_gradle(
             let plugin = extract_gradle_string(trimmed);
             if let Some(plugin) = plugin {
                 let version = extract_gradle_version(trimmed);
-                add_node(result, next_id, file_id, NodeKind::Import, plugin, file_path, language, line_num as u32 + 1, version.map(|v| format!("plugin: {v}")));
+                add_node(
+                    result,
+                    next_id,
+                    file_id,
+                    NodeKind::Import,
+                    plugin,
+                    file_path,
+                    language,
+                    line_num as u32 + 1,
+                    version.map(|v| format!("plugin: {v}")),
+                );
             }
             continue;
         }
@@ -670,18 +1078,27 @@ fn extract_gradle(
         // Dependency declarations: implementation 'group:artifact:version'
         // Also: api, compileOnly, runtimeOnly, testImplementation, etc.
         let dep_configs = [
-            "implementation", "api", "compileOnly", "runtimeOnly",
-            "testImplementation", "testCompileOnly", "testRuntimeOnly",
-            "annotationProcessor", "kapt", "ksp",
+            "implementation",
+            "api",
+            "compileOnly",
+            "runtimeOnly",
+            "testImplementation",
+            "testCompileOnly",
+            "testRuntimeOnly",
+            "annotationProcessor",
+            "kapt",
+            "ksp",
             "classpath",
         ];
 
         let mut matched_config = None;
         for config in &dep_configs {
-            // Match: implementation("..."), implementation '...', implementation "..."
-            if trimmed.starts_with(config) {
-                let rest = &trimmed[config.len()..];
-                if rest.starts_with('(') || rest.starts_with(' ') || rest.starts_with('\"') || rest.starts_with('\'') {
+            if let Some(rest) = trimmed.strip_prefix(config) {
+                if rest.starts_with('(')
+                    || rest.starts_with(' ')
+                    || rest.starts_with('"')
+                    || rest.starts_with('\'')
+                {
                     matched_config = Some(*config);
                     break;
                 }
@@ -692,7 +1109,17 @@ fn extract_gradle(
             if let Some(dep) = extract_gradle_string(trimmed) {
                 // dep might be "group:artifact:version" or just "artifact"
                 let sig = Some(config.to_string());
-                add_node(result, next_id, file_id, NodeKind::Import, dep, file_path, language, line_num as u32 + 1, sig);
+                add_node(
+                    result,
+                    next_id,
+                    file_id,
+                    NodeKind::Import,
+                    dep,
+                    file_path,
+                    language,
+                    line_num as u32 + 1,
+                    sig,
+                );
             }
             continue;
         }
@@ -700,7 +1127,17 @@ fn extract_gradle(
         // group = 'com.example' or group = "com.example"
         if trimmed.starts_with("group") && trimmed.contains('=') {
             if let Some(value) = extract_gradle_assignment(trimmed) {
-                add_node(result, next_id, file_id, NodeKind::Module, value, file_path, language, line_num as u32 + 1, None);
+                add_node(
+                    result,
+                    next_id,
+                    file_id,
+                    NodeKind::Module,
+                    value,
+                    file_path,
+                    language,
+                    line_num as u32 + 1,
+                    None,
+                );
             }
         }
     }
@@ -736,7 +1173,11 @@ fn extract_gradle_assignment(s: &str) -> Option<String> {
     let after = s[eq_idx + 1..].trim();
     // Strip quotes
     let after = after.trim_matches(|c| c == '\'' || c == '"');
-    if after.is_empty() { None } else { Some(after.to_string()) }
+    if after.is_empty() {
+        None
+    } else {
+        Some(after.to_string())
+    }
 }
 
 // ── build.sbt (SBT / Scala) ──
@@ -753,7 +1194,11 @@ fn extract_build_sbt(
         let trimmed = line.trim();
 
         // Skip empty lines and comments
-        if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with("/*") || trimmed.starts_with('*') {
+        if trimmed.is_empty()
+            || trimmed.starts_with("//")
+            || trimmed.starts_with("/*")
+            || trimmed.starts_with('*')
+        {
             continue;
         }
 
@@ -762,7 +1207,17 @@ fn extract_build_sbt(
             if let Some(value) = extract_sbt_string_value(trimmed) {
                 let version = find_sbt_setting(content, "version");
                 let sig = version.map(|v| format!("{value}@{v}"));
-                add_node(result, next_id, file_id, NodeKind::Module, value, file_path, language, line_num as u32 + 1, sig);
+                add_node(
+                    result,
+                    next_id,
+                    file_id,
+                    NodeKind::Module,
+                    value,
+                    file_path,
+                    language,
+                    line_num as u32 + 1,
+                    sig,
+                );
             }
             continue;
         }
@@ -770,7 +1225,17 @@ fn extract_build_sbt(
         // scalaVersion := "3.3.1"
         if trimmed.starts_with("scalaVersion ") && trimmed.contains(":=") {
             if let Some(value) = extract_sbt_string_value(trimmed) {
-                add_node(result, next_id, file_id, NodeKind::Constant, "scalaVersion".to_string(), file_path, language, line_num as u32 + 1, Some(value));
+                add_node(
+                    result,
+                    next_id,
+                    file_id,
+                    NodeKind::Constant,
+                    "scalaVersion".to_string(),
+                    file_path,
+                    language,
+                    line_num as u32 + 1,
+                    Some(value),
+                );
             }
             continue;
         }
@@ -785,7 +1250,17 @@ fn extract_build_sbt(
                     (None, Some(s)) => Some(s),
                     (None, None) => None,
                 };
-                add_node(result, next_id, file_id, NodeKind::Import, name, file_path, language, line_num as u32 + 1, sig);
+                add_node(
+                    result,
+                    next_id,
+                    file_id,
+                    NodeKind::Import,
+                    name,
+                    file_path,
+                    language,
+                    line_num as u32 + 1,
+                    sig,
+                );
             }
         }
     }
@@ -795,10 +1270,14 @@ fn extract_sbt_string_value(s: &str) -> Option<String> {
     let assign = s.find(":=")?;
     let after = s[assign + 2..].trim();
     let after = after.trim_matches('"');
-    if after.is_empty() { None } else { Some(after.to_string()) }
+    if after.is_empty() {
+        None
+    } else {
+        Some(after.to_string())
+    }
 }
 
-fn find_sbt_setting<'a>(content: &'a str, key: &str) -> Option<String> {
+fn find_sbt_setting(content: &str, key: &str) -> Option<String> {
     for line in content.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with(key) && trimmed.contains(":=") {
@@ -817,7 +1296,11 @@ fn parse_sbt_dependency(s: &str) -> Option<(String, Option<String>, Option<Strin
         // "org" %% "artifact" % "version" % "scope"
         4 => {
             let name = format!("{}:{}", strings[0], strings[1]);
-            Some((name, Some(strings[2].to_string()), Some(strings[3].to_string())))
+            Some((
+                name,
+                Some(strings[2].to_string()),
+                Some(strings[3].to_string()),
+            ))
         }
         // "org" %% "artifact" % "version"
         3 => {
@@ -895,17 +1378,29 @@ mod tests {
         // File node + module + 3 deps + 2 scripts = 7
         assert_eq!(result.nodes.len(), 7);
 
-        let module = result.nodes.iter().find(|n| n.kind == NodeKind::Module).unwrap();
+        let module = result
+            .nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::Module)
+            .unwrap();
         assert_eq!(module.name, "my-app");
         assert_eq!(module.signature.as_deref(), Some("my-app@1.0.0"));
 
-        let imports: Vec<_> = result.nodes.iter().filter(|n| n.kind == NodeKind::Import).collect();
+        let imports: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::Import)
+            .collect();
         assert_eq!(imports.len(), 3);
         assert!(imports.iter().any(|n| n.name == "express"));
         assert!(imports.iter().any(|n| n.name == "lodash"));
         assert!(imports.iter().any(|n| n.name == "jest"));
 
-        let funcs: Vec<_> = result.nodes.iter().filter(|n| n.kind == NodeKind::Function).collect();
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::Function)
+            .collect();
         assert_eq!(funcs.len(), 2);
         assert!(funcs.iter().any(|n| n.name == "start"));
         assert!(funcs.iter().any(|n| n.name == "test"));
@@ -932,16 +1427,28 @@ sqlite = []
         let result = extract_manifest("Cargo.toml", content);
         assert!(result.errors.is_empty());
 
-        let module = result.nodes.iter().find(|n| n.kind == NodeKind::Module).unwrap();
+        let module = result
+            .nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::Module)
+            .unwrap();
         assert_eq!(module.name, "my-crate");
 
-        let imports: Vec<_> = result.nodes.iter().filter(|n| n.kind == NodeKind::Import).collect();
+        let imports: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::Import)
+            .collect();
         assert_eq!(imports.len(), 3);
         assert!(imports.iter().any(|n| n.name == "serde"));
         assert!(imports.iter().any(|n| n.name == "tokio"));
         assert!(imports.iter().any(|n| n.name == "tempfile"));
 
-        let features: Vec<_> = result.nodes.iter().filter(|n| n.kind == NodeKind::Constant).collect();
+        let features: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::Constant)
+            .collect();
         assert_eq!(features.len(), 2);
         assert!(features.iter().any(|n| n.name == "default"));
         assert!(features.iter().any(|n| n.name == "sqlite"));
@@ -963,10 +1470,18 @@ require github.com/single/dep v2.0.0
         let result = extract_manifest("go.mod", content);
         assert!(result.errors.is_empty());
 
-        let module = result.nodes.iter().find(|n| n.kind == NodeKind::Module).unwrap();
+        let module = result
+            .nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::Module)
+            .unwrap();
         assert_eq!(module.name, "github.com/example/mymod");
 
-        let imports: Vec<_> = result.nodes.iter().filter(|n| n.kind == NodeKind::Import).collect();
+        let imports: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::Import)
+            .collect();
         assert_eq!(imports.len(), 3);
         assert!(imports.iter().any(|n| n.name == "github.com/foo/bar"));
         assert!(imports.iter().any(|n| n.name == "github.com/baz/qux"));
@@ -991,10 +1506,18 @@ dev = ["pytest>=7.0"]
         let result = extract_manifest("pyproject.toml", content);
         assert!(result.errors.is_empty());
 
-        let module = result.nodes.iter().find(|n| n.kind == NodeKind::Module).unwrap();
+        let module = result
+            .nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::Module)
+            .unwrap();
         assert_eq!(module.name, "my-package");
 
-        let imports: Vec<_> = result.nodes.iter().filter(|n| n.kind == NodeKind::Import).collect();
+        let imports: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::Import)
+            .collect();
         assert_eq!(imports.len(), 4);
         assert!(imports.iter().any(|n| n.name == "requests"));
         assert!(imports.iter().any(|n| n.name == "click"));
@@ -1020,10 +1543,18 @@ black = "^22.0"
         let result = extract_manifest("pyproject.toml", content);
         assert!(result.errors.is_empty());
 
-        let module = result.nodes.iter().find(|n| n.kind == NodeKind::Module).unwrap();
+        let module = result
+            .nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::Module)
+            .unwrap();
         assert_eq!(module.name, "my-poetry-project");
 
-        let imports: Vec<_> = result.nodes.iter().filter(|n| n.kind == NodeKind::Import).collect();
+        let imports: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::Import)
+            .collect();
         // flask, sqlalchemy, black (python is skipped)
         assert_eq!(imports.len(), 3);
         assert!(imports.iter().any(|n| n.name == "flask"));
@@ -1046,7 +1577,11 @@ pytest>=7.0
         let result = extract_manifest("requirements.txt", content);
         assert!(result.errors.is_empty());
 
-        let imports: Vec<_> = result.nodes.iter().filter(|n| n.kind == NodeKind::Import).collect();
+        let imports: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::Import)
+            .collect();
         assert_eq!(imports.len(), 4);
         assert!(imports.iter().any(|n| n.name == "flask"));
         assert!(imports.iter().any(|n| n.name == "requests"));
@@ -1068,13 +1603,21 @@ gem 'puma', '>= 5.0'
         let result = extract_manifest("Gemfile", content);
         assert!(result.errors.is_empty());
 
-        let imports: Vec<_> = result.nodes.iter().filter(|n| n.kind == NodeKind::Import).collect();
+        let imports: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::Import)
+            .collect();
         assert_eq!(imports.len(), 3);
         assert!(imports.iter().any(|n| n.name == "rails"));
         assert!(imports.iter().any(|n| n.name == "pg"));
         assert!(imports.iter().any(|n| n.name == "puma"));
 
-        let consts: Vec<_> = result.nodes.iter().filter(|n| n.kind == NodeKind::Constant).collect();
+        let consts: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::Constant)
+            .collect();
         assert!(consts.iter().any(|n| n.name == "source"));
         assert!(consts.iter().any(|n| n.name == "ruby"));
     }
@@ -1097,13 +1640,25 @@ gem 'puma', '>= 5.0'
         let result = extract_manifest("composer.json", content);
         assert!(result.errors.is_empty());
 
-        let module = result.nodes.iter().find(|n| n.kind == NodeKind::Module).unwrap();
+        let module = result
+            .nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::Module)
+            .unwrap();
         assert_eq!(module.name, "vendor/my-package");
 
-        let imports: Vec<_> = result.nodes.iter().filter(|n| n.kind == NodeKind::Import).collect();
+        let imports: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::Import)
+            .collect();
         assert_eq!(imports.len(), 3);
 
-        let funcs: Vec<_> = result.nodes.iter().filter(|n| n.kind == NodeKind::Function).collect();
+        let funcs: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::Function)
+            .collect();
         assert_eq!(funcs.len(), 1);
         assert_eq!(funcs[0].name, "test");
     }
@@ -1125,9 +1680,18 @@ gem 'puma', '>= 5.0'
 
     #[test]
     fn test_parse_pep508_dependency() {
-        assert_eq!(parse_pep508_dependency("requests>=2.25.0"), ("requests".to_string(), Some(">=2.25.0".to_string())));
-        assert_eq!(parse_pep508_dependency("numpy"), ("numpy".to_string(), None));
-        assert_eq!(parse_pep508_dependency("click~=8.0"), ("click".to_string(), Some("~=8.0".to_string())));
+        assert_eq!(
+            parse_pep508_dependency("requests>=2.25.0"),
+            ("requests".to_string(), Some(">=2.25.0".to_string()))
+        );
+        assert_eq!(
+            parse_pep508_dependency("numpy"),
+            ("numpy".to_string(), None)
+        );
+        assert_eq!(
+            parse_pep508_dependency("click~=8.0"),
+            ("click".to_string(), Some("~=8.0".to_string()))
+        );
     }
 
     #[test]
@@ -1150,7 +1714,11 @@ gem 'puma', '>= 5.0'
         let content = r#"{"name": "test", "dependencies": {"foo": "^1.0"}}"#;
         let result = extract_manifest("package.json", content);
 
-        let contains_edges: Vec<_> = result.edges.iter().filter(|e| e.kind == EdgeKind::Contains).collect();
+        let contains_edges: Vec<_> = result
+            .edges
+            .iter()
+            .filter(|e| e.kind == EdgeKind::Contains)
+            .collect();
         // Module node + Import node = 2 contains edges from file
         assert_eq!(contains_edges.len(), 2);
     }
@@ -1191,15 +1759,30 @@ gem 'puma', '>= 5.0'
         let result = extract_manifest("pom.xml", content);
         assert!(result.errors.is_empty());
 
-        let module = result.nodes.iter().find(|n| n.kind == NodeKind::Module).unwrap();
+        let module = result
+            .nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::Module)
+            .unwrap();
         assert_eq!(module.name, "com.example:my-app");
-        assert_eq!(module.signature.as_deref(), Some("com.example:my-app@1.0.0"));
+        assert_eq!(
+            module.signature.as_deref(),
+            Some("com.example:my-app@1.0.0")
+        );
 
-        let imports: Vec<_> = result.nodes.iter().filter(|n| n.kind == NodeKind::Import).collect();
+        let imports: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::Import)
+            .collect();
         assert_eq!(imports.len(), 3); // 2 deps + 1 plugin
-        assert!(imports.iter().any(|n| n.name == "org.springframework.boot:spring-boot-starter-web"));
+        assert!(imports
+            .iter()
+            .any(|n| n.name == "org.springframework.boot:spring-boot-starter-web"));
         assert!(imports.iter().any(|n| n.name == "junit:junit"));
-        assert!(imports.iter().any(|n| n.name == "org.apache.maven.plugins:maven-compiler-plugin"));
+        assert!(imports
+            .iter()
+            .any(|n| n.name == "org.apache.maven.plugins:maven-compiler-plugin"));
 
         // Check scope is captured
         let junit = imports.iter().find(|n| n.name == "junit:junit").unwrap();
@@ -1226,15 +1809,27 @@ dependencies {
         let result = extract_manifest("build.gradle", content);
         assert!(result.errors.is_empty());
 
-        let module = result.nodes.iter().find(|n| n.kind == NodeKind::Module).unwrap();
+        let module = result
+            .nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::Module)
+            .unwrap();
         assert_eq!(module.name, "com.example");
 
-        let imports: Vec<_> = result.nodes.iter().filter(|n| n.kind == NodeKind::Import).collect();
+        let imports: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::Import)
+            .collect();
         // 2 plugins + 3 dependencies = 5
         assert_eq!(imports.len(), 5);
-        assert!(imports.iter().any(|n| n.name == "org.springframework.boot:spring-boot-starter-web:3.1.0"));
+        assert!(imports
+            .iter()
+            .any(|n| n.name == "org.springframework.boot:spring-boot-starter-web:3.1.0"));
         assert!(imports.iter().any(|n| n.name == "junit:junit:4.13.2"));
-        assert!(imports.iter().any(|n| n.name == "org.postgresql:postgresql:42.6.0"));
+        assert!(imports
+            .iter()
+            .any(|n| n.name == "org.postgresql:postgresql:42.6.0"));
         assert!(imports.iter().any(|n| n.name == "java"));
         assert!(imports.iter().any(|n| n.name == "org.springframework.boot"));
     }
@@ -1259,9 +1854,17 @@ dependencies {
         assert!(result.errors.is_empty());
         assert_eq!(result.nodes[0].language, Language::Kotlin);
 
-        let imports: Vec<_> = result.nodes.iter().filter(|n| n.kind == NodeKind::Import).collect();
-        assert!(imports.iter().any(|n| n.name == "io.ktor:ktor-server-core:2.3.0"));
-        assert!(imports.iter().any(|n| n.name == "org.jetbrains.kotlin:kotlin-test"));
+        let imports: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::Import)
+            .collect();
+        assert!(imports
+            .iter()
+            .any(|n| n.name == "io.ktor:ktor-server-core:2.3.0"));
+        assert!(imports
+            .iter()
+            .any(|n| n.name == "org.jetbrains.kotlin:kotlin-test"));
         assert!(imports.iter().any(|n| n.name == "org.jetbrains.kotlin.jvm"));
         assert!(imports.iter().any(|n| n.name == "application"));
     }
@@ -1281,21 +1884,36 @@ libraryDependencies += "com.typesafe" % "config" % "1.4.3"
         assert!(result.errors.is_empty());
         assert_eq!(result.nodes[0].language, Language::Scala);
 
-        let module = result.nodes.iter().find(|n| n.kind == NodeKind::Module).unwrap();
+        let module = result
+            .nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::Module)
+            .unwrap();
         assert_eq!(module.name, "my-scala-app");
         assert_eq!(module.signature.as_deref(), Some("my-scala-app@0.1.0"));
 
-        let scala_version = result.nodes.iter().find(|n| n.kind == NodeKind::Constant && n.name == "scalaVersion").unwrap();
+        let scala_version = result
+            .nodes
+            .iter()
+            .find(|n| n.kind == NodeKind::Constant && n.name == "scalaVersion")
+            .unwrap();
         assert_eq!(scala_version.signature.as_deref(), Some("3.3.1"));
 
-        let imports: Vec<_> = result.nodes.iter().filter(|n| n.kind == NodeKind::Import).collect();
+        let imports: Vec<_> = result
+            .nodes
+            .iter()
+            .filter(|n| n.kind == NodeKind::Import)
+            .collect();
         assert_eq!(imports.len(), 3);
         assert!(imports.iter().any(|n| n.name == "org.typelevel:cats-core"));
         assert!(imports.iter().any(|n| n.name == "org.scalatest:scalatest"));
         assert!(imports.iter().any(|n| n.name == "com.typesafe:config"));
 
         // Check scope is captured for test dependency
-        let scalatest = imports.iter().find(|n| n.name == "org.scalatest:scalatest").unwrap();
+        let scalatest = imports
+            .iter()
+            .find(|n| n.name == "org.scalatest:scalatest")
+            .unwrap();
         assert!(scalatest.signature.as_deref().unwrap().contains("test"));
     }
 }
