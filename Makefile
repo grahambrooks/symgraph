@@ -5,7 +5,7 @@ VERSION := $(shell date +%Y.%-m.%-d)
 TAG := v$(VERSION)
 
 # Default target
-all: check build
+all: help
 
 # Show help
 help:
@@ -38,7 +38,7 @@ help:
 	@echo "  help             Show this help"
 
 # Build the project
-build:
+build: check
 	cargo build --release
 
 # Run tests
