@@ -89,6 +89,9 @@ pub fn get_language(lang: Language) -> Option<TsLanguage> {
         Language::C => Some(tree_sitter_c::LANGUAGE.into()),
         Language::Cpp => Some(tree_sitter_cpp::LANGUAGE.into()),
         Language::CSharp => Some(tree_sitter_c_sharp::LANGUAGE.into()),
+        Language::Kotlin => Some(tree_sitter_kotlin_ng::LANGUAGE.into()),
+        Language::Scala => Some(tree_sitter_scala::LANGUAGE.into()),
+        Language::Groovy => Some(tree_sitter_groovy::LANGUAGE.into()),
         _ => None,
     }
 }
@@ -105,6 +108,9 @@ pub fn get_config(lang: Language) -> &'static LanguageConfig {
         Language::C => &C_CONFIG,
         Language::Cpp => &CPP_CONFIG,
         Language::CSharp => &CSHARP_CONFIG,
+        Language::Kotlin => &KOTLIN_CONFIG,
+        Language::Scala => &SCALA_CONFIG,
+        Language::Groovy => &GROOVY_CONFIG,
         _ => &DEFAULT_CONFIG,
     }
 }
@@ -273,4 +279,49 @@ static CSHARP_CONFIG: LanguageConfig = LanguageConfig {
     constant_types: &["field_declaration"], // C# constants are field_declaration with const modifier
     variable_types: &["variable_declaration"],
     module_types: &["namespace_declaration"],
+};
+
+static KOTLIN_CONFIG: LanguageConfig = LanguageConfig {
+    function_types: &["function_declaration", "anonymous_function"],
+    method_types: &["function_declaration"], // Methods are function_declaration inside class
+    class_types: &["class_declaration", "object_declaration"],
+    struct_types: &[],
+    interface_types: &["class_declaration"], // Interfaces use class_declaration with interface modifier
+    enum_types: &["class_declaration"],      // Enums use class_declaration with enum modifier
+    import_types: &["import"],
+    call_types: &["call_expression", "constructor_invocation"],
+    type_alias_types: &["type_alias"],
+    constant_types: &["property_declaration"],
+    variable_types: &["property_declaration"],
+    module_types: &["package_header", "companion_object"],
+};
+
+static SCALA_CONFIG: LanguageConfig = LanguageConfig {
+    function_types: &["function_definition", "function_declaration"],
+    method_types: &["function_definition", "function_declaration"],
+    class_types: &["class_definition", "object_definition"],
+    struct_types: &[],
+    interface_types: &["trait_definition"],
+    enum_types: &["enum_definition"],
+    import_types: &["import_declaration"],
+    call_types: &["call_expression"],
+    type_alias_types: &["type_definition"],
+    constant_types: &["val_definition", "val_declaration"],
+    variable_types: &["var_definition", "var_declaration"],
+    module_types: &["package_clause", "package_object"],
+};
+
+static GROOVY_CONFIG: LanguageConfig = LanguageConfig {
+    function_types: &["function_definition"],
+    method_types: &["method_declaration", "constructor_declaration"],
+    class_types: &["class_declaration"],
+    struct_types: &[],
+    interface_types: &["interface_declaration"],
+    enum_types: &["enum_declaration"],
+    import_types: &["import_declaration"],
+    call_types: &["method_invocation", "juxt_function_call", "object_creation_expression"],
+    type_alias_types: &[],
+    constant_types: &["constant_declaration", "field_declaration"],
+    variable_types: &["local_variable_declaration"],
+    module_types: &["package_declaration"],
 };

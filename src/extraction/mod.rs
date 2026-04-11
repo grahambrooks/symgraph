@@ -5,6 +5,7 @@
 //! - Relationships (calls, contains, imports, etc.)
 
 mod languages;
+pub mod manifest;
 
 use std::path::Path;
 use tree_sitter::Parser;
@@ -31,6 +32,13 @@ impl Extractor {
     /// Extract symbols from a source file
     pub fn extract_file<P: AsRef<Path>>(&mut self, path: P, content: &str) -> ExtractionResult {
         let path = path.as_ref();
+
+        // Check for package manager manifest files first (detected by filename)
+        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        if manifest::is_manifest_file(filename) {
+            return manifest::extract_manifest(path, content);
+        }
+
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         let language = Language::from_extension(ext);
 
@@ -911,5 +919,170 @@ public interface IRepository
             .nodes
             .iter()
             .any(|n| n.name == "IRepository" && n.kind == NodeKind::Interface));
+    }
+
+    // Kotlin extraction tests
+    #[test]
+    fn test_extract_kotlin_function() {
+        let mut extractor = Extractor::new();
+        let code = r#"
+package com.example
+
+fun greet(name: String): String {
+    return "Hello, $name!"
+}
+"#;
+        let result = extractor.extract_file("test.kt", code);
+        assert!(result.errors.is_empty());
+        let func = result.nodes.iter().find(|n| n.name == "greet");
+        assert!(func.is_some());
+        assert_eq!(func.unwrap().language, Language::Kotlin);
+    }
+
+    #[test]
+    fn test_extract_kotlin_class() {
+        let mut extractor = Extractor::new();
+        let code = r#"
+class Person(val name: String, val age: Int) {
+    fun greet(): String {
+        return "Hello, I'm $name"
+    }
+}
+"#;
+        let result = extractor.extract_file("test.kt", code);
+        assert!(result.errors.is_empty());
+        assert!(result
+            .nodes
+            .iter()
+            .any(|n| n.name == "Person" && n.kind == NodeKind::Class));
+        assert!(result.nodes.iter().any(|n| n.name == "greet"));
+    }
+
+    #[test]
+    fn test_extract_kotlin_object() {
+        let mut extractor = Extractor::new();
+        let code = r#"
+object Singleton {
+    fun getInstance(): Singleton = this
+}
+"#;
+        let result = extractor.extract_file("test.kt", code);
+        assert!(result.errors.is_empty());
+        assert!(result
+            .nodes
+            .iter()
+            .any(|n| n.name == "Singleton" && n.kind == NodeKind::Class));
+    }
+
+    // Scala extraction tests
+    #[test]
+    fn test_extract_scala_function() {
+        let mut extractor = Extractor::new();
+        let code = r#"
+object Main {
+  def hello(name: String): String = {
+    s"Hello, $name!"
+  }
+}
+"#;
+        let result = extractor.extract_file("test.scala", code);
+        assert!(result.errors.is_empty());
+        assert!(result.nodes.iter().any(|n| n.name == "hello"));
+        assert!(result
+            .nodes
+            .iter()
+            .any(|n| n.name == "Main" && n.kind == NodeKind::Class));
+    }
+
+    #[test]
+    fn test_extract_scala_trait() {
+        let mut extractor = Extractor::new();
+        let code = r#"
+trait Greeter {
+  def greet(name: String): String
+}
+"#;
+        let result = extractor.extract_file("test.scala", code);
+        assert!(result.errors.is_empty());
+        assert!(result
+            .nodes
+            .iter()
+            .any(|n| n.name == "Greeter" && n.kind == NodeKind::Interface));
+    }
+
+    #[test]
+    fn test_extract_scala_class() {
+        let mut extractor = Extractor::new();
+        let code = r#"
+class Person(val name: String, val age: Int) {
+  def greet(): String = s"Hello, I'm $name"
+}
+"#;
+        let result = extractor.extract_file("test.scala", code);
+        assert!(result.errors.is_empty());
+        assert!(result
+            .nodes
+            .iter()
+            .any(|n| n.name == "Person" && n.kind == NodeKind::Class));
+    }
+
+    // Groovy extraction tests
+    #[test]
+    fn test_extract_groovy_class() {
+        let mut extractor = Extractor::new();
+        let code = r#"
+class Calculator {
+    int add(int a, int b) {
+        return a + b
+    }
+
+    static void main(String[] args) {
+        println new Calculator().add(1, 2)
+    }
+}
+"#;
+        let result = extractor.extract_file("test.groovy", code);
+        assert!(result.errors.is_empty());
+        assert!(result
+            .nodes
+            .iter()
+            .any(|n| n.name == "Calculator" && n.kind == NodeKind::Class));
+        assert!(result
+            .nodes
+            .iter()
+            .any(|n| n.name == "add" && n.kind == NodeKind::Method));
+    }
+
+    #[test]
+    fn test_extract_groovy_interface() {
+        let mut extractor = Extractor::new();
+        let code = r#"
+interface Greeter {
+    String greet(String name)
+}
+"#;
+        let result = extractor.extract_file("test.groovy", code);
+        assert!(result.errors.is_empty());
+        assert!(result
+            .nodes
+            .iter()
+            .any(|n| n.name == "Greeter" && n.kind == NodeKind::Interface));
+    }
+
+    // Manifest file routing tests
+    #[test]
+    fn test_extract_manifest_via_extractor() {
+        let mut extractor = Extractor::new();
+        let content = r#"{"name": "test-pkg", "dependencies": {"express": "^4.0"}}"#;
+        let result = extractor.extract_file("package.json", content);
+        assert!(result.errors.is_empty());
+        assert!(result
+            .nodes
+            .iter()
+            .any(|n| n.name == "test-pkg" && n.kind == NodeKind::Module));
+        assert!(result
+            .nodes
+            .iter()
+            .any(|n| n.name == "express" && n.kind == NodeKind::Import));
     }
 }

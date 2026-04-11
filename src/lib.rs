@@ -83,6 +83,10 @@ impl Default for IndexConfig {
                 "cc".to_string(),
                 "hpp".to_string(),
                 "cs".to_string(),
+                "kt".to_string(),
+                "kts".to_string(),
+                "scala".to_string(),
+                "groovy".to_string(),
             ],
             exclude_dirs: vec![
                 "node_modules".to_string(),
@@ -153,14 +157,24 @@ pub fn index_codebase(db: &mut Database, config: &IndexConfig) -> Result<Indexin
             continue;
         }
 
+        // Check if this is a manifest file (detected by filename)
+        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let is_manifest = extraction::manifest::is_manifest_file(filename);
+
         // Check extension
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        if !config.extensions.is_empty() && !config.extensions.iter().any(|e| e == ext) {
-            continue;
+        if !is_manifest {
+            if !config.extensions.is_empty() && !config.extensions.iter().any(|e| e == ext) {
+                continue;
+            }
         }
 
-        // Check if language is supported
-        let language = Language::from_extension(ext);
+        // Check if language is supported (manifest files use their ecosystem language)
+        let language = if is_manifest {
+            extraction::manifest::manifest_language(filename)
+        } else {
+            Language::from_extension(ext)
+        };
         if language == Language::Unknown {
             continue;
         }

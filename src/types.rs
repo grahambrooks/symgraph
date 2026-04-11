@@ -179,6 +179,8 @@ pub enum Language {
     Ruby,
     Swift,
     Kotlin,
+    Scala,
+    Groovy,
     Unknown,
 }
 
@@ -200,6 +202,8 @@ impl Language {
             "rb" => Language::Ruby,
             "swift" => Language::Swift,
             "kt" | "kts" => Language::Kotlin,
+            "scala" | "sc" => Language::Scala,
+            "groovy" => Language::Groovy,
             _ => Language::Unknown,
         }
     }
@@ -221,6 +225,8 @@ impl Language {
             "ruby" => Language::Ruby,
             "swift" => Language::Swift,
             "kotlin" => Language::Kotlin,
+            "scala" => Language::Scala,
+            "groovy" => Language::Groovy,
             _ => Language::Unknown,
         }
     }
@@ -242,6 +248,8 @@ impl Language {
             Language::Ruby => "ruby",
             Language::Swift => "swift",
             Language::Kotlin => "kotlin",
+            Language::Scala => "scala",
+            Language::Groovy => "groovy",
             Language::Unknown => "unknown",
         }
     }
