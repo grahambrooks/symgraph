@@ -28,7 +28,45 @@ binary deployment of MCP Servers.
 
 ## Installation
 
-### Claude Desktop (Recommended)
+### macOS & Linux
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/grahambrooks/codemap/main/install.sh | bash
+```
+
+To also configure codemap as an MCP server for Claude Code and Claude Desktop:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/grahambrooks/codemap/main/install.sh | bash -s -- --mcp
+```
+
+Install a specific version:
+
+```sh
+CODEMAP_VERSION=2026.3.30 curl -fsSL https://raw.githubusercontent.com/grahambrooks/codemap/main/install.sh | bash
+```
+
+### Windows (PowerShell)
+
+```powershell
+irm https://raw.githubusercontent.com/grahambrooks/codemap/main/install.ps1 -OutFile install.ps1; .\install.ps1
+```
+
+To also configure codemap as an MCP server for Claude Code and Claude Desktop:
+
+```powershell
+irm https://raw.githubusercontent.com/grahambrooks/codemap/main/install.ps1 -OutFile install.ps1; .\install.ps1 -Mcp
+```
+
+Install a specific version:
+
+```powershell
+$env:CODEMAP_VERSION="2026.3.30"; irm https://raw.githubusercontent.com/grahambrooks/codemap/main/install.ps1 -OutFile install.ps1; .\install.ps1
+```
+
+Both scripts install to `~/.codemap/bin/` by default. Override with `CODEMAP_INSTALL_DIR`.
+
+### Claude Desktop (MCPB Bundle)
 
 Download and install the MCPB bundle for your platform:
 
@@ -43,27 +81,6 @@ Download and install the MCPB bundle for your platform:
 2. Open Claude Desktop
 3. Drag and drop the `.mcpb` file onto Claude Desktop, or use **File > Install MCP Server**
 4. Configure the project root when prompted
-
-### Standalone Binary
-
-Download the pre-built binary from [Releases](https://github.com/grahambrooks/codemap/releases/latest):
-
-| Platform              | File                                  |
-|-----------------------|---------------------------------------|
-| macOS (Apple Silicon) | `codemap-VERSION-darwin-arm64.tar.gz` |
-| macOS (Intel)         | `codemap-VERSION-darwin-x64.tar.gz`   |
-| Linux x64             | `codemap-VERSION-linux-x64.tar.gz`    |
-| Windows x64           | `codemap-VERSION-windows-x64.zip`     |
-
-```bash
-# Example: macOS (Apple Silicon)
-tar xzf codemap-0.1.0-darwin-arm64.tar.gz
-sudo mv codemap /usr/local/bin/
-
-# Example: Linux
-tar xzf codemap-0.1.0-linux-x64.tar.gz
-sudo mv codemap /usr/local/bin/
-```
 
 ### From Source
 
