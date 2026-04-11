@@ -1,10 +1,13 @@
-name: CI
+name: Codemap build
 
 on:
   push:
     branches: [main]
   pull_request:
     branches: [main]
+
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
