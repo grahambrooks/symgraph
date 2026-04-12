@@ -1,7 +1,7 @@
 {
   "manifest_version": "1",
   "name": "codemap",
-  "version": "2026.4.11",
+  "version": "2026.4.12",
   "display_name": "Code Map",
   "description": "Semantic code intelligence - build knowledge graphs of codebases for AI-assisted exploration",
   "long_description": "Code Map uses tree-sitter to parse source code and build a knowledge graph of symbols and their relationships. It provides MCP tools for searching symbols, finding callers/callees, analyzing change impact, and building focused context for AI tasks.\n\nSupported languages: Rust, TypeScript, JavaScript, Python, Go, Java, C, C++",
