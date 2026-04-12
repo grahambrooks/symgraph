@@ -14,8 +14,8 @@ use std::sync::Arc;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
-use codemap::cli::initialize_server_database;
-use codemap::mcp::{CodeMapHandler, SyncDatabase};
+use symgraph::cli::initialize_server_database;
+use symgraph::mcp::{SymgraphHandler, SyncDatabase};
 
 fn setup_debug_logging() {
     let subscriber = FmtSubscriber::builder()
@@ -30,12 +30,12 @@ fn setup_debug_logging() {
 #[tokio::main]
 pub async fn start_stdio(in_memory: bool) -> Result<()> {
     setup_debug_logging();
-    info!("Starting codemap MCP server (stdio)");
+    info!("Starting symgraph MCP server (stdio)");
 
     let (project_root, db) = initialize_server_database(in_memory)?;
     info!("Project root: {}", project_root);
 
-    let handler = CodeMapHandler::new(db, project_root);
+    let handler = SymgraphHandler::new(db, project_root);
     let service = handler.serve(stdio()).await?;
 
     info!("MCP server running on stdio");
@@ -48,7 +48,7 @@ pub async fn start_stdio(in_memory: bool) -> Result<()> {
 #[tokio::main]
 pub async fn start_http(port: u16, in_memory: bool) -> Result<()> {
     setup_debug_logging();
-    info!("Starting codemap MCP server (HTTP on port {})", port);
+    info!("Starting symgraph MCP server (HTTP on port {})", port);
 
     let (project_root, db) = initialize_server_database(in_memory)?;
     info!("Project root: {}", project_root);
@@ -59,7 +59,7 @@ pub async fn start_http(port: u16, in_memory: bool) -> Result<()> {
 
     // Create HTTP service - each session gets a handler with shared database
     let service = StreamableHttpService::new(
-        move || Ok(CodeMapHandler::new_shared(db.clone(), project_root.clone())),
+        move || Ok(SymgraphHandler::new_shared(db.clone(), project_root.clone())),
         LocalSessionManager::default().into(),
         {
             let mut config = StreamableHttpServerConfig::default();

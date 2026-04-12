@@ -5,7 +5,7 @@ use crate::db::Database;
 pub fn handle_status(db: &Database) -> Result<String, String> {
     let stats = db.get_stats().map_err(|e| e.to_string())?;
 
-    let mut output = String::from("## codemap Index Status\n\n");
+    let mut output = String::from("## symgraph Index Status\n\n");
 
     output.push_str(&format!("**Total Files:** {}\n", stats.total_files));
     output.push_str(&format!("**Total Symbols:** {}\n", stats.total_nodes));

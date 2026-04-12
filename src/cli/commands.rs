@@ -41,14 +41,14 @@ pub fn status_command(path: &str) -> Result<()> {
 
     if !db_path.exists() {
         println!("No index found at {}", db_path.display());
-        println!("Run 'codemap index {}' first.", path);
+        println!("Run 'symgraph index {}' first.", path);
         return Ok(());
     }
 
     let db = Database::open(&db_path)?;
     let stats = db.get_stats()?;
 
-    println!("codemap Index Status");
+    println!("symgraph Index Status");
     println!("=====================");
     println!("Database: {}", db_path.display());
     println!("Files: {}", stats.total_files);
@@ -79,7 +79,7 @@ pub fn search_command(path: &str, query: &str) -> Result<()> {
     let db_path = database_path(&project_root);
 
     if !db_path.exists() {
-        println!("No index found. Run 'codemap index' first.");
+        println!("No index found. Run 'symgraph index' first.");
         return Ok(());
     }
 
@@ -120,7 +120,7 @@ pub fn context_command(path: &str, task: &str) -> Result<()> {
     let db_path = database_path(&project_root);
 
     if !db_path.exists() {
-        println!("No index found. Run 'codemap index' first.");
+        println!("No index found. Run 'symgraph index' first.");
         return Ok(());
     }
 
@@ -146,10 +146,10 @@ pub fn context_command(path: &str, task: &str) -> Result<()> {
 pub fn initialize_server_database(in_memory: bool) -> Result<(String, Database)> {
     use std::env;
 
-    let in_memory = in_memory || env::var("CODEMAP_IN_MEMORY").is_ok_and(|v| v == "1");
+    let in_memory = in_memory || env::var("SYMGRAPH_IN_MEMORY").is_ok_and(|v| v == "1");
 
     // Get project root from environment or current directory
-    let project_root = env::var("CODEMAP_ROOT")
+    let project_root = env::var("SYMGRAPH_ROOT")
         .or_else(|_| env::current_dir().map(|p| p.display().to_string()))
         .context("Could not determine project root")?;
 
@@ -164,7 +164,7 @@ pub fn initialize_server_database(in_memory: bool) -> Result<(String, Database)>
     // Log database status
     let stats = db.get_stats()?;
     if stats.total_files == 0 {
-        info!("No index found, consider running 'codemap index' first");
+        info!("No index found, consider running 'symgraph index' first");
     } else {
         info!(
             "Index loaded: {} files, {} symbols",

@@ -1,13 +1,13 @@
-# Contributing to codemap
+# Contributing to symgraph
 
-Thank you for your interest in contributing to codemap!
+Thank you for your interest in contributing to symgraph!
 
 ## Development Setup
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/grahambrooks/codemap
-   cd codemap
+   git clone https://github.com/grahambrooks/symgraph
+   cd symgraph
    ```
 
 2. Build the project:

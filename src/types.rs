@@ -1,4 +1,4 @@
-//! Core type definitions for codemap
+//! Core type definitions for symgraph
 //!
 //! Defines the fundamental types for representing code structure:
 //! - Nodes: code symbols (functions, classes, methods, etc.)

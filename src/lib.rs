@@ -1,4 +1,4 @@
-//! codemap: Semantic code intelligence MCP server
+//! symgraph: Semantic code intelligence MCP server
 //!
 //! A Rust-based MCP server that builds a knowledge graph of codebases
 //! to enhance AI-assisted code exploration. Uses tree-sitter for parsing
@@ -14,13 +14,13 @@
 //!
 //! ## MCP Tools
 //!
-//! - `codemap_context` - Build task-specific code context
-//! - `codemap_search` - Find symbols by name
-//! - `codemap_callers` - Find all callers of a symbol
-//! - `codemap_callees` - Find all callees of a symbol
-//! - `codemap_impact` - Analyze change impact
-//! - `codemap_node` - Get detailed symbol information
-//! - `codemap_status` - Get index statistics
+//! - `symgraph_context` - Build task-specific code context
+//! - `symgraph_search` - Find symbols by name
+//! - `symgraph_callers` - Find all callers of a symbol
+//! - `symgraph_callees` - Find all callees of a symbol
+//! - `symgraph_impact` - Analyze change impact
+//! - `symgraph_node` - Get detailed symbol information
+//! - `symgraph_status` - Get index statistics
 
 #[cfg(feature = "sqlite")]
 pub mod cli;

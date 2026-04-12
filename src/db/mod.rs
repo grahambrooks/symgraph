@@ -1,4 +1,4 @@
-//! Database module for codemap
+//! Database module for symgraph
 //!
 //! Handles SQLite storage for the code graph including:
 //! - Schema creation and migrations

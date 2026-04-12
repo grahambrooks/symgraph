@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="grahambrooks/codemap"
-INSTALL_DIR="${CODEMAP_INSTALL_DIR:-$HOME/.codemap}"
-VERSION="${CODEMAP_VERSION:-latest}"
+REPO="grahambrooks/symgraph"
+INSTALL_DIR="${SYMGRAPH_INSTALL_DIR:-$HOME/.symgraph}"
+VERSION="${SYMGRAPH_VERSION:-latest}"
 CONFIGURE_MCP=false
 
 # Parse arguments
@@ -13,15 +13,15 @@ for arg in "$@"; do
         --help|-h)
             echo "Usage: install.sh [OPTIONS]"
             echo ""
-            echo "Install codemap from GitHub releases."
+            echo "Install symgraph from GitHub releases."
             echo ""
             echo "Options:"
-            echo "  --mcp    Configure codemap as an MCP server for Claude Code and Claude Desktop"
+            echo "  --mcp    Configure symgraph as an MCP server for Claude Code and Claude Desktop"
             echo "  --help   Show this help message"
             echo ""
             echo "Environment variables:"
-            echo "  CODEMAP_VERSION       Version to install (default: latest)"
-            echo "  CODEMAP_INSTALL_DIR   Installation directory (default: ~/.codemap)"
+            echo "  SYMGRAPH_VERSION       Version to install (default: latest)"
+            echo "  SYMGRAPH_INSTALL_DIR   Installation directory (default: ~/.symgraph)"
             exit 0
             ;;
     esac
@@ -63,10 +63,10 @@ fi
 # Strip leading 'v' if present
 VERSION="${VERSION#v}"
 
-TARBALL="codemap-${VERSION}-${OS}-${ARCH}.tar.gz"
+TARBALL="symgraph-${VERSION}-${OS}-${ARCH}.tar.gz"
 DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v${VERSION}/${TARBALL}"
 
-echo "Installing codemap ${VERSION} for ${OS}/${ARCH}..."
+echo "Installing symgraph ${VERSION} for ${OS}/${ARCH}..."
 
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
@@ -76,7 +76,7 @@ tar -xzf "${TMP_DIR}/${TARBALL}" -C "${TMP_DIR}"
 
 # Install binary and manifest
 mkdir -p "${INSTALL_DIR}/bin"
-install -m 755 "${TMP_DIR}/codemap" "${INSTALL_DIR}/bin/codemap"
+install -m 755 "${TMP_DIR}/symgraph" "${INSTALL_DIR}/bin/symgraph"
 
 if [ -f "${TMP_DIR}/manifest.json" ]; then
     install -m 644 "${TMP_DIR}/manifest.json" "${INSTALL_DIR}/manifest.json"
@@ -94,7 +94,7 @@ esac
 PATH_ENTRY="${INSTALL_DIR}/bin"
 if ! echo "${PATH}" | tr ':' '\n' | grep -qx "${PATH_ENTRY}"; then
     echo ""
-    echo "Add codemap to your PATH by running:"
+    echo "Add symgraph to your PATH by running:"
     echo ""
     if [ "${SHELL_NAME}" = "fish" ]; then
         echo "  fish_add_path ${PATH_ENTRY}"
@@ -107,12 +107,12 @@ if ! echo "${PATH}" | tr ':' '\n' | grep -qx "${PATH_ENTRY}"; then
 fi
 
 echo ""
-echo "codemap ${VERSION} installed to ${INSTALL_DIR}/bin/codemap"
+echo "symgraph ${VERSION} installed to ${INSTALL_DIR}/bin/symgraph"
 
 # Configure as MCP server
 if [ "${CONFIGURE_MCP}" = true ]; then
-    CODEMAP_BIN="${INSTALL_DIR}/bin/codemap"
-    MCP_ENTRY="{\"command\":\"${CODEMAP_BIN}\",\"args\":[\"serve\"]}"
+    SYMGRAPH_BIN="${INSTALL_DIR}/bin/symgraph"
+    MCP_ENTRY="{\"command\":\"${SYMGRAPH_BIN}\",\"args\":[\"serve\"]}"
 
     configure_json() {
         local file="$1"
@@ -129,7 +129,7 @@ import json, sys
 with open('${file}') as f:
     config = json.load(f)
 config.setdefault('mcpServers', {})
-config['mcpServers']['codemap'] = {'command': '${CODEMAP_BIN}', 'args': ['serve']}
+config['mcpServers']['symgraph'] = {'command': '${SYMGRAPH_BIN}', 'args': ['serve']}
 with open('${file}', 'w') as f:
     json.dump(config, f, indent=2)
     f.write('\n')

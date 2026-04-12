@@ -9,7 +9,7 @@ all: help
 
 # Show help
 help:
-	@echo "codemap — Semantic code intelligence MCP server"
+	@echo "symgraph — Semantic code intelligence MCP server"
 	@echo ""
 	@echo "Usage: make [target]"
 	@echo ""
@@ -63,13 +63,13 @@ check: fmt-check lint test
 # Install to /usr/local/bin
 install: build
 	install -d /usr/local/bin
-	install -m 755 target/release/codemap /usr/local/bin/codemap
-	@echo "Installed codemap to /usr/local/bin/codemap"
+	install -m 755 target/release/symgraph /usr/local/bin/symgraph
+	@echo "Installed symgraph to /usr/local/bin/symgraph"
 
 # Uninstall from /usr/local/bin
 uninstall:
-	rm -f /usr/local/bin/codemap
-	@echo "Removed /usr/local/bin/codemap"
+	rm -f /usr/local/bin/symgraph
+	@echo "Removed /usr/local/bin/symgraph"
 
 # Clean build artifacts
 clean:

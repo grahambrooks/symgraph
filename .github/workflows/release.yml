@@ -1,4 +1,4 @@
-name: Codemap Release
+name: Symgraph Release
 
 on:
   push:
@@ -21,19 +21,19 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            artifact: codemap-linux-x64
+            artifact: symgraph-linux-x64
           - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
-            artifact: codemap-linux-arm64
+            artifact: symgraph-linux-arm64
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact: codemap-darwin-x64
+            artifact: symgraph-darwin-x64
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact: codemap-darwin-arm64
+            artifact: symgraph-darwin-arm64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: codemap-windows-x64
+            artifact: symgraph-windows-x64
     steps:
       - uses: actions/checkout@v4
 
@@ -58,14 +58,14 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/codemap dist/
-          chmod +x dist/codemap
+          cp target/${{ matrix.target }}/release/symgraph dist/
+          chmod +x dist/symgraph
 
       - name: Prepare artifact (Windows)
         if: runner.os == 'Windows'
         run: |
           mkdir dist
-          copy target\${{ matrix.target }}\release\codemap.exe dist\
+          copy target\${{ matrix.target }}\release\symgraph.exe dist\
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -112,36 +112,36 @@ jobs:
           # macOS x64
           mkdir -p bundle-darwin-x64/bin
           cp bundle/manifest.json bundle-darwin-x64/
-          cp artifacts/codemap-darwin-x64/codemap bundle-darwin-x64/bin/
-          chmod +x bundle-darwin-x64/bin/codemap
-          cd bundle-darwin-x64 && zip -r ../codemap-${VERSION}-darwin-x64.mcpb . && cd ..
+          cp artifacts/symgraph-darwin-x64/symgraph bundle-darwin-x64/bin/
+          chmod +x bundle-darwin-x64/bin/symgraph
+          cd bundle-darwin-x64 && zip -r ../symgraph-${VERSION}-darwin-x64.mcpb . && cd ..
 
           # macOS arm64
           mkdir -p bundle-darwin-arm64/bin
           cp bundle/manifest.json bundle-darwin-arm64/
-          cp artifacts/codemap-darwin-arm64/codemap bundle-darwin-arm64/bin/
-          chmod +x bundle-darwin-arm64/bin/codemap
-          cd bundle-darwin-arm64 && zip -r ../codemap-${VERSION}-darwin-arm64.mcpb . && cd ..
+          cp artifacts/symgraph-darwin-arm64/symgraph bundle-darwin-arm64/bin/
+          chmod +x bundle-darwin-arm64/bin/symgraph
+          cd bundle-darwin-arm64 && zip -r ../symgraph-${VERSION}-darwin-arm64.mcpb . && cd ..
 
           # Linux x64
           mkdir -p bundle-linux-x64/bin
           cp bundle/manifest.json bundle-linux-x64/
-          cp artifacts/codemap-linux-x64/codemap bundle-linux-x64/bin/
-          chmod +x bundle-linux-x64/bin/codemap
-          cd bundle-linux-x64 && zip -r ../codemap-${VERSION}-linux-x64.mcpb . && cd ..
+          cp artifacts/symgraph-linux-x64/symgraph bundle-linux-x64/bin/
+          chmod +x bundle-linux-x64/bin/symgraph
+          cd bundle-linux-x64 && zip -r ../symgraph-${VERSION}-linux-x64.mcpb . && cd ..
 
           # Linux arm64
           mkdir -p bundle-linux-arm64/bin
           cp bundle/manifest.json bundle-linux-arm64/
-          cp artifacts/codemap-linux-arm64/codemap bundle-linux-arm64/bin/
-          chmod +x bundle-linux-arm64/bin/codemap
-          cd bundle-linux-arm64 && zip -r ../codemap-${VERSION}-linux-arm64.mcpb . && cd ..
+          cp artifacts/symgraph-linux-arm64/symgraph bundle-linux-arm64/bin/
+          chmod +x bundle-linux-arm64/bin/symgraph
+          cd bundle-linux-arm64 && zip -r ../symgraph-${VERSION}-linux-arm64.mcpb . && cd ..
 
           # Windows x64
           mkdir -p bundle-windows-x64/bin
           cp bundle/manifest.json bundle-windows-x64/
-          cp artifacts/codemap-windows-x64/codemap.exe bundle-windows-x64/bin/
-          cd bundle-windows-x64 && zip -r ../codemap-${VERSION}-windows-x64.mcpb . && cd ..
+          cp artifacts/symgraph-windows-x64/symgraph.exe bundle-windows-x64/bin/
+          cd bundle-windows-x64 && zip -r ../symgraph-${VERSION}-windows-x64.mcpb . && cd ..
 
       - name: Create universal macOS bundle
         run: |
@@ -152,12 +152,12 @@ jobs:
           cp bundle/manifest.json bundle-darwin-universal/
 
           # Use lipo to create universal binary (if both exist)
-          if [ -f artifacts/codemap-darwin-x64/codemap ] && [ -f artifacts/codemap-darwin-arm64/codemap ]; then
+          if [ -f artifacts/symgraph-darwin-x64/symgraph ] && [ -f artifacts/symgraph-darwin-arm64/symgraph ]; then
             # Note: lipo only works on macOS, so we'll just include arm64 as primary
-            cp artifacts/codemap-darwin-arm64/codemap bundle-darwin-universal/bin/
+            cp artifacts/symgraph-darwin-arm64/symgraph bundle-darwin-universal/bin/
           fi
-          chmod +x bundle-darwin-universal/bin/codemap
-          cd bundle-darwin-universal && zip -r ../codemap-${VERSION}-darwin-universal.mcpb . && cd ..
+          chmod +x bundle-darwin-universal/bin/symgraph
+          cd bundle-darwin-universal && zip -r ../symgraph-${VERSION}-darwin-universal.mcpb . && cd ..
 
       - name: Upload MCPB bundles
         uses: actions/upload-artifact@v4
@@ -188,29 +188,29 @@ jobs:
           mkdir -p release
 
           # Create tarballs for standalone binaries (include manifest.json)
-          cp manifest-versioned.json artifacts/codemap-linux-x64/manifest.json
-          cd artifacts/codemap-linux-x64
-          tar -czf ../../release/codemap-${VERSION}-linux-x64.tar.gz codemap manifest.json
+          cp manifest-versioned.json artifacts/symgraph-linux-x64/manifest.json
+          cd artifacts/symgraph-linux-x64
+          tar -czf ../../release/symgraph-${VERSION}-linux-x64.tar.gz symgraph manifest.json
           cd ../..
 
-          cp manifest-versioned.json artifacts/codemap-linux-arm64/manifest.json
-          cd artifacts/codemap-linux-arm64
-          tar -czf ../../release/codemap-${VERSION}-linux-arm64.tar.gz codemap manifest.json
+          cp manifest-versioned.json artifacts/symgraph-linux-arm64/manifest.json
+          cd artifacts/symgraph-linux-arm64
+          tar -czf ../../release/symgraph-${VERSION}-linux-arm64.tar.gz symgraph manifest.json
           cd ../..
 
-          cp manifest-versioned.json artifacts/codemap-darwin-x64/manifest.json
-          cd artifacts/codemap-darwin-x64
-          tar -czf ../../release/codemap-${VERSION}-darwin-x64.tar.gz codemap manifest.json
+          cp manifest-versioned.json artifacts/symgraph-darwin-x64/manifest.json
+          cd artifacts/symgraph-darwin-x64
+          tar -czf ../../release/symgraph-${VERSION}-darwin-x64.tar.gz symgraph manifest.json
           cd ../..
 
-          cp manifest-versioned.json artifacts/codemap-darwin-arm64/manifest.json
-          cd artifacts/codemap-darwin-arm64
-          tar -czf ../../release/codemap-${VERSION}-darwin-arm64.tar.gz codemap manifest.json
+          cp manifest-versioned.json artifacts/symgraph-darwin-arm64/manifest.json
+          cd artifacts/symgraph-darwin-arm64
+          tar -czf ../../release/symgraph-${VERSION}-darwin-arm64.tar.gz symgraph manifest.json
           cd ../..
 
-          cp manifest-versioned.json artifacts/codemap-windows-x64/manifest.json
-          cd artifacts/codemap-windows-x64
-          zip ../../release/codemap-${VERSION}-windows-x64.zip codemap.exe manifest.json
+          cp manifest-versioned.json artifacts/symgraph-windows-x64/manifest.json
+          cd artifacts/symgraph-windows-x64
+          zip ../../release/symgraph-${VERSION}-windows-x64.zip symgraph.exe manifest.json
           cd ../..
 
           # Copy MCPB bundles
@@ -237,8 +237,8 @@ jobs:
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
           jq --arg v "$VERSION" '.version = $v' \
-            devcontainer-feature/src/codemap/devcontainer-feature.json > tmp.json
-          mv tmp.json devcontainer-feature/src/codemap/devcontainer-feature.json
+            devcontainer-feature/src/symgraph/devcontainer-feature.json > tmp.json
+          mv tmp.json devcontainer-feature/src/symgraph/devcontainer-feature.json
 
       - name: Publish devcontainer feature
         uses: devcontainers/action@v1
@@ -247,3 +247,28 @@ jobs:
           base-path-to-features: devcontainer-feature/src
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  crates-io:
+    name: Publish to crates.io
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Verify Cargo.toml version matches tag
+        run: |
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          CARGO_VERSION=$(grep '^version = ' Cargo.toml | head -n1 | sed -E 's/version = "(.*)"/\1/')
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "Tag version ($TAG_VERSION) does not match Cargo.toml version ($CARGO_VERSION)" >&2
+            exit 1
+          fi
+
+      - name: Publish to crates.io
+        run: cargo publish --token "${CARGO_REGISTRY_TOKEN}"
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

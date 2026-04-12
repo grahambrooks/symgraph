@@ -12,12 +12,12 @@ Quick reference for AI agents working in this Rust MCP server repository.
 
 ## Project Overview
 
-**codemap**: Semantic code intelligence MCP server building knowledge graphs for AI-assisted development.
+**symgraph**: Semantic code intelligence MCP server building knowledge graphs for AI-assisted development.
 
 **Core Concepts**:
 - **Node**: Code symbol (function, class, method, struct, etc.)
 - **Edge**: Relationship (calls, contains, imports, extends, implements)
-- **Graph**: Stored in SQLite `.codemap/index.db`
+- **Graph**: Stored in SQLite `.symgraph/index.db`
 
 **Key Features**: Fast symbol search, impact analysis, call graph navigation, AI context building
 
@@ -37,24 +37,24 @@ Quick reference for AI agents working in this Rust MCP server repository.
 
 **Key Dependencies**: `rmcp` (MCP), `tree-sitter` (parsing), `rusqlite` (DB), `axum` (HTTP), `ignore` (file walking)
 
-**Database**: `.codemap/index.db` with tables: `files`, `nodes`, `edges`, `unresolved_refs`
+**Database**: `.symgraph/index.db` with tables: `files`, `nodes`, `edges`, `unresolved_refs`
 Indexes on: `nodes(name)`, `edges(source_id)`, `edges(target_id)`, `files(path)`
 
 **Languages**: Rust, TypeScript/JavaScript, Python, Go, Java, C, C++
 Add new: Edit `src/extraction/languages.rs`
 
 **MCP Tools**:
-- `codemap-context {task}`: AI coding tasks
-- `codemap-search {query}`: Find symbols
-- `codemap-callers {symbol}`: Who calls this?
-- `codemap-callees {symbol}`: What does this call?
-- `codemap-impact {symbol}`: What breaks if changed?
-- `codemap-definition {symbol, context_lines?}`: View source
-- `codemap-file {path}`: List symbols in file
-- `codemap-references {symbol}`: All usages
-- `codemap-node {symbol}`: Symbol metadata
-- `codemap-status`: Index health
-- `codemap-reindex {files?}`: Refresh index
+- `symgraph-context {task}`: AI coding tasks
+- `symgraph-search {query}`: Find symbols
+- `symgraph-callers {symbol}`: Who calls this?
+- `symgraph-callees {symbol}`: What does this call?
+- `symgraph-impact {symbol}`: What breaks if changed?
+- `symgraph-definition {symbol, context_lines?}`: View source
+- `symgraph-file {path}`: List symbols in file
+- `symgraph-references {symbol}`: All usages
+- `symgraph-node {symbol}`: Symbol metadata
+- `symgraph-status`: Index health
+- `symgraph-reindex {files?}`: Refresh index
 
 ## Development Guidelines
 
@@ -86,12 +86,12 @@ Add new: Edit `src/extraction/languages.rs`
 **Debug**:
 - `RUST_LOG=debug cargo run -- index .`
 - `cargo test test_name -- --nocapture`
-- `sqlite3 .codemap/index.db "SELECT COUNT(*) FROM nodes"`
+- `sqlite3 .symgraph/index.db "SELECT COUNT(*) FROM nodes"`
 
 **Release**: `make release` bumps version to today's date (YYYY.M.D), updates Cargo.toml and manifest.json, commits, tags, and pushes. GitHub Actions builds and publishes artifacts. Use `make release-dry-run` to preview.
 
 **Problems**:
 - Test fails: `make clean && make test`
 - Build errors: `make update && make build`
-- DB locked: `pkill codemap`
+- DB locked: `pkill symgraph`
 - Slow indexing: Check .gitignore, file count

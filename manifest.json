@@ -1,6 +1,6 @@
 {
   "manifest_version": "1",
-  "name": "codemap",
+  "name": "symgraph",
   "version": "2026.4.12",
   "display_name": "Code Map",
   "description": "Semantic code intelligence - build knowledge graphs of codebases for AI-assisted exploration",
@@ -9,8 +9,8 @@
     "name": "Graham",
     "url": "https://github.com/grahambrooks"
   },
-  "repository": "https://github.com/grahambrooks/codemap",
-  "homepage": "https://github.com/grahambrooks/codemap",
+  "repository": "https://github.com/grahambrooks/symgraph",
+  "homepage": "https://github.com/grahambrooks/symgraph",
   "license": "MIT",
   "keywords": [
     "code-analysis",
@@ -25,45 +25,45 @@
     "type": "binary"
   },
   "mcp_config": {
-    "command": "${__dirname}/bin/codemap",
+    "command": "${__dirname}/bin/symgraph",
     "args": [
       "serve"
     ],
     "env": {},
     "platform_overrides": {
       "win32": {
-        "command": "${__dirname}/bin/codemap.exe"
+        "command": "${__dirname}/bin/symgraph.exe"
       }
     }
   },
   "tools": [
     {
-      "name": "codemap-context",
+      "name": "symgraph-context",
       "description": "Build focused code context for a specific task. Returns entry points, related symbols, and code snippets."
     },
     {
-      "name": "codemap-search",
+      "name": "symgraph-search",
       "description": "Quick symbol search by name. Returns locations only (no code)."
     },
     {
-      "name": "codemap-callers",
+      "name": "symgraph-callers",
       "description": "Find all functions/methods that call a specific symbol."
     },
     {
-      "name": "codemap-callees",
+      "name": "symgraph-callees",
       "description": "Find all functions/methods that a specific symbol calls."
     },
     {
-      "name": "codemap-impact",
+      "name": "symgraph-impact",
       "description": "Analyze the impact radius of changing a symbol."
     },
     {
-      "name": "codemap-node",
+      "name": "symgraph-node",
       "description": "Get detailed information about a specific code symbol."
     },
     {
-      "name": "codemap-status",
-      "description": "Get the status of the codemap index. Shows statistics about indexed files, symbols, and relationships."
+      "name": "symgraph-status",
+      "description": "Get the status of the symgraph index. Shows statistics about indexed files, symbols, and relationships."
     }
   ],
   "user_config": [
@@ -73,7 +73,7 @@
       "description": "Path to the project directory to index",
       "type": "string",
       "required": false,
-      "env_var": "CODEMAP_ROOT"
+      "env_var": "SYMGRAPH_ROOT"
     }
   ],
   "compatibility": {

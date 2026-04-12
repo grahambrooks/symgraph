@@ -1,4 +1,4 @@
-name: Codemap build
+name: Symgraph build
 
 on:
   push:

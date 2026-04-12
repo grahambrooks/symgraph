@@ -1,6 +1,6 @@
-# Codemap (devcontainer feature)
+# Symgraph (devcontainer feature)
 
-Installs the [codemap](https://github.com/grahambrooks/codemap) semantic code intelligence MCP server.
+Installs the [symgraph](https://github.com/grahambrooks/symgraph) semantic code intelligence MCP server.
 
 ## Usage
 
@@ -9,7 +9,7 @@ Add to your `devcontainer.json`:
 ```json
 {
   "features": {
-    "ghcr.io/grahambrooks/codemap/codemap:1": {}
+    "ghcr.io/grahambrooks/symgraph/symgraph:1": {}
   }
 }
 ```
@@ -25,7 +25,7 @@ Add to your `devcontainer.json`:
 ```json
 {
   "features": {
-    "ghcr.io/grahambrooks/codemap/codemap:1": {
+    "ghcr.io/grahambrooks/symgraph/symgraph:1": {
       "version": "2026.3.28"
     }
   }

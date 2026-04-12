@@ -1,11 +1,23 @@
 [package]
-name = "codemap"
+name = "symgraph"
 version = "2026.4.12"
 edition = "2021"
-description = "Semantic code intelligence MCP server - build knowledge graphs of codebases"
+description = "Semantic code intelligence library and MCP server - build knowledge graphs of codebases"
 license = "MIT"
 authors = ["Graham Brooks"]
+repository = "https://github.com/grahambrooks/symgraph"
+homepage = "https://github.com/grahambrooks/symgraph"
+readme = "README.md"
 keywords = ["mcp", "code-analysis", "tree-sitter", "semantic-search"]
+categories = ["development-tools", "command-line-utilities"]
+exclude = [
+    "target/*",
+    ".github/*",
+    "devcontainer-feature/*",
+    "tests/fixtures/*",
+    "*.mcpb",
+    "*.png",
+]
 
 [dependencies]
 # MCP protocol
@@ -62,5 +74,5 @@ sqlite = ["rusqlite"]
 tempfile = "3"
 
 [[bin]]
-name = "codemap"
+name = "symgraph"
 path = "src/main.rs"

@@ -8,21 +8,21 @@ $ErrorActionPreference = "Stop"
 if ($Help) {
     Write-Host "Usage: install.ps1 [OPTIONS]"
     Write-Host ""
-    Write-Host "Install codemap from GitHub releases."
+    Write-Host "Install symgraph from GitHub releases."
     Write-Host ""
     Write-Host "Options:"
-    Write-Host "  -Mcp     Configure codemap as an MCP server for Claude Code and Claude Desktop"
+    Write-Host "  -Mcp     Configure symgraph as an MCP server for Claude Code and Claude Desktop"
     Write-Host "  -Help    Show this help message"
     Write-Host ""
     Write-Host "Environment variables:"
-    Write-Host "  CODEMAP_VERSION       Version to install (default: latest)"
-    Write-Host "  CODEMAP_INSTALL_DIR   Installation directory (default: ~/.codemap)"
+    Write-Host "  SYMGRAPH_VERSION       Version to install (default: latest)"
+    Write-Host "  SYMGRAPH_INSTALL_DIR   Installation directory (default: ~/.symgraph)"
     exit 0
 }
 
-$Repo = "grahambrooks/codemap"
-$InstallDir = if ($env:CODEMAP_INSTALL_DIR) { $env:CODEMAP_INSTALL_DIR } else { Join-Path $env:USERPROFILE ".codemap" }
-$Version = if ($env:CODEMAP_VERSION) { $env:CODEMAP_VERSION } else { "latest" }
+$Repo = "grahambrooks/symgraph"
+$InstallDir = if ($env:SYMGRAPH_INSTALL_DIR) { $env:SYMGRAPH_INSTALL_DIR } else { Join-Path $env:USERPROFILE ".symgraph" }
+$Version = if ($env:SYMGRAPH_VERSION) { $env:SYMGRAPH_VERSION } else { "latest" }
 $Arch = "x64"
 
 # Resolve version
@@ -41,12 +41,12 @@ if ($Version -eq "latest") {
 # Strip leading 'v' if present
 $Version = $Version -replace "^v", ""
 
-$ZipName = "codemap-$Version-windows-x64.zip"
+$ZipName = "symgraph-$Version-windows-x64.zip"
 $DownloadUrl = "https://github.com/$Repo/releases/download/v$Version/$ZipName"
 
-Write-Host "Installing codemap $Version for windows/$Arch..."
+Write-Host "Installing symgraph $Version for windows/$Arch..."
 
-$TmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "codemap-install-$([System.Guid]::NewGuid())"
+$TmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "symgraph-install-$([System.Guid]::NewGuid())"
 New-Item -ItemType Directory -Path $TmpDir -Force | Out-Null
 
 try {
@@ -59,7 +59,7 @@ try {
     $BinDir = Join-Path $InstallDir "bin"
     New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
 
-    Copy-Item -Path (Join-Path $TmpDir "codemap.exe") -Destination (Join-Path $BinDir "codemap.exe") -Force
+    Copy-Item -Path (Join-Path $TmpDir "symgraph.exe") -Destination (Join-Path $BinDir "symgraph.exe") -Force
 
     $ManifestPath = Join-Path $TmpDir "manifest.json"
     if (Test-Path $ManifestPath) {
@@ -82,11 +82,11 @@ if ($UserPath -notlike "*$BinDir*") {
 }
 
 Write-Host ""
-Write-Host "codemap $Version installed to $BinDir\codemap.exe"
+Write-Host "symgraph $Version installed to $BinDir\symgraph.exe"
 
 # Configure as MCP server
 if ($Mcp) {
-    $CodemapBin = Join-Path $BinDir "codemap.exe"
+    $SymgraphBin = Join-Path $BinDir "symgraph.exe"
 
     function Configure-McpJson {
         param([string]$FilePath, [string]$Label)
@@ -107,14 +107,14 @@ if ($Mcp) {
         }
 
         $ServerConfig = [PSCustomObject]@{
-            command = $CodemapBin
+            command = $SymgraphBin
             args = @("serve")
         }
 
-        if ($Config.mcpServers | Get-Member -Name "codemap" -ErrorAction SilentlyContinue) {
-            $Config.mcpServers.codemap = $ServerConfig
+        if ($Config.mcpServers | Get-Member -Name "symgraph" -ErrorAction SilentlyContinue) {
+            $Config.mcpServers.symgraph = $ServerConfig
         } else {
-            $Config.mcpServers | Add-Member -NotePropertyName "codemap" -NotePropertyValue $ServerConfig
+            $Config.mcpServers | Add-Member -NotePropertyName "symgraph" -NotePropertyValue $ServerConfig
         }
 
         $Config | ConvertTo-Json -Depth 10 | Set-Content $FilePath -Encoding UTF8

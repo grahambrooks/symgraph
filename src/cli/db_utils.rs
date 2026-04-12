@@ -5,7 +5,7 @@ use std::path::PathBuf;
 
 use crate::db::Database;
 
-const DB_DIR: &str = ".codemap";
+const DB_DIR: &str = ".symgraph";
 const DB_FILE: &str = "index.db";
 
 /// Get the database path for a project root

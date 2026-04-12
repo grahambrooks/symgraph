@@ -1,12 +1,12 @@
-//! codemap: Semantic code intelligence MCP server
+//! symgraph: Semantic code intelligence MCP server
 //!
 //! Usage:
-//!   codemap serve              Start the MCP server (stdio transport)
-//!   codemap serve --port 8080  Start the MCP server (HTTP transport)
-//!   codemap index [path]       Index a codebase
-//!   codemap status [path]      Show index statistics
-//!   codemap search <query>     Search for symbols
-//!   codemap context <task>     Build context for a task
+//!   symgraph serve              Start the MCP server (stdio transport)
+//!   symgraph serve --port 8080  Start the MCP server (HTTP transport)
+//!   symgraph index [path]       Index a codebase
+//!   symgraph status [path]      Show index statistics
+//!   symgraph search <query>     Search for symbols
+//!   symgraph context <task>     Build context for a task
 
 mod server;
 
@@ -16,7 +16,7 @@ use anyhow::Result;
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 
-use codemap::cli::{context_command, index_command, search_command, status_command};
+use symgraph::cli::{context_command, index_command, search_command, status_command};
 
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
@@ -54,7 +54,7 @@ fn main() -> Result<()> {
         }
         "search" => {
             if args.len() < 3 {
-                eprintln!("Usage: codemap search <query>");
+                eprintln!("Usage: symgraph search <query>");
                 return Ok(());
             }
             let path = ".";
@@ -63,7 +63,7 @@ fn main() -> Result<()> {
         }
         "context" => {
             if args.len() < 3 {
-                eprintln!("Usage: codemap context <task>");
+                eprintln!("Usage: symgraph context <task>");
                 return Ok(());
             }
             let path = ".";
@@ -87,10 +87,10 @@ fn main() -> Result<()> {
 
 fn print_usage() {
     println!(
-        r#"codemap: Semantic code intelligence MCP server
+        r#"symgraph: Semantic code intelligence MCP server
 
 USAGE:
-    codemap <COMMAND> [OPTIONS]
+    symgraph <COMMAND> [OPTIONS]
 
 COMMANDS:
     serve                  Start the MCP server (stdio transport)
@@ -103,23 +103,23 @@ COMMANDS:
     help                   Show this help message
 
 ENVIRONMENT:
-    CODEMAP_ROOT           Project root directory (default: current directory)
-    CODEMAP_IN_MEMORY=1    Use in-memory database (alternative to --in-memory)
+    SYMGRAPH_ROOT           Project root directory (default: current directory)
+    SYMGRAPH_IN_MEMORY=1    Use in-memory database (alternative to --in-memory)
 
 EXAMPLES:
-    codemap index                    # Index current directory
-    codemap index ~/projects/myapp   # Index specific directory
-    codemap serve                    # Start MCP server (stdio)
-    codemap serve --port 8080        # Start MCP server (HTTP on port 8080)
-    codemap serve --in-memory        # Start MCP server with in-memory database
-    codemap search "authenticate"    # Find symbols matching "authenticate"
-    codemap context "add user login" # Build context for implementing login
+    symgraph index                    # Index current directory
+    symgraph index ~/projects/myapp   # Index specific directory
+    symgraph serve                    # Start MCP server (stdio)
+    symgraph serve --port 8080        # Start MCP server (HTTP on port 8080)
+    symgraph serve --in-memory        # Start MCP server with in-memory database
+    symgraph search "authenticate"    # Find symbols matching "authenticate"
+    symgraph context "add user login" # Build context for implementing login
 "#
     );
 }
 
 fn print_version() {
-    println!("codemap {}", env!("CARGO_PKG_VERSION"));
+    println!("symgraph {}", env!("CARGO_PKG_VERSION"));
 }
 
 fn setup_logging() {

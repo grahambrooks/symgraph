@@ -1,11 +1,11 @@
-//! Integration tests for codemap
+//! Integration tests for symgraph
 //!
 //! These tests verify the end-to-end workflow of indexing and querying code.
 
-use codemap::db::Database;
-use codemap::extraction::Extractor;
-use codemap::graph::Graph;
-use codemap::types::{EdgeKind, FileRecord, Language, NodeKind};
+use symgraph::db::Database;
+use symgraph::extraction::Extractor;
+use symgraph::graph::Graph;
+use symgraph::types::{EdgeKind, FileRecord, Language, NodeKind};
 use tempfile::tempdir;
 
 /// Helper to set up a test database with indexed code
@@ -479,7 +479,7 @@ fn test_large_codebase_simulation() {
     let node_id_c = node_id_c.expect("Function 'c' not found");
 
     // Manually create edges to simulate cross-file calls
-    let edge_ab = codemap::types::Edge {
+    let edge_ab = symgraph::types::Edge {
         id: 0,
         source_id: node_id_a,
         target_id: node_id_b,
@@ -490,7 +490,7 @@ fn test_large_codebase_simulation() {
     };
     db.insert_edge(&edge_ab).unwrap();
 
-    let edge_bc = codemap::types::Edge {
+    let edge_bc = symgraph::types::Edge {
         id: 0,
         source_id: node_id_b,
         target_id: node_id_c,
@@ -501,7 +501,7 @@ fn test_large_codebase_simulation() {
     };
     db.insert_edge(&edge_bc).unwrap();
 
-    let edge_ca = codemap::types::Edge {
+    let edge_ca = symgraph::types::Edge {
         id: 0,
         source_id: node_id_c,
         target_id: node_id_a,

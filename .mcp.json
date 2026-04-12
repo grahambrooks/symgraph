@@ -1,29 +1,29 @@
 {
   "mcpServers": {
-    "codemap": {
+    "symgraph": {
       "type": "stdio",
       "command": "cargo",
       "args": ["run", "--", "serve"],
       "env": {
-        "CODEMAP_ROOT": "."
+        "SYMGRAPH_ROOT": "."
       },
       "autoApprove": [
-        "codemap-context",
-        "codemap-search",
-        "codemap-callers",
-        "codemap-callees",
-        "codemap-impact",
-        "codemap-definition",
-        "codemap-file",
-        "codemap-references",
-        "codemap-reindex",
-        "codemap-node",
-        "codemap-status",
-        "codemap-hierarchy",
-        "codemap-path",
-        "codemap-unused",
-        "codemap-implementations",
-        "codemap-diff-impact"
+        "symgraph-context",
+        "symgraph-search",
+        "symgraph-callers",
+        "symgraph-callees",
+        "symgraph-impact",
+        "symgraph-definition",
+        "symgraph-file",
+        "symgraph-references",
+        "symgraph-reindex",
+        "symgraph-node",
+        "symgraph-status",
+        "symgraph-hierarchy",
+        "symgraph-path",
+        "symgraph-unused",
+        "symgraph-implementations",
+        "symgraph-diff-impact"
       ]
     }
   }
