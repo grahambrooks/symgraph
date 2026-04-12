@@ -1,6 +1,6 @@
 [package]
 name = "symgraph"
-version = "2026.4.12"
+version = "2026.4.13"
 edition = "2021"
 description = "Semantic code intelligence library and MCP server - build knowledge graphs of codebases"
 license = "MIT"
