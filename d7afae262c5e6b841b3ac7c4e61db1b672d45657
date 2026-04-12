@@ -1,0 +1,24 @@
+Cargo.toml
+  fc05567d1e77025c 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "d7afae262c5e6b841b3ac7c4e61db1b672d45657",
+  "prompts": {
+    "fc05567d1e77025c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3365342c-f69a-480b-86f2-4cada6dba784",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Graham Brooks",
+      "messages": [],
+      "total_additions": 2,
+      "total_deletions": 2,
+      "accepted_lines": 872,
+      "overriden_lines": 0,
+      "messages_url": "https://usegitai.com/cas/32a79d716e8b5ee6bde0555a3042f0ae571abe7876ce7e6e185cea9d0f17f324"
+    }
+  }
+}
