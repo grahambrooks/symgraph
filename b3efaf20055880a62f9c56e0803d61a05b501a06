@@ -1,0 +1,24 @@
+devcontainer-feature/src/codemap/install.sh
+  7531285b881b944f 2-19,25-26,28-32,34,36,39-40
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "b3efaf20055880a62f9c56e0803d61a05b501a06",
+  "prompts": {
+    "7531285b881b944f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ce8c8d36-538b-49a5-8035-912b1f2d4922",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Graham Brooks",
+      "messages": [],
+      "total_additions": 36,
+      "total_deletions": 85,
+      "accepted_lines": 29,
+      "overriden_lines": 0,
+      "messages_url": "https://usegitai.com/cas/1734499186e3bc5931fd2fea9f18deafcbf0bc1df012d5555d112b4c56d231d7"
+    }
+  }
+}
