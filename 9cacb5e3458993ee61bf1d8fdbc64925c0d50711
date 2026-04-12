@@ -1,0 +1,78 @@
+src/types.rs
+  fc05567d1e77025c 1
+Cargo.toml
+  fc05567d1e77025c 2,5,10,12-20,77
+install.sh
+  fc05567d1e77025c 4-6,16,19,23-24,66,69,79,97,110,114-115,132
+devcontainer-feature/src/symgraph/install.sh
+  fc05567d1e77025c 3,11-12,22-23,30-31,37
+src/mcp/mod.rs
+  fc05567d1e77025c 4-19,68,70,80,131,134,141,144,150,153,159,162,168,171,177,180,187,190,196,199,205,208,215,240,244,252,255,261-262,264,277,280,286,289,295,298,304,307,313,316,322,326-333
+src/main/server.rs
+  fc05567d1e77025c 16-17,23,28,41,52
+install.ps1
+  fc05567d1e77025c 11,14,18-19,23-25,44,47,49,62,85,89,110,114-115,117
+devcontainer-feature/src/symgraph/devcontainer-feature.json
+  fc05567d1e77025c 2,4-6,12
+.gitignore
+  fc05567d1e77025c 17
+src/cli/db_utils.rs
+  fc05567d1e77025c 8
+AGENTS.md
+  fc05567d1e77025c 15,20,40,47-57,89,96
+.github/workflows/release.yml
+  fc05567d1e77025c 1,24,27,30,33,36,61-62,68,115-117,122-124,129-131,136-138,143-144,155,157,159-160,191-193,196-198,201-203,206-208,211-213,240-241,250-274
+devcontainer-feature/src/symgraph/README.md
+  fc05567d1e77025c 1-2,4-11,13-27,29-33
+devcontainer-feature/test/symgraph/test.sh
+  fc05567d1e77025c 4-6,9,12-13,15,20,23,30-31,33
+Makefile
+  fc05567d1e77025c 12,66-67,71-72
+src/db/mod.rs
+  fc05567d1e77025c 1
+src/server.rs
+  fc05567d1e77025c 17-18,33,38,51,62
+src/lib.rs
+  fc05567d1e77025c 1,17-23
+.mcp.json
+  fc05567d1e77025c 3,8,11-26
+src/cli/commands.rs
+  fc05567d1e77025c 44,51,82,123,149,152,167
+manifest.json
+  fc05567d1e77025c 3,12-13,28,35,41,45,49,53,57,61,65-66,76
+README.md
+  fc05567d1e77025c 1,3-4,11,34,37,40,46,52,55,58,64,67,75-78,80,88-89,99,102,109,112,118-123,132-142,148-152,159,165,171,178,184,189,195,198,200,206,210,218,220,231,245,254-255,258,272-273,285-286,289,301,307-308,316,319,328,333,343
+src/main.rs
+  fc05567d1e77025c 1,4-9,19,57,66,90,93,106-107,110-116,122
+CONTRIBUTING.md
+  fc05567d1e77025c 1,3,9-10
+src/mcp/handlers/status.rs
+  fc05567d1e77025c 8
+tests/integration_test.rs
+  fc05567d1e77025c 1,5-8,482,493,504
+.github/workflows/ci.yml
+  fc05567d1e77025c 1
+.claude/skills/explore-code/SKILL.md
+  fc05567d1e77025c 3,5,8,12-24,32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "9cacb5e3458993ee61bf1d8fdbc64925c0d50711",
+  "prompts": {
+    "fc05567d1e77025c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3365342c-f69a-480b-86f2-4cada6dba784",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Graham Brooks",
+      "messages": [],
+      "total_additions": 1399,
+      "total_deletions": 455,
+      "accepted_lines": 1319,
+      "overriden_lines": 5,
+      "messages_url": "https://usegitai.com/cas/f618f1ddc03ae5179a7b9254911b8dfa78817b57450211911469c63287be5f83"
+    }
+  }
+}
