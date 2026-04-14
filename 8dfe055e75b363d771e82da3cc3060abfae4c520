@@ -1,0 +1,84 @@
+src/extraction/languages.rs
+  d2c7d9d14181883c 95,115,316-330
+src/lib.rs
+  d2c7d9d14181883c 36,91
+src/db/mod.rs
+  d2c7d9d14181883c 51,54-61,143-147,173-174,191-192,204-208,357-374,523-528,534-536,548-570,613-615,627-649,680-681,684-689,708-709,713-715,886,944-946,950,968,996,1016-1133,1157-1158,1163,1195,1210,1240,1250,1261,1284,1317,1337,1357,1379,1406,1439,1473,1499,1540-1541,1619,1638,1679,1694,1709,1746,1794,1838,1885,1959-1960,1981-2101
+src/security.rs
+  d2c7d9d14181883c 1-210
+src/types.rs
+  d2c7d9d14181883c 124-125,143,161,323-324,527,632-633
+src/main/server.rs
+  d2c7d9d14181883c 52-57
+src/mcp/handlers/reindex.rs
+  d2c7d9d14181883c 6,23-31
+src/mcp/types.rs
+  d2c7d9d14181883c 18-21,68-95
+src/db/schema.rs
+  d2c7d9d14181883c 32-33,78-84,86-94
+src/extraction/mod.rs
+  d2c7d9d14181883c 104-105,108-110,132-133,136-137,157-158,191,208-209,347-351,353-358,360-361,363-417,419,421,560-631,1224-1297
+src/mcp/handlers/diff_impact.rs
+  d2c7d9d14181883c 3-4,8-9,11-18,20-87,89-103,105-177,183-184
+src/context/mod.rs
+  d2c7d9d14181883c 274-280
+src/server.rs
+  d2c7d9d14181883c 6-11,20,53-65,67,69-84,86,104-112,114-119,121,132-193
+src/extraction/manifest.rs
+  d2c7d9d14181883c 83-84,209-210
+Cargo.toml
+  d2c7d9d14181883c 47
+src/mcp/handlers/mod.rs
+  d2c7d9d14181883c 3-4
+src/main.rs
+  d2c7d9d14181883c 37-43,46-48,50-61,114-122,127-128
+src/mcp/handlers/search.rs
+  d2c7d9d14181883c 9-16,22,24,26
+src/mcp/mod.rs
+  d2c7d9d14181883c 317-341
+src/mcp/handlers/churn.rs
+  d2c7d9d14181883c 1-81
+src/mcp/handlers/blame.rs
+  d2c7d9d14181883c 1-44
+src/graph/mod.rs
+  d2c7d9d14181883c 287-288
+src/mcp/handlers/symbol.rs
+  d2c7d9d14181883c 8,61-62,199-256
+src/mcp/handlers/file.rs
+  d2c7d9d14181883c 6,9-10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.8",
+  "base_commit_sha": "8dfe055e75b363d771e82da3cc3060abfae4c520",
+  "prompts": {
+    "d2c7d9d14181883c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "67c77a0f-f97c-4fca-9f1f-84aa5c2e3c84",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Graham Brooks",
+      "messages": [],
+      "total_additions": 1573,
+      "total_deletions": 311,
+      "accepted_lines": 1490,
+      "overriden_lines": 0,
+      "messages_url": "https://usegitai.com/cas/4ced5db414015d0b946a8a2b791088a906574c9ce6ef035ac8a1cc5b0bfb7284"
+    },
+    "fc05567d1e77025c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3365342c-f69a-480b-86f2-4cada6dba784",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Graham Brooks",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 871,
+      "overriden_lines": 0,
+      "messages_url": "https://usegitai.com/cas/32a79d716e8b5ee6bde0555a3042f0ae571abe7876ce7e6e185cea9d0f17f324"
+    }
+  }
+}
