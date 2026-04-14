@@ -1,11 +1,11 @@
 //! Symbol information handlers (node, definition, references)
 
 use std::fs;
-use std::path::Path;
 
 use crate::db::Database;
 use crate::mcp::constants::{DEFAULT_CONTEXT_LINES, MAX_REFERENCES_PER_KIND};
 use crate::mcp::types::{DefinitionRequest, SymbolRequest};
+use crate::security::safe_join;
 use crate::types::EdgeKind;
 
 pub fn handle_node(db: &Database, req: &SymbolRequest) -> Result<String, String> {
@@ -58,8 +58,8 @@ pub fn handle_definition(
 
     let context_lines = req.context_lines.unwrap_or(DEFAULT_CONTEXT_LINES) as usize;
 
-    // Read the source file
-    let file_path = Path::new(project_root).join(&node.file_path);
+    // Read the source file (traversal-guarded)
+    let file_path = safe_join(project_root, &node.file_path).map_err(|e| e.to_string())?;
     let content = fs::read_to_string(&file_path)
         .map_err(|e| format!("reading file {}: {}", node.file_path, e))?;
 
@@ -195,4 +195,62 @@ pub fn handle_references(db: &Database, req: &SymbolRequest) -> Result<String, S
     output.push_str(&format!("**Total references:** {}\n", total));
 
     Ok(output)
+}
+
+#[cfg(test)]
+mod security_tests {
+    use super::*;
+    use crate::types::{Language, Node, NodeKind, Visibility};
+
+    fn seed(db: &Database, file_path: &str) {
+        let file = crate::types::FileRecord {
+            path: file_path.to_string(),
+            content_hash: "h".into(),
+            language: Language::Rust,
+            size: 0,
+            modified_at: 0,
+            indexed_at: 0,
+            node_count: 1,
+        };
+        db.insert_or_update_file(&file).unwrap();
+        let node = Node {
+            id: 0,
+            kind: NodeKind::Function,
+            name: "victim".to_string(),
+            qualified_name: None,
+            file_path: file_path.to_string(),
+            start_line: 1,
+            end_line: 2,
+            start_column: 0,
+            end_column: 0,
+            signature: None,
+            visibility: Visibility::Public,
+            docstring: None,
+            is_async: false,
+            is_static: false,
+            is_exported: false,
+            is_test: false,
+            is_generated: false,
+            language: Language::Rust,
+        };
+        db.insert_node(&node).unwrap();
+    }
+
+    #[test]
+    fn definition_rejects_traversal_file_path_in_db() {
+        // Simulate an attacker-controlled DB entry with a traversal path.
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::in_memory().unwrap();
+        seed(&db, "../../../etc/passwd");
+
+        let req = DefinitionRequest {
+            symbol: "victim".into(),
+            context_lines: None,
+        };
+        let err = handle_definition(&db, tmp.path().to_str().unwrap(), &req).unwrap_err();
+        assert!(
+            err.contains("path security") || err.contains("traversal"),
+            "got: {err}"
+        );
+    }
 }

@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS nodes (
     is_async INTEGER NOT NULL DEFAULT 0,
     is_static INTEGER NOT NULL DEFAULT 0,
     is_exported INTEGER NOT NULL DEFAULT 0,
+    is_test INTEGER NOT NULL DEFAULT 0,
+    is_generated INTEGER NOT NULL DEFAULT 0,
     language TEXT NOT NULL,
     FOREIGN KEY (file_path) REFERENCES files(path)
 );
@@ -73,4 +75,20 @@ CREATE INDEX IF NOT EXISTS idx_unresolved_name ON unresolved_refs(reference_name
 
 -- Full-text search for symbol names (external-content FTS5 table mirroring nodes)
 CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5(name, qualified_name, content=nodes, content_rowid=id);
+
+-- Semantic search: tokenized identifier + docstring for bm25-based scoring.
+-- Standalone (not external-content) so we fully control token content.
+CREATE VIRTUAL TABLE IF NOT EXISTS nodes_semantic_fts USING fts5(tokens);
+
+CREATE INDEX IF NOT EXISTS idx_nodes_is_test ON nodes(is_test);
+CREATE INDEX IF NOT EXISTS idx_nodes_is_generated ON nodes(is_generated);
 "#;
+
+/// Additive schema migrations applied after CREATE TABLE IF NOT EXISTS.
+///
+/// Each statement is executed independently; "duplicate column name" errors
+/// are ignored to support upgrade-in-place on existing databases.
+pub const MIGRATIONS: &[&str] = &[
+    "ALTER TABLE nodes ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0",
+    "ALTER TABLE nodes ADD COLUMN is_generated INTEGER NOT NULL DEFAULT 0",
+];

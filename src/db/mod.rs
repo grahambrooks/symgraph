@@ -48,9 +48,17 @@ impl Database {
         Ok(db)
     }
 
-    /// Initialize the database schema
+    /// Initialize the database schema and run additive migrations.
     fn initialize(&self) -> Result<()> {
         self.conn.execute_batch(schema::SCHEMA)?;
+        for stmt in schema::MIGRATIONS {
+            if let Err(e) = self.conn.execute(stmt, []) {
+                let msg = e.to_string();
+                if !msg.contains("duplicate column name") {
+                    return Err(e.into());
+                }
+            }
+        }
         Ok(())
     }
 
@@ -132,6 +140,11 @@ impl Database {
             "INSERT INTO nodes_fts(nodes_fts, rowid, name, qualified_name) SELECT 'delete', id, name, qualified_name FROM nodes WHERE file_path = ?1",
             params![path],
         )?;
+        // Delete semantic FTS entries (standalone table — direct delete by rowid)
+        self.conn.execute(
+            "DELETE FROM nodes_semantic_fts WHERE rowid IN (SELECT id FROM nodes WHERE file_path = ?1)",
+            params![path],
+        )?;
         // Delete nodes
         self.conn
             .execute("DELETE FROM nodes WHERE file_path = ?1", params![path])?;
@@ -157,8 +170,8 @@ impl Database {
             INSERT INTO nodes (
                 kind, name, qualified_name, file_path, start_line, end_line,
                 start_column, end_column, signature, visibility, docstring,
-                is_async, is_static, is_exported, language
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+                is_async, is_static, is_exported, is_test, is_generated, language
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
             "#,
             params![
                 node.kind.as_str(),
@@ -175,6 +188,8 @@ impl Database {
                 node.is_async,
                 node.is_static,
                 node.is_exported,
+                node.is_test,
+                node.is_generated,
                 node.language.as_str(),
             ],
         )?;
@@ -184,6 +199,13 @@ impl Database {
         self.conn.execute(
             "INSERT INTO nodes_fts(rowid, name, qualified_name) VALUES (?1, ?2, ?3)",
             params![rowid, node.name, node.qualified_name],
+        )?;
+
+        // Semantic FTS: camelCase/snake_case tokens + docstring
+        let tokens = build_semantic_tokens(node);
+        self.conn.execute(
+            "INSERT INTO nodes_semantic_fts(rowid, tokens) VALUES (?1, ?2)",
+            params![rowid, tokens],
         )?;
 
         Ok(rowid)
@@ -332,22 +354,24 @@ impl Database {
 
     fn row_to_node(row: &rusqlite::Row) -> rusqlite::Result<Node> {
         Ok(Node {
-            id: row.get(0)?,
-            kind: NodeKind::parse(&row.get::<_, String>(1)?).unwrap_or(NodeKind::Function),
-            name: row.get(2)?,
-            qualified_name: row.get(3)?,
-            file_path: row.get(4)?,
-            start_line: row.get::<_, i64>(5)? as u32,
-            end_line: row.get::<_, i64>(6)? as u32,
-            start_column: row.get::<_, i64>(7)? as u32,
-            end_column: row.get::<_, i64>(8)? as u32,
-            signature: row.get(9)?,
-            visibility: Visibility::parse(&row.get::<_, String>(10).unwrap_or_default()),
-            docstring: row.get(11)?,
-            is_async: row.get(12)?,
-            is_static: row.get(13)?,
-            is_exported: row.get(14)?,
-            language: Language::parse(&row.get::<_, String>(15).unwrap_or_default()),
+            id: row.get("id")?,
+            kind: NodeKind::parse(&row.get::<_, String>("kind")?).unwrap_or(NodeKind::Function),
+            name: row.get("name")?,
+            qualified_name: row.get("qualified_name")?,
+            file_path: row.get("file_path")?,
+            start_line: row.get::<_, i64>("start_line")? as u32,
+            end_line: row.get::<_, i64>("end_line")? as u32,
+            start_column: row.get::<_, i64>("start_column")? as u32,
+            end_column: row.get::<_, i64>("end_column")? as u32,
+            signature: row.get("signature")?,
+            visibility: Visibility::parse(&row.get::<_, String>("visibility").unwrap_or_default()),
+            docstring: row.get("docstring")?,
+            is_async: row.get("is_async")?,
+            is_static: row.get("is_static")?,
+            is_exported: row.get("is_exported")?,
+            is_test: row.get("is_test").unwrap_or(false),
+            is_generated: row.get("is_generated").unwrap_or(false),
+            language: Language::parse(&row.get::<_, String>("language").unwrap_or_default()),
         })
     }
 
@@ -496,13 +520,20 @@ impl Database {
         Ok(refs)
     }
 
-    /// Resolve references by matching names to nodes
+    /// Resolve references by matching names to nodes.
+    ///
+    /// Resolution prefers same-file matches first (lightweight import-aware
+    /// resolution) before falling back to global lookup. When the source node
+    /// is a test, an additional `Tests` edge is emitted alongside `Calls`
+    /// so that test→prod-code linkage is queryable.
     pub fn resolve_references(&self) -> Result<u32> {
         let refs = self.get_unresolved_refs()?;
         let mut resolved = 0;
 
         for uref in refs {
-            if let Some(target) = self.find_node_by_name(&uref.reference_name)? {
+            if let Some(target) =
+                self.find_target_preferring_file(&uref.reference_name, &uref.file_path)?
+            {
                 let edge = Edge {
                     id: 0,
                     source_id: uref.source_node_id,
@@ -514,6 +545,29 @@ impl Database {
                 };
                 self.insert_edge(&edge)?;
                 resolved += 1;
+
+                if uref.kind == EdgeKind::Calls {
+                    let source_is_test = self
+                        .conn
+                        .query_row(
+                            "SELECT is_test FROM nodes WHERE id = ?1",
+                            params![uref.source_node_id],
+                            |r| r.get::<_, bool>(0),
+                        )
+                        .unwrap_or(false);
+                    if source_is_test {
+                        let test_edge = Edge {
+                            id: 0,
+                            source_id: uref.source_node_id,
+                            target_id: target.id,
+                            kind: EdgeKind::Tests,
+                            file_path: Some(uref.file_path.clone()),
+                            line: Some(uref.line),
+                            column: Some(uref.column),
+                        };
+                        self.insert_edge(&test_edge)?;
+                    }
+                }
             }
         }
 
@@ -556,7 +610,9 @@ impl Database {
                 .collect::<std::result::Result<Vec<_>, _>>()?;
 
             for uref in &refs {
-                if let Some(target) = self.find_node_by_name(&uref.reference_name)? {
+                if let Some(target) =
+                    self.find_target_preferring_file(&uref.reference_name, &uref.file_path)?
+                {
                     let edge = Edge {
                         id: 0,
                         source_id: uref.source_node_id,
@@ -568,6 +624,29 @@ impl Database {
                     };
                     self.insert_edge(&edge)?;
                     resolved += 1;
+
+                    if uref.kind == EdgeKind::Calls {
+                        let source_is_test = self
+                            .conn
+                            .query_row(
+                                "SELECT is_test FROM nodes WHERE id = ?1",
+                                params![uref.source_node_id],
+                                |r| r.get::<_, bool>(0),
+                            )
+                            .unwrap_or(false);
+                        if source_is_test {
+                            let test_edge = Edge {
+                                id: 0,
+                                source_id: uref.source_node_id,
+                                target_id: target.id,
+                                kind: EdgeKind::Tests,
+                                file_path: Some(uref.file_path.clone()),
+                                line: Some(uref.line),
+                                column: Some(uref.column),
+                            };
+                            self.insert_edge(&test_edge)?;
+                        }
+                    }
                 }
             }
 
@@ -598,10 +677,16 @@ impl Database {
             INSERT INTO nodes (
                 kind, name, qualified_name, file_path, start_line, end_line,
                 start_column, end_column, signature, visibility, docstring,
-                is_async, is_static, is_exported, language
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
+                is_async, is_static, is_exported, is_test, is_generated, language
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
             "#,
         )?;
+        let mut fts_stmt = self
+            .conn
+            .prepare("INSERT INTO nodes_fts(rowid, name, qualified_name) VALUES (?1, ?2, ?3)")?;
+        let mut sem_stmt = self
+            .conn
+            .prepare("INSERT INTO nodes_semantic_fts(rowid, tokens) VALUES (?1, ?2)")?;
         for node in nodes.iter_mut() {
             let old_id = node.id;
             node.id = 0;
@@ -620,9 +705,14 @@ impl Database {
                 node.is_async,
                 node.is_static,
                 node.is_exported,
+                node.is_test,
+                node.is_generated,
                 node.language.as_str(),
             ])?;
             let new_id = self.conn.last_insert_rowid();
+            fts_stmt.execute(params![new_id, node.name, node.qualified_name])?;
+            let tokens = build_semantic_tokens(node);
+            sem_stmt.execute(params![new_id, tokens])?;
             id_map.insert(old_id, new_id);
         }
         Ok(id_map)
@@ -793,26 +883,7 @@ impl Database {
              WHERE e.kind = 'contains' AND source.name = ?",
         )?;
 
-        let rows = stmt.query_map(params![symbol, symbol], |row| {
-            Ok(Node {
-                id: row.get(0)?,
-                kind: NodeKind::parse(&row.get::<_, String>(1)?).unwrap_or(NodeKind::Function),
-                name: row.get(2)?,
-                qualified_name: row.get(3)?,
-                file_path: row.get(4)?,
-                start_line: row.get::<_, i64>(5)? as u32,
-                end_line: row.get::<_, i64>(6)? as u32,
-                start_column: row.get::<_, i64>(7)? as u32,
-                end_column: row.get::<_, i64>(8)? as u32,
-                signature: row.get(9)?,
-                visibility: Visibility::parse(&row.get::<_, String>(10)?),
-                docstring: row.get(11)?,
-                is_async: row.get(12)?,
-                is_static: row.get(13)?,
-                is_exported: row.get(14)?,
-                language: Language::parse(&row.get::<_, String>(15)?),
-            })
-        })?;
+        let rows = stmt.query_map(params![symbol, symbol], Self::row_to_node)?;
 
         let mut nodes = Vec::new();
         for row in rows {
@@ -870,30 +941,13 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT n.* FROM nodes n
              WHERE n.kind IN ('function', 'method', 'class', 'struct', 'interface')
-             AND n.id NOT IN (SELECT DISTINCT target_id FROM edges WHERE kind IN ('calls', 'references', 'instantiates'))
+             AND n.is_test = 0
+             AND n.is_generated = 0
+             AND n.id NOT IN (SELECT DISTINCT target_id FROM edges WHERE kind IN ('calls', 'references', 'instantiates', 'tests'))
              ORDER BY n.file_path, n.start_line",
         )?;
 
-        let rows = stmt.query_map([], |row| {
-            Ok(Node {
-                id: row.get(0)?,
-                kind: NodeKind::parse(&row.get::<_, String>(1)?).unwrap_or(NodeKind::Function),
-                name: row.get(2)?,
-                qualified_name: row.get(3)?,
-                file_path: row.get(4)?,
-                start_line: row.get::<_, i64>(5)? as u32,
-                end_line: row.get::<_, i64>(6)? as u32,
-                start_column: row.get::<_, i64>(7)? as u32,
-                end_column: row.get::<_, i64>(8)? as u32,
-                signature: row.get(9)?,
-                visibility: Visibility::parse(&row.get::<_, String>(10)?),
-                docstring: row.get(11)?,
-                is_async: row.get(12)?,
-                is_static: row.get(13)?,
-                is_exported: row.get(14)?,
-                language: Language::parse(&row.get::<_, String>(15)?),
-            })
-        })?;
+        let rows = stmt.query_map([], Self::row_to_node)?;
 
         let mut nodes = Vec::new();
         for row in rows {
@@ -911,26 +965,7 @@ impl Database {
              WHERE e.kind IN ('implements', 'extends') AND target.name = ?",
         )?;
 
-        let rows = stmt.query_map([symbol], |row| {
-            Ok(Node {
-                id: row.get(0)?,
-                kind: NodeKind::parse(&row.get::<_, String>(1)?).unwrap_or(NodeKind::Function),
-                name: row.get(2)?,
-                qualified_name: row.get(3)?,
-                file_path: row.get(4)?,
-                start_line: row.get::<_, i64>(5)? as u32,
-                end_line: row.get::<_, i64>(6)? as u32,
-                start_column: row.get::<_, i64>(7)? as u32,
-                end_column: row.get::<_, i64>(8)? as u32,
-                signature: row.get(9)?,
-                visibility: Visibility::parse(&row.get::<_, String>(10)?),
-                docstring: row.get(11)?,
-                is_async: row.get(12)?,
-                is_static: row.get(13)?,
-                is_exported: row.get(14)?,
-                language: Language::parse(&row.get::<_, String>(15)?),
-            })
-        })?;
+        let rows = stmt.query_map([symbol], Self::row_to_node)?;
 
         let mut nodes = Vec::new();
         for row in rows {
@@ -958,26 +993,7 @@ impl Database {
 
         let rows = stmt.query_map(
             params![file_path, end_line, start_line, start_line, end_line],
-            |row| {
-                Ok(Node {
-                    id: row.get(0)?,
-                    kind: NodeKind::parse(&row.get::<_, String>(1)?).unwrap_or(NodeKind::Function),
-                    name: row.get(2)?,
-                    qualified_name: row.get(3)?,
-                    file_path: row.get(4)?,
-                    start_line: row.get::<_, i64>(5)? as u32,
-                    end_line: row.get::<_, i64>(6)? as u32,
-                    start_column: row.get::<_, i64>(7)? as u32,
-                    end_column: row.get::<_, i64>(8)? as u32,
-                    signature: row.get(9)?,
-                    visibility: Visibility::parse(&row.get::<_, String>(10)?),
-                    docstring: row.get(11)?,
-                    is_async: row.get(12)?,
-                    is_static: row.get(13)?,
-                    is_exported: row.get(14)?,
-                    language: Language::parse(&row.get::<_, String>(15)?),
-                })
-            },
+            Self::row_to_node,
         )?;
 
         for row in rows {
@@ -997,6 +1013,124 @@ impl Database {
 
         Ok(impacted)
     }
+
+    /// Semantic search using bm25-ranked tokenized identifiers + docstrings.
+    ///
+    /// Tokens are camelCase/snake_case-split identifiers plus the cleaned
+    /// docstring. Falls back to an empty result if the FTS query is invalid.
+    pub fn semantic_search(&self, query: &str, limit: u32) -> Result<Vec<Node>> {
+        let normalized = normalize_query_for_fts(query);
+        if normalized.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT n.* FROM nodes n
+             INNER JOIN nodes_semantic_fts s ON s.rowid = n.id
+             WHERE nodes_semantic_fts MATCH ?1
+             ORDER BY bm25(nodes_semantic_fts)
+             LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![normalized, limit as i64], Self::row_to_node);
+        let mut nodes = Vec::new();
+        match rows {
+            Ok(iter) => {
+                for row in iter {
+                    nodes.push(row?);
+                }
+            }
+            Err(_) => return Ok(Vec::new()),
+        }
+        Ok(nodes)
+    }
+
+    /// Find a target node by name, preferring same-file matches.
+    ///
+    /// Used by import-aware reference resolution: when a symbol name is
+    /// referenced from `source_file`, prefer a definition in that file before
+    /// falling back to any global match. This is a lightweight stand-in for
+    /// full import resolution and reduces false positives in dynamic languages.
+    pub fn find_target_preferring_file(
+        &self,
+        name: &str,
+        source_file: &str,
+    ) -> Result<Option<Node>> {
+        let local = self
+            .conn
+            .query_row(
+                "SELECT * FROM nodes WHERE name = ?1 AND file_path = ?2 LIMIT 1",
+                params![name, source_file],
+                Self::row_to_node,
+            )
+            .optional()?;
+        if local.is_some() {
+            return Ok(local);
+        }
+        self.find_node_by_name(name)
+    }
+}
+
+/// Build the token text indexed in `nodes_semantic_fts` for a node.
+///
+/// Splits camelCase / snake_case / kebab-case identifiers into individual
+/// tokens and appends the cleaned docstring so bm25 can score by both name
+/// fragments and natural-language documentation.
+fn build_semantic_tokens(node: &Node) -> String {
+    let mut out = String::new();
+    push_split_tokens(&mut out, &node.name);
+    if let Some(qn) = &node.qualified_name {
+        out.push(' ');
+        push_split_tokens(&mut out, qn);
+    }
+    if let Some(doc) = &node.docstring {
+        out.push(' ');
+        out.push_str(doc);
+    }
+    out.to_lowercase()
+}
+
+fn push_split_tokens(out: &mut String, s: &str) {
+    out.push(' ');
+    out.push_str(s);
+    out.push(' ');
+    let mut current = String::new();
+    let mut prev_lower = false;
+    for ch in s.chars() {
+        if ch.is_ascii_uppercase() && prev_lower && !current.is_empty() {
+            out.push_str(&current);
+            out.push(' ');
+            current.clear();
+        }
+        if ch.is_alphanumeric() {
+            current.push(ch);
+            prev_lower = ch.is_ascii_lowercase() || ch.is_ascii_digit();
+        } else {
+            if !current.is_empty() {
+                out.push_str(&current);
+                out.push(' ');
+                current.clear();
+            }
+            prev_lower = false;
+        }
+    }
+    if !current.is_empty() {
+        out.push_str(&current);
+        out.push(' ');
+    }
+}
+
+/// Sanitize a free-text query for FTS5 — strips characters that have special
+/// meaning to the FTS5 query parser and joins remaining tokens with spaces
+/// (implicit AND).
+fn normalize_query_for_fts(query: &str) -> String {
+    let cleaned: String = query
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c } else { ' ' })
+        .collect();
+    cleaned
+        .split_whitespace()
+        .map(|t| t.to_lowercase())
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 #[cfg(test)]
@@ -1020,11 +1154,13 @@ mod tests {
             is_async: false,
             is_static: false,
             is_exported: true,
+            is_test: false,
+            is_generated: false,
             language: Language::Rust,
         }
     }
 
-    fn create_test_file(path: &str) -> FileRecord {
+    fn mk_file(path: &str) -> FileRecord {
         FileRecord {
             path: path.to_string(),
             content_hash: "abc123".to_string(),
@@ -1056,7 +1192,7 @@ mod tests {
     #[test]
     fn test_upsert_and_get_file() {
         let db = Database::in_memory().unwrap();
-        let file = create_test_file("test.rs");
+        let file = mk_file("test.rs");
 
         db.insert_or_update_file(&file).unwrap();
         let retrieved = db.get_file("test.rs").unwrap();
@@ -1071,7 +1207,7 @@ mod tests {
     #[test]
     fn test_file_upsert_updates_existing() {
         let db = Database::in_memory().unwrap();
-        let mut file = create_test_file("src/lib.rs");
+        let mut file = mk_file("src/lib.rs");
 
         db.insert_or_update_file(&file).unwrap();
 
@@ -1101,7 +1237,7 @@ mod tests {
     #[test]
     fn test_needs_reindex_unchanged_file() {
         let db = Database::in_memory().unwrap();
-        let file = create_test_file("test.rs");
+        let file = mk_file("test.rs");
         db.insert_or_update_file(&file).unwrap();
 
         let needs = db.needs_reindex("test.rs", "abc123").unwrap();
@@ -1111,7 +1247,7 @@ mod tests {
     #[test]
     fn test_needs_reindex_changed_file() {
         let db = Database::in_memory().unwrap();
-        let file = create_test_file("test.rs");
+        let file = mk_file("test.rs");
         db.insert_or_update_file(&file).unwrap();
 
         let needs = db.needs_reindex("test.rs", "different_hash").unwrap();
@@ -1122,7 +1258,7 @@ mod tests {
     #[test]
     fn test_insert_and_get_node() {
         let db = Database::in_memory().unwrap();
-        let file = create_test_file("test.rs");
+        let file = mk_file("test.rs");
         db.insert_or_update_file(&file).unwrap();
 
         let node = create_test_node("my_function", NodeKind::Function, "test.rs");
@@ -1145,7 +1281,7 @@ mod tests {
     #[test]
     fn test_search_nodes() {
         let db = Database::in_memory().unwrap();
-        let file = create_test_file("test.rs");
+        let file = mk_file("test.rs");
         db.insert_or_update_file(&file).unwrap();
 
         db.insert_node(&create_test_node(
@@ -1178,7 +1314,7 @@ mod tests {
     #[test]
     fn test_search_nodes_with_kind_filter() {
         let db = Database::in_memory().unwrap();
-        let file = create_test_file("test.rs");
+        let file = mk_file("test.rs");
         db.insert_or_update_file(&file).unwrap();
 
         db.insert_node(&create_test_node("MyClass", NodeKind::Class, "test.rs"))
@@ -1198,7 +1334,7 @@ mod tests {
     #[test]
     fn test_search_nodes_case_insensitive() {
         let db = Database::in_memory().unwrap();
-        let file = create_test_file("test.rs");
+        let file = mk_file("test.rs");
         db.insert_or_update_file(&file).unwrap();
 
         db.insert_node(&create_test_node(
@@ -1218,7 +1354,7 @@ mod tests {
     #[test]
     fn test_find_node_by_name() {
         let db = Database::in_memory().unwrap();
-        let file = create_test_file("test.rs");
+        let file = mk_file("test.rs");
         db.insert_or_update_file(&file).unwrap();
 
         db.insert_node(&create_test_node(
@@ -1240,7 +1376,7 @@ mod tests {
     #[test]
     fn test_insert_edge() {
         let db = Database::in_memory().unwrap();
-        let file = create_test_file("test.rs");
+        let file = mk_file("test.rs");
         db.insert_or_update_file(&file).unwrap();
 
         let id1 = db
@@ -1267,7 +1403,7 @@ mod tests {
     #[test]
     fn test_get_callers_and_callees() {
         let db = Database::in_memory().unwrap();
-        let file = create_test_file("test.rs");
+        let file = mk_file("test.rs");
         db.insert_or_update_file(&file).unwrap();
 
         let caller_id = db
@@ -1300,7 +1436,7 @@ mod tests {
     #[test]
     fn test_get_outgoing_and_incoming_edges() {
         let db = Database::in_memory().unwrap();
-        let file = create_test_file("test.rs");
+        let file = mk_file("test.rs");
         db.insert_or_update_file(&file).unwrap();
 
         let id1 = db
@@ -1334,7 +1470,7 @@ mod tests {
     #[test]
     fn test_unresolved_refs() {
         let db = Database::in_memory().unwrap();
-        let file = create_test_file("test.rs");
+        let file = mk_file("test.rs");
         db.insert_or_update_file(&file).unwrap();
 
         let node_id = db
@@ -1360,7 +1496,7 @@ mod tests {
     #[test]
     fn test_resolve_references() {
         let db = Database::in_memory().unwrap();
-        let file1 = create_test_file("test.rs");
+        let file1 = mk_file("test.rs");
         db.insert_or_update_file(&file1).unwrap();
 
         let caller_id = db
@@ -1401,8 +1537,8 @@ mod tests {
         let db = Database::in_memory().unwrap();
 
         // Set up two files
-        let file1 = create_test_file("src/a.rs");
-        let file2 = create_test_file("src/b.rs");
+        let file1 = mk_file("src/a.rs");
+        let file2 = mk_file("src/b.rs");
         db.insert_or_update_file(&file1).unwrap();
         db.insert_or_update_file(&file2).unwrap();
 
@@ -1480,7 +1616,7 @@ mod tests {
     #[test]
     fn test_stats() {
         let db = Database::in_memory().unwrap();
-        let file = create_test_file("test.rs");
+        let file = mk_file("test.rs");
         db.insert_or_update_file(&file).unwrap();
 
         db.insert_node(&create_test_node("func1", NodeKind::Function, "test.rs"))
@@ -1499,7 +1635,7 @@ mod tests {
     #[test]
     fn test_delete_file() {
         let db = Database::in_memory().unwrap();
-        let file = create_test_file("test.rs");
+        let file = mk_file("test.rs");
         db.insert_or_update_file(&file).unwrap();
 
         let id1 = db
@@ -1540,7 +1676,7 @@ mod tests {
     #[test]
     fn test_transaction_commit() {
         let mut db = Database::in_memory().unwrap();
-        let file = create_test_file("test.rs");
+        let file = mk_file("test.rs");
         db.insert_or_update_file(&file).unwrap();
 
         db.begin_transaction().unwrap();
@@ -1555,7 +1691,7 @@ mod tests {
     #[test]
     fn test_transaction_rollback() {
         let mut db = Database::in_memory().unwrap();
-        let file = create_test_file("test.rs");
+        let file = mk_file("test.rs");
         db.insert_or_update_file(&file).unwrap();
 
         db.begin_transaction().unwrap();
@@ -1570,7 +1706,7 @@ mod tests {
     #[test]
     fn test_get_hierarchy() {
         let db = Database::in_memory().unwrap();
-        let file = create_test_file("test.rs");
+        let file = mk_file("test.rs");
         db.insert_or_update_file(&file).unwrap();
 
         // Create a class and its methods
@@ -1607,7 +1743,7 @@ mod tests {
     #[test]
     fn test_find_call_path() {
         let db = Database::in_memory().unwrap();
-        let file = create_test_file("test.rs");
+        let file = mk_file("test.rs");
         db.insert_or_update_file(&file).unwrap();
 
         // Create a call chain: a -> b -> c
@@ -1655,7 +1791,7 @@ mod tests {
     #[test]
     fn test_find_unused_symbols() {
         let db = Database::in_memory().unwrap();
-        let file = create_test_file("test.rs");
+        let file = mk_file("test.rs");
         db.insert_or_update_file(&file).unwrap();
 
         // Create used and unused functions
@@ -1699,7 +1835,7 @@ mod tests {
     #[test]
     fn test_find_implementations() {
         let db = Database::in_memory().unwrap();
-        let file = create_test_file("test.rs");
+        let file = mk_file("test.rs");
         db.insert_or_update_file(&file).unwrap();
 
         // Create an interface and implementations
@@ -1746,7 +1882,7 @@ mod tests {
     #[test]
     fn test_get_diff_impact() {
         let db = Database::in_memory().unwrap();
-        let file = create_test_file("test.rs");
+        let file = mk_file("test.rs");
         db.insert_or_update_file(&file).unwrap();
 
         // Create a function in lines 10-20
@@ -1820,6 +1956,8 @@ mod language_tests {
             is_async: false,
             is_static: false,
             is_exported: false,
+            is_test: false,
+            is_generated: false,
             language: Language::Rust,
         };
 
@@ -1838,5 +1976,127 @@ mod language_tests {
             "Visibility should be Private, got {:?}",
             retrieved.visibility
         );
+    }
+}
+
+#[cfg(test)]
+mod language_tests_2 {
+    use super::*;
+    use crate::types::{FileRecord, NodeKind, UnresolvedReference, Visibility};
+
+    fn mk_file(path: &str) -> FileRecord {
+        FileRecord {
+            path: path.to_string(),
+            content_hash: "h".to_string(),
+            language: Language::Rust,
+            size: 0,
+            modified_at: 0,
+            indexed_at: 0,
+            node_count: 0,
+        }
+    }
+
+    fn mk_node(name: &str, file_path: &str) -> Node {
+        Node {
+            id: 0,
+            kind: NodeKind::Function,
+            name: name.to_string(),
+            qualified_name: None,
+            file_path: file_path.to_string(),
+            start_line: 1,
+            end_line: 1,
+            start_column: 0,
+            end_column: 0,
+            signature: None,
+            visibility: Visibility::Public,
+            docstring: None,
+            is_async: false,
+            is_static: false,
+            is_exported: false,
+            is_test: false,
+            is_generated: false,
+            language: Language::Rust,
+        }
+    }
+
+    #[test]
+    fn test_semantic_search_by_docstring() {
+        let db = Database::in_memory().unwrap();
+        let file = mk_file("auth.rs");
+        db.insert_or_update_file(&file).unwrap();
+
+        let mut node = mk_node("validate_token", "auth.rs");
+        node.docstring = Some("Verifies a JWT bearer token against the signing key".to_string());
+        db.insert_node(&node).unwrap();
+
+        let other = mk_node("calculate_total", "auth.rs");
+        db.insert_node(&other).unwrap();
+
+        let hits = db.semantic_search("jwt bearer", 10).unwrap();
+        assert!(
+            hits.iter().any(|n| n.name == "validate_token"),
+            "semantic search should find by docstring"
+        );
+    }
+
+    #[test]
+    fn test_semantic_search_by_camel_case_split() {
+        let db = Database::in_memory().unwrap();
+        let file = mk_file("svc.rs");
+        db.insert_or_update_file(&file).unwrap();
+
+        let node = mk_node("renderUserDashboard", "svc.rs");
+        db.insert_node(&node).unwrap();
+
+        let hits = db.semantic_search("dashboard", 10).unwrap();
+        assert!(hits.iter().any(|n| n.name == "renderUserDashboard"));
+    }
+
+    #[test]
+    fn test_resolve_prefers_same_file() {
+        let db = Database::in_memory().unwrap();
+        let f1 = mk_file("a.rs");
+        let f2 = mk_file("b.rs");
+        db.insert_or_update_file(&f1).unwrap();
+        db.insert_or_update_file(&f2).unwrap();
+
+        let caller_id = db.insert_node(&mk_node("caller", "a.rs")).unwrap();
+        // Same name in two files; same-file should win.
+        let local_id = db.insert_node(&mk_node("helper", "a.rs")).unwrap();
+        let _foreign_id = db.insert_node(&mk_node("helper", "b.rs")).unwrap();
+
+        db.insert_unresolved_ref(&UnresolvedReference {
+            source_node_id: caller_id,
+            reference_name: "helper".to_string(),
+            kind: EdgeKind::Calls,
+            file_path: "a.rs".to_string(),
+            line: 1,
+            column: 0,
+        })
+        .unwrap();
+
+        db.resolve_references().unwrap();
+        let outgoing = db.get_outgoing_edges(caller_id).unwrap();
+        assert_eq!(outgoing.len(), 1);
+        assert_eq!(outgoing[0].target_id, local_id);
+    }
+
+    #[test]
+    fn test_unused_excludes_tests_and_generated() {
+        let db = Database::in_memory().unwrap();
+        let file = mk_file("x.rs");
+        db.insert_or_update_file(&file).unwrap();
+
+        let mut t = mk_node("test_thing", "x.rs");
+        t.is_test = true;
+        db.insert_node(&t).unwrap();
+
+        let mut g = mk_node("generated_thing", "x.rs");
+        g.is_generated = true;
+        db.insert_node(&g).unwrap();
+
+        let unused = db.find_unused_symbols().unwrap();
+        assert!(unused.iter().all(|n| n.name != "test_thing"));
+        assert!(unused.iter().all(|n| n.name != "generated_thing"));
     }
 }

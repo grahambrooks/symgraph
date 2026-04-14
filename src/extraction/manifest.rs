@@ -80,6 +80,8 @@ pub fn extract_manifest<P: AsRef<Path>>(path: P, content: &str) -> ExtractionRes
         is_async: false,
         is_static: false,
         is_exported: true,
+        is_test: false,
+        is_generated: false,
         language,
     };
     let file_id = next_id;
@@ -204,6 +206,8 @@ fn add_node(
         is_async: false,
         is_static: false,
         is_exported: true,
+        is_test: false,
+        is_generated: false,
         language,
     });
 

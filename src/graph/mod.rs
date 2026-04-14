@@ -284,6 +284,8 @@ mod tests {
             is_async: false,
             is_static: false,
             is_exported: true,
+            is_test: false,
+            is_generated: false,
             language: Language::Rust,
         }
     }

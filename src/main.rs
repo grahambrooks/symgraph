@@ -28,19 +28,37 @@ fn main() -> Result<()> {
 
     match args[1].as_str() {
         "serve" => {
-            // Check for --port flag
             let port = args
                 .iter()
                 .position(|a| a == "--port")
                 .and_then(|i| args.get(i + 1))
                 .and_then(|p| p.parse::<u16>().ok());
 
-            let in_memory = args.iter().any(|a| a == "--in-memory");
+            // Explicit bind override (e.g. `--bind 0.0.0.0:8080`). Takes
+            // precedence over --port when both are given.
+            let bind = args
+                .iter()
+                .position(|a| a == "--bind")
+                .and_then(|i| args.get(i + 1))
+                .cloned();
 
-            if let Some(port) = port {
-                server::start_http(port, in_memory)?;
-            } else {
-                server::start_stdio(in_memory)?;
+            let in_memory = args.iter().any(|a| a == "--in-memory");
+            let auth_token = env::var("SYMGRAPH_AUTH_TOKEN")
+                .ok()
+                .filter(|s| !s.is_empty());
+
+            match (bind, port) {
+                (Some(bind), _) => server::start_http(server::HttpConfig {
+                    bind,
+                    in_memory,
+                    auth_token,
+                })?,
+                (None, Some(port)) => server::start_http(server::HttpConfig {
+                    bind: format!("127.0.0.1:{}", port),
+                    in_memory,
+                    auth_token,
+                })?,
+                (None, None) => server::start_stdio(in_memory)?,
             }
         }
         "index" => {
@@ -93,18 +111,21 @@ USAGE:
     symgraph <COMMAND> [OPTIONS]
 
 COMMANDS:
-    serve                  Start the MCP server (stdio transport)
-    serve --port <PORT>    Start the MCP server (HTTP transport)
-    serve --in-memory      Use in-memory database (no filesystem writes)
-    index [path]           Index a codebase (default: current directory)
-    status [path]          Show index statistics
-    search <query>         Search for symbols by name
-    context <task>         Build context for a task description
-    help                   Show this help message
+    serve                    Start the MCP server (stdio transport)
+    serve --port <PORT>      Start the MCP server (HTTP on 127.0.0.1:<PORT>)
+    serve --bind <ADDR:PORT> Start the MCP server on an explicit bind address
+    serve --in-memory        Use in-memory database (no filesystem writes)
+    index [path]             Index a codebase (default: current directory)
+    status [path]            Show index statistics
+    search <query>           Search for symbols by name
+    context <task>           Build context for a task description
+    help                     Show this help message
 
 ENVIRONMENT:
     SYMGRAPH_ROOT           Project root directory (default: current directory)
     SYMGRAPH_IN_MEMORY=1    Use in-memory database (alternative to --in-memory)
+    SYMGRAPH_AUTH_TOKEN     Bearer token required on /mcp (required for non-
+                            loopback binds; optional on 127.0.0.1)
 
 EXAMPLES:
     symgraph index                    # Index current directory

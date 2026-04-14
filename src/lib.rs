@@ -33,6 +33,7 @@ pub mod extraction;
 pub mod graph;
 #[cfg(feature = "sqlite")]
 pub mod mcp;
+pub mod security;
 pub mod types;
 
 use std::path::Path;
@@ -87,6 +88,7 @@ impl Default for IndexConfig {
                 "kts".to_string(),
                 "scala".to_string(),
                 "groovy".to_string(),
+                "rb".to_string(),
             ],
             exclude_dirs: vec![
                 "node_modules".to_string(),

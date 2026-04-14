@@ -3,6 +3,7 @@
 use crate::db::Database;
 use crate::mcp::format::normalize_path;
 use crate::mcp::types::ReindexRequest;
+use crate::security::validate_relative;
 use crate::{index_codebase, IndexConfig};
 
 pub fn handle_reindex(
@@ -19,8 +20,15 @@ pub fn handle_reindex(
         let mut errors = Vec::new();
 
         for file_path in files {
-            // Normalize path
-            let path = normalize_path(file_path);
+            // Normalize and validate — reindex is a rare write path, so we
+            // fail loudly on traversal attempts rather than silently skip.
+            let path = match validate_relative(normalize_path(file_path)) {
+                Ok(p) => p,
+                Err(e) => {
+                    errors.push(format!("{}: {}", file_path, e));
+                    continue;
+                }
+            };
 
             // Delete existing data for this file
             if let Err(e) = db.delete_file(path) {

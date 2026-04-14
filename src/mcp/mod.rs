@@ -314,7 +314,31 @@ impl SymgraphHandler {
         description = "Analyze the impact of changing a specific region of code. Shows directly modified symbols and their callers."
     )]
     fn symgraph_diff_impact(&self, Parameters(req): Parameters<DiffImpactRequest>) -> String {
-        self.with_db(|db| handlers::diff_impact::handle_diff_impact(db, &req))
+        let project_root = &self.project_root;
+        self.with_db(|db| handlers::diff_impact::handle_diff_impact(db, project_root, &req))
+    }
+
+    /// Git blame a symbol's definition lines
+    #[tool(
+        name = "symgraph-blame",
+        description = "Run git blame over the lines of a symbol's definition. Shows who last changed each line and when."
+    )]
+    fn symgraph_blame(&self, Parameters(req): Parameters<BlameRequest>) -> String {
+        let project_root = &self.project_root;
+        self.with_db(|db| handlers::blame::handle_blame(db, project_root, &req))
+    }
+
+    /// Git churn / change-frequency analysis
+    #[tool(
+        name = "symgraph-churn",
+        description = "Show file change frequency (churn) over a recent window. Highlights hotspots most likely to harbor bugs."
+    )]
+    fn symgraph_churn(&self, Parameters(req): Parameters<ChurnRequest>) -> String {
+        let project_root = self.project_root.clone();
+        match handlers::churn::handle_churn(&project_root, &req) {
+            Ok(s) => s,
+            Err(e) => format!("Error: {}", e),
+        }
     }
 }
 

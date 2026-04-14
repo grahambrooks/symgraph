@@ -101,7 +101,12 @@ impl Extractor {
             config,
             node_stack: Vec::new(),
             next_id: 1,
+            file_is_test: false,
+            file_is_generated: false,
         };
+
+        let file_is_test = is_test_path(&file_path);
+        let file_is_generated = is_generated_path(&file_path) || is_generated_content(content);
 
         // Create file node
         let file_node = Node {
@@ -124,8 +129,12 @@ impl Extractor {
             is_async: false,
             is_static: false,
             is_exported: true,
+            is_test: file_is_test,
+            is_generated: file_is_generated,
             language,
         };
+        ctx.file_is_test = file_is_test;
+        ctx.file_is_generated = file_is_generated;
         ctx.next_id += 1;
         ctx.result.nodes.push(file_node);
         ctx.node_stack.push(1); // file node ID
@@ -145,6 +154,8 @@ struct ExtractionContext<'a> {
     config: &'static LanguageConfig,
     node_stack: Vec<i64>, // Stack of parent node IDs
     next_id: i64,
+    file_is_test: bool,
+    file_is_generated: bool,
 }
 
 impl<'a> ExtractionContext<'a> {
@@ -177,6 +188,7 @@ impl<'a> ExtractionContext<'a> {
         let start = node.start_position();
         let end = node.end_position();
 
+        let is_test = self.file_is_test || self.is_test_symbol(&node, &name, kind);
         let symbol = Node {
             id: self.next_id,
             kind,
@@ -193,6 +205,8 @@ impl<'a> ExtractionContext<'a> {
             is_async: self.check_async(&node),
             is_static: self.check_static(&node),
             is_exported: self.check_exported(&node),
+            is_test,
+            is_generated: self.file_is_generated,
             language: self.language,
         };
 
@@ -330,15 +344,81 @@ impl<'a> ExtractionContext<'a> {
     }
 
     fn extract_docstring(&self, node: &tree_sitter::Node) -> Option<String> {
-        // Look for comment before this node
-        if let Some(prev) = node.prev_sibling() {
+        // Walk backward through consecutive comment siblings so multi-line
+        // doc blocks (`///`, `//!`, `#`, JSDoc) are captured as one docstring.
+        let mut comments: Vec<String> = Vec::new();
+        let mut current = node.prev_sibling();
+        while let Some(prev) = current {
             let kind = prev.kind();
-            if kind.contains("comment") || kind == "doc_comment" || kind == "block_comment" {
-                let text = self.get_node_text(&prev);
-                return Some(self.clean_docstring(&text));
+            let is_comment = kind.contains("comment")
+                || kind == "doc_comment"
+                || kind == "block_comment"
+                || kind == "line_comment";
+            if !is_comment {
+                break;
             }
+            comments.push(self.get_node_text(&prev));
+            current = prev.prev_sibling();
         }
-        None
+        if comments.is_empty() {
+            // Python-style: docstring is the first string literal inside the body.
+            if let Some(body) = node.child_by_field_name("body") {
+                let mut cursor = body.walk();
+                for child in body.children(&mut cursor) {
+                    let k = child.kind();
+                    if k == "expression_statement" || k == "string" {
+                        let text = self.get_node_text(&child);
+                        if text.starts_with("\"\"\"")
+                            || text.starts_with("'''")
+                            || text.starts_with("r\"\"\"")
+                        {
+                            return Some(self.clean_docstring(&text));
+                        }
+                        break;
+                    }
+                }
+            }
+            return None;
+        }
+        comments.reverse();
+        Some(self.clean_docstring(&comments.join("\n")))
+    }
+
+    fn is_test_symbol(&self, node: &tree_sitter::Node, name: &str, kind: NodeKind) -> bool {
+        if !matches!(
+            kind,
+            NodeKind::Function | NodeKind::Method | NodeKind::Class
+        ) {
+            return false;
+        }
+        if test_name_heuristic(name) {
+            return true;
+        }
+        // Walk back through preceding sibling annotations/attributes/decorators.
+        let mut prev = node.prev_sibling();
+        while let Some(p) = prev {
+            let text = self.get_node_text(&p);
+            let trimmed = text.trim();
+            if trimmed.contains("#[test]")
+                || trimmed.contains("#[tokio::test]")
+                || trimmed.contains("#[cfg(test)]")
+                || trimmed.contains("@Test")
+                || trimmed.contains("@pytest.")
+            {
+                return true;
+            }
+            // Stop walking once we leave attribute/decorator/annotation territory.
+            let k = p.kind();
+            if !(k.contains("attribute")
+                || k.contains("decorator")
+                || k.contains("annotation")
+                || k.contains("comment"))
+            {
+                break;
+            }
+            prev = p.prev_sibling();
+        }
+        false
     }
 
     fn clean_docstring(&self, text: &str) -> String {
@@ -475,6 +555,78 @@ impl Default for Extractor {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Heuristic: does the given symbol name look like a test?
+///
+/// Catches `test_*`, `*_test`, `test*Foo` (camelCase), and exact `test` /
+/// `Test` class names. Intentionally permissive — false positives here just
+/// exclude a symbol from `unused`/test-edge logic, which is the safe default.
+fn test_name_heuristic(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    if lower == "test" || lower == "tests" {
+        return true;
+    }
+    if lower.starts_with("test_") || lower.ends_with("_test") || lower.ends_with("_tests") {
+        return true;
+    }
+    let after_test = name
+        .strip_prefix("test")
+        .or_else(|| name.strip_prefix("Test"));
+    if let Some(rest) = after_test {
+        if rest.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
+            return true;
+        }
+    }
+    if let Some(prefix) = name.strip_suffix("Test") {
+        if !prefix.is_empty() {
+            return true;
+        }
+    }
+    false
+}
+
+/// Heuristic: does this file path look like test code?
+fn is_test_path(file_path: &str) -> bool {
+    let p = format!("/{}", file_path.replace('\\', "/").to_lowercase());
+    p.contains("/tests/")
+        || p.contains("/test/")
+        || p.contains("/__tests__/")
+        || p.contains("/spec/")
+        || p.ends_with("_test.go")
+        || p.ends_with(".test.ts")
+        || p.ends_with(".test.tsx")
+        || p.ends_with(".test.js")
+        || p.ends_with(".test.jsx")
+        || p.ends_with(".spec.ts")
+        || p.ends_with(".spec.js")
+        || p.ends_with("_spec.rb")
+        || p.ends_with("_test.rb")
+}
+
+/// Heuristic: does this file path look like generated code?
+fn is_generated_path(file_path: &str) -> bool {
+    let p = file_path.replace('\\', "/").to_lowercase();
+    p.contains("/generated/")
+        || p.contains("/.generated/")
+        || p.contains("/gen/")
+        || p.ends_with(".pb.go")
+        || p.ends_with(".pb.cc")
+        || p.ends_with(".pb.h")
+        || p.ends_with("_pb2.py")
+        || p.ends_with(".g.dart")
+        || p.ends_with(".freezed.dart")
+}
+
+/// Heuristic: does the file content begin with a generated-code marker?
+fn is_generated_content(content: &str) -> bool {
+    let head: String = content.chars().take(512).collect();
+    let lower = head.to_lowercase();
+    lower.contains("do not edit")
+        || lower.contains("auto-generated")
+        || lower.contains("autogenerated")
+        || lower.contains("generated by")
+        || lower.contains("@generated")
 }
 
 #[cfg(test)]
@@ -1067,6 +1219,80 @@ interface Greeter {
             .nodes
             .iter()
             .any(|n| n.name == "Greeter" && n.kind == NodeKind::Interface));
+    }
+
+    #[test]
+    fn test_extract_ruby_class_and_method() {
+        let mut extractor = Extractor::new();
+        let code = r#"
+class Greeter
+  def greet(name)
+    "Hello, #{name}"
+  end
+end
+"#;
+        let result = extractor.extract_file("greeter.rb", code);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        assert!(result
+            .nodes
+            .iter()
+            .any(|n| n.name == "Greeter" && n.kind == NodeKind::Class));
+        assert!(result.nodes.iter().any(|n| n.name == "greet"));
+    }
+
+    #[test]
+    fn test_is_test_path_detection() {
+        assert!(is_test_path("src/tests/foo.rs"));
+        assert!(is_test_path("foo/__tests__/bar.ts"));
+        assert!(is_test_path("pkg/foo_test.go"));
+        assert!(is_test_path("a/b.test.tsx"));
+        assert!(!is_test_path("src/lib/foo.rs"));
+    }
+
+    #[test]
+    fn test_is_generated_content_marker() {
+        assert!(is_generated_content(
+            "// Code generated by protoc. DO NOT EDIT.\nfn foo(){}"
+        ));
+        assert!(is_generated_content("# @generated\nclass Foo:\n    pass\n"));
+        assert!(!is_generated_content("fn foo() { 1 + 1 }"));
+    }
+
+    #[test]
+    fn test_test_name_heuristic() {
+        assert!(test_name_heuristic("test_user_login"));
+        assert!(test_name_heuristic("TestUserLogin"));
+        assert!(test_name_heuristic("UserLoginTest"));
+        assert!(test_name_heuristic("user_login_test"));
+        assert!(!test_name_heuristic("login_user"));
+        assert!(!test_name_heuristic("attest"));
+    }
+
+    #[test]
+    fn test_extract_rust_test_attribute_marks_is_test() {
+        let mut extractor = Extractor::new();
+        let code = r#"
+#[test]
+fn checks_addition() {
+    assert_eq!(1 + 1, 2);
+}
+"#;
+        let result = extractor.extract_file("src/lib.rs", code);
+        let func = result
+            .nodes
+            .iter()
+            .find(|n| n.name == "checks_addition")
+            .expect("function");
+        assert!(func.is_test, "should detect #[test]-attributed function");
+    }
+
+    #[test]
+    fn test_test_path_propagates_to_symbols() {
+        let mut extractor = Extractor::new();
+        let result =
+            extractor.extract_file("tests/integration.rs", "fn helper() {}\nfn other() {}\n");
+        let helper = result.nodes.iter().find(|n| n.name == "helper").unwrap();
+        assert!(helper.is_test, "symbols in tests/ should inherit is_test");
     }
 
     // Manifest file routing tests

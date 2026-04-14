@@ -49,7 +49,12 @@ pub async fn start_http(port: u16) -> Result<()> {
 
     // Create HTTP service - each session gets a handler with shared database
     let service = StreamableHttpService::new(
-        move || Ok(SymgraphHandler::new_shared(db.clone(), project_root.clone())),
+        move || {
+            Ok(SymgraphHandler::new_shared(
+                db.clone(),
+                project_root.clone(),
+            ))
+        },
         LocalSessionManager::default().into(),
         StreamableHttpServerConfig {
             cancellation_token: cancellation_token.child_token(),

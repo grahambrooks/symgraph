@@ -121,6 +121,8 @@ pub enum EdgeKind {
     Overrides,
     /// Source is decorated by target
     Decorates,
+    /// Source is a test that exercises target
+    Tests,
 }
 
 impl EdgeKind {
@@ -138,6 +140,7 @@ impl EdgeKind {
             EdgeKind::Instantiates => "instantiates",
             EdgeKind::Overrides => "overrides",
             EdgeKind::Decorates => "decorates",
+            EdgeKind::Tests => "tests",
         }
     }
 
@@ -155,6 +158,7 @@ impl EdgeKind {
             "instantiates" => Some(EdgeKind::Instantiates),
             "overrides" => Some(EdgeKind::Overrides),
             "decorates" => Some(EdgeKind::Decorates),
+            "tests" => Some(EdgeKind::Tests),
             _ => None,
         }
     }
@@ -316,6 +320,8 @@ pub struct Node {
     pub is_async: bool,
     pub is_static: bool,
     pub is_exported: bool,
+    pub is_test: bool,
+    pub is_generated: bool,
     pub language: Language,
 }
 
@@ -518,6 +524,7 @@ mod tests {
             EdgeKind::Instantiates,
             EdgeKind::Overrides,
             EdgeKind::Decorates,
+            EdgeKind::Tests,
         ];
 
         for kind in kinds {
@@ -622,6 +629,8 @@ mod tests {
             is_async: false,
             is_static: false,
             is_exported: true,
+            is_test: false,
+            is_generated: false,
             language: Language::Rust,
         };
 

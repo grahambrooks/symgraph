@@ -1,5 +1,7 @@
 //! Handler modules for MCP tools
 
+pub mod blame;
+pub mod churn;
 pub mod context;
 pub mod diff_impact;
 pub mod file;

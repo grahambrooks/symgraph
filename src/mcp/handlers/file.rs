@@ -3,9 +3,11 @@
 use crate::db::Database;
 use crate::mcp::format::normalize_path;
 use crate::mcp::types::FileRequest;
+use crate::security::validate_relative;
 
 pub fn handle_file(db: &Database, req: &FileRequest) -> Result<String, String> {
-    let path = normalize_path(&req.path);
+    let normalized = normalize_path(&req.path);
+    let path = validate_relative(normalized).map_err(|e| e.to_string())?;
 
     let nodes = db.get_nodes_by_file(path).map_err(|e| e.to_string())?;
 

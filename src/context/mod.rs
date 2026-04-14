@@ -6,7 +6,6 @@
 //! - Building code snippets
 
 use std::fs;
-use std::path::Path;
 
 use anyhow::Result;
 
@@ -272,8 +271,13 @@ impl<'a> ContextBuilder<'a> {
                 continue;
             }
 
-            // Read the source file
-            let file_path = Path::new(&self.project_root).join(&node.file_path);
+            // Read the source file (traversal-guarded — node.file_path came
+            // from the DB, but the DB is populated from user-controlled
+            // indexing input, so we still gate reads through safe_join).
+            let file_path = match crate::security::safe_join(&self.project_root, &node.file_path) {
+                Ok(p) => p,
+                Err(_) => continue,
+            };
             let content = match fs::read_to_string(&file_path) {
                 Ok(c) => c,
                 Err(_) => continue,

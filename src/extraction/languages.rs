@@ -92,6 +92,7 @@ pub fn get_language(lang: Language) -> Option<TsLanguage> {
         Language::Kotlin => Some(tree_sitter_kotlin_ng::LANGUAGE.into()),
         Language::Scala => Some(tree_sitter_scala::LANGUAGE.into()),
         Language::Groovy => Some(tree_sitter_groovy::LANGUAGE.into()),
+        Language::Ruby => Some(tree_sitter_ruby::LANGUAGE.into()),
         _ => None,
     }
 }
@@ -111,6 +112,7 @@ pub fn get_config(lang: Language) -> &'static LanguageConfig {
         Language::Kotlin => &KOTLIN_CONFIG,
         Language::Scala => &SCALA_CONFIG,
         Language::Groovy => &GROOVY_CONFIG,
+        Language::Ruby => &RUBY_CONFIG,
         _ => &DEFAULT_CONFIG,
     }
 }
@@ -309,6 +311,21 @@ static SCALA_CONFIG: LanguageConfig = LanguageConfig {
     constant_types: &["val_definition", "val_declaration"],
     variable_types: &["var_definition", "var_declaration"],
     module_types: &["package_clause", "package_object"],
+};
+
+static RUBY_CONFIG: LanguageConfig = LanguageConfig {
+    function_types: &["method", "singleton_method"],
+    method_types: &["method", "singleton_method"],
+    class_types: &["class"],
+    struct_types: &[],
+    interface_types: &["module"],
+    enum_types: &[],
+    import_types: &["call"], // require/require_relative are call expressions
+    call_types: &["call", "method_call"],
+    type_alias_types: &[],
+    constant_types: &["assignment"], // ALLCAPS = ... — best-effort
+    variable_types: &["assignment"],
+    module_types: &["module"],
 };
 
 static GROOVY_CONFIG: LanguageConfig = LanguageConfig {

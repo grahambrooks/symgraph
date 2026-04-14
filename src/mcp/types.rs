@@ -15,6 +15,10 @@ pub struct ContextRequest {
 pub struct SearchRequest {
     #[schemars(description = "Symbol name or partial name to search for")]
     pub query: String,
+    #[schemars(
+        description = "If true, run semantic (bm25) search over identifier tokens + docstrings instead of prefix-only name search"
+    )]
+    pub semantic: Option<bool>,
 }
 
 /// Request for symbol-based tools (callers, callees, impact, node)
@@ -61,10 +65,32 @@ pub struct PathRequest {
 /// Request for diff impact tool
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct DiffImpactRequest {
-    #[schemars(description = "File path relative to project root")]
-    pub file_path: String,
-    #[schemars(description = "Start line of the change (1-indexed)")]
-    pub start_line: u32,
-    #[schemars(description = "End line of the change (1-indexed)")]
-    pub end_line: u32,
+    #[schemars(description = "File path relative to project root (optional when git_ref is set)")]
+    pub file_path: Option<String>,
+    #[schemars(description = "Start line of the change (1-indexed); ignored when git_ref is set")]
+    pub start_line: Option<u32>,
+    #[schemars(description = "End line of the change (1-indexed); ignored when git_ref is set")]
+    pub end_line: Option<u32>,
+    #[schemars(
+        description = "Optional git ref (commit, branch, or HEAD~N) to diff against working tree. Discovers changed files and line ranges automatically."
+    )]
+    pub git_ref: Option<String>,
+}
+
+/// Request for blame tool
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct BlameRequest {
+    #[schemars(description = "Symbol name to blame")]
+    pub symbol: String,
+}
+
+/// Request for churn tool
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct ChurnRequest {
+    #[schemars(
+        description = "Optional path filter (file or directory). If omitted, returns top churn across the project."
+    )]
+    pub path: Option<String>,
+    #[schemars(description = "How many days of history to scan (default: 90)")]
+    pub days: Option<u32>,
 }
