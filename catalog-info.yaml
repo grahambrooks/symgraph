@@ -19,7 +19,7 @@ metadata:
 spec:
   type: service
   lifecycle: production
-  owner: grahambrooks
+  owner: user:grahambrooks
   system: developer-tools
   providesApis:
     - symgraph-mcp-api
@@ -34,7 +34,7 @@ metadata:
 spec:
   type: grpc
   lifecycle: production
-  owner: grahambrooks
+  owner: user:grahambrooks
   definition: |
     MCP Tools:
       - symgraph-context: AI coding task context building
@@ -48,4 +48,3 @@ spec:
       - symgraph-node: Symbol metadata
       - symgraph-status: Index health status
       - symgraph-reindex: Refresh the index
-
