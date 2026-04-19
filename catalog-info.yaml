@@ -1,0 +1,51 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: symgraph
+  description: Semantic code intelligence MCP server - build knowledge graphs of codebases
+  annotations:
+    github.com/project-slug: grahambrooks/symgraph
+    backstage.io/techdocs-ref: dir:.
+  tags:
+    - rust
+    - mcp
+    - code-analysis
+    - tree-sitter
+    - semantic-search
+  links:
+    - url: https://github.com/grahambrooks/symgraph
+      title: GitHub Repository
+      icon: github
+spec:
+  type: service
+  lifecycle: production
+  owner: grahambrooks
+  system: developer-tools
+  providesApis:
+    - symgraph-mcp-api
+---
+apiVersion: backstage.io/v1alpha1
+kind: API
+metadata:
+  name: symgraph-mcp-api
+  description: MCP (Model Context Protocol) API for semantic code intelligence
+  tags:
+    - mcp
+spec:
+  type: grpc
+  lifecycle: production
+  owner: grahambrooks
+  definition: |
+    MCP Tools:
+      - symgraph-context: AI coding task context building
+      - symgraph-search: Find symbols by name
+      - symgraph-callers: Find callers of a symbol
+      - symgraph-callees: Find callees of a symbol
+      - symgraph-impact: Impact analysis for a symbol
+      - symgraph-definition: View source definition
+      - symgraph-file: List symbols in a file
+      - symgraph-references: Find all usages of a symbol
+      - symgraph-node: Symbol metadata
+      - symgraph-status: Index health status
+      - symgraph-reindex: Refresh the index
+
