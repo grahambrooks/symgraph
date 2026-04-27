@@ -48,7 +48,7 @@ pub struct DefinitionRequest {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ReindexRequest {
     #[schemars(
-        description = "Optional: specific files to reindex. If empty, reindexes all changed files."
+        description = "Optional: specific files to reindex. If omitted, rebuilds the full index via a shadow database."
     )]
     pub files: Option<Vec<String>>,
 }

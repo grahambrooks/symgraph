@@ -8,44 +8,63 @@
 
 mod schema;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
-use std::path::Path;
+use std::{
+    fs,
+    io::ErrorKind,
+    path::{Path, PathBuf},
+};
 
 use crate::types::{
     Edge, EdgeKind, FileRecord, IndexStats, Language, Node, NodeKind, UnresolvedReference,
     Visibility,
 };
 
+const CONNECTION_PRAGMAS: &str = "PRAGMA foreign_keys = ON; \
+             PRAGMA journal_mode = WAL; \
+             PRAGMA synchronous = NORMAL; \
+             PRAGMA cache_size = -64000;";
+
 /// Database handle for the code graph
 pub struct Database {
     conn: Connection,
+    path: Option<PathBuf>,
 }
 
 impl Database {
     /// Open or create a database at the given path
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let conn = Connection::open(path)?;
-        Self::from_connection(conn)
+        let path = path.as_ref().to_path_buf();
+        let conn = Connection::open(&path)?;
+        Self::from_connection(conn, Some(path))
     }
 
     /// Create an in-memory database (for testing)
     pub fn in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
-        Self::from_connection(conn)
+        Self::from_connection(conn, None)
     }
 
     /// Shared initialization: set PRAGMAs and create schema
-    fn from_connection(conn: Connection) -> Result<Self> {
-        conn.execute_batch(
-            "PRAGMA foreign_keys = ON; \
-             PRAGMA journal_mode = WAL; \
-             PRAGMA synchronous = NORMAL; \
-             PRAGMA cache_size = -64000;",
-        )?;
-        let db = Self { conn };
+    fn from_connection(conn: Connection, path: Option<PathBuf>) -> Result<Self> {
+        conn.execute_batch(CONNECTION_PRAGMAS)?;
+        let db = Self { conn, path };
         db.initialize()?;
         Ok(db)
+    }
+
+    /// Path to the on-disk database, if this handle is file-backed.
+    pub fn path(&self) -> Option<&Path> {
+        self.path.as_deref()
+    }
+
+    /// Close the underlying SQLite connection.
+    pub fn close(self) -> Result<()> {
+        match self.conn.close() {
+            Ok(()) => Ok(()),
+            Err((_conn, err)) => Err(err.into()),
+        }
     }
 
     /// Initialize the database schema and run additive migrations.
@@ -665,14 +684,57 @@ impl Database {
     // =========================================================================
 
     /// Insert multiple nodes using a single prepared statement.
-    /// Each node's `id` field is set to 0 before insertion (DB assigns the real id).
+    /// Each node's `id` field is updated to the database-assigned row id.
     /// Returns a map from old (extraction-time) id to new (database) id.
     pub fn insert_nodes_batch(
         &self,
         nodes: &mut [Node],
     ) -> Result<std::collections::HashMap<i64, i64>> {
+        let id_map = self.insert_nodes_base_batch(nodes)?;
+        self.insert_node_fts_rows(nodes)?;
+        self.insert_semantic_fts_rows(nodes)?;
+        Ok(id_map)
+    }
+
+    /// Insert multiple nodes without updating FTS tables.
+    /// Used by full shadow builds, which rebuild FTS once at the end.
+    pub fn insert_nodes_batch_without_fts(
+        &self,
+        nodes: &mut [Node],
+    ) -> Result<std::collections::HashMap<i64, i64>> {
+        self.insert_nodes_base_batch(nodes)
+    }
+
+    /// Rebuild both FTS indexes from the canonical `nodes` table.
+    pub fn rebuild_fts_indexes(&self) -> Result<()> {
+        self.conn
+            .execute_batch("INSERT INTO nodes_fts(nodes_fts) VALUES('rebuild');")
+            .context("rebuild_fts_indexes: nodes_fts")?;
+        self.conn
+            .execute("DELETE FROM nodes_semantic_fts", [])
+            .context("rebuild_fts_indexes: nodes_semantic_fts clear")?;
+
+        let mut select = self
+            .conn
+            .prepare_cached("SELECT * FROM nodes ORDER BY id")?;
+        let rows = select.query_map([], Self::row_to_node)?;
+        let mut insert = self
+            .conn
+            .prepare_cached("INSERT INTO nodes_semantic_fts(rowid, tokens) VALUES (?1, ?2)")?;
+        for node in rows {
+            let node = node?;
+            insert.execute(params![node.id, build_semantic_tokens(&node)])?;
+        }
+
+        self.optimize_fts()
+    }
+
+    fn insert_nodes_base_batch(
+        &self,
+        nodes: &mut [Node],
+    ) -> Result<std::collections::HashMap<i64, i64>> {
         let mut id_map = std::collections::HashMap::with_capacity(nodes.len());
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare_cached(
             r#"
             INSERT INTO nodes (
                 kind, name, qualified_name, file_path, start_line, end_line,
@@ -681,15 +743,8 @@ impl Database {
             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
             "#,
         )?;
-        let mut fts_stmt = self
-            .conn
-            .prepare("INSERT INTO nodes_fts(rowid, name, qualified_name) VALUES (?1, ?2, ?3)")?;
-        let mut sem_stmt = self
-            .conn
-            .prepare("INSERT INTO nodes_semantic_fts(rowid, tokens) VALUES (?1, ?2)")?;
         for node in nodes.iter_mut() {
             let old_id = node.id;
-            node.id = 0;
             stmt.execute(params![
                 node.kind.as_str(),
                 node.name,
@@ -710,12 +765,30 @@ impl Database {
                 node.language.as_str(),
             ])?;
             let new_id = self.conn.last_insert_rowid();
-            fts_stmt.execute(params![new_id, node.name, node.qualified_name])?;
-            let tokens = build_semantic_tokens(node);
-            sem_stmt.execute(params![new_id, tokens])?;
+            node.id = new_id;
             id_map.insert(old_id, new_id);
         }
         Ok(id_map)
+    }
+
+    fn insert_node_fts_rows(&self, nodes: &[Node]) -> Result<()> {
+        let mut stmt = self.conn.prepare_cached(
+            "INSERT INTO nodes_fts(rowid, name, qualified_name) VALUES (?1, ?2, ?3)",
+        )?;
+        for node in nodes {
+            stmt.execute(params![node.id, node.name, node.qualified_name])?;
+        }
+        Ok(())
+    }
+
+    fn insert_semantic_fts_rows(&self, nodes: &[Node]) -> Result<()> {
+        let mut stmt = self
+            .conn
+            .prepare_cached("INSERT INTO nodes_semantic_fts(rowid, tokens) VALUES (?1, ?2)")?;
+        for node in nodes {
+            stmt.execute(params![node.id, build_semantic_tokens(node)])?;
+        }
+        Ok(())
     }
 
     /// Insert multiple edges using a single prepared statement.
@@ -728,7 +801,7 @@ impl Database {
         id_map: &std::collections::HashMap<i64, i64>,
     ) -> Result<u64> {
         let mut count: u64 = 0;
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare_cached(
             r#"
             INSERT INTO edges (source_id, target_id, kind, file_path, line, column)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -762,7 +835,7 @@ impl Database {
         refs: &mut [UnresolvedReference],
         id_map: &std::collections::HashMap<i64, i64>,
     ) -> Result<()> {
-        let mut stmt = self.conn.prepare(
+        let mut stmt = self.conn.prepare_cached(
             r#"
             INSERT INTO unresolved_refs (source_node_id, reference_name, kind, file_path, line, column)
             VALUES (?1, ?2, ?3, ?4, ?5, ?6)
@@ -851,21 +924,130 @@ impl Database {
         })
     }
 
-    /// Begin a transaction
-    pub fn begin_transaction(&mut self) -> Result<()> {
-        self.conn.execute("BEGIN TRANSACTION", [])?;
+    /// Disable FTS5 automerge on both search tables before a bulk insert.
+    /// Prevents per-insert segment merges; call `optimize_fts` when done.
+    ///
+    /// Note: FTS5 configuration commands like `automerge` require the
+    /// two-column form `INSERT INTO ft(ft, rank) VALUES('option', value)`.
+    /// The single-column form `VALUES('automerge=0')` is only for parameterless
+    /// maintenance commands (`optimize`, `rebuild`, `delete-all`, etc.).
+    pub fn disable_fts_automerge(&self) -> Result<()> {
+        use anyhow::Context;
+        self.conn
+            .execute(
+                "INSERT INTO nodes_fts(nodes_fts, rank) VALUES('automerge', 0)",
+                [],
+            )
+            .context("disable_fts_automerge: nodes_fts")?;
+        self.conn
+            .execute(
+                "INSERT INTO nodes_semantic_fts(nodes_semantic_fts, rank) VALUES('automerge', 0)",
+                [],
+            )
+            .context("disable_fts_automerge: nodes_semantic_fts")?;
         Ok(())
     }
 
-    /// Commit a transaction
-    pub fn commit(&mut self) -> Result<()> {
-        self.conn.execute("COMMIT", [])?;
+    /// Merge all FTS5 segments into one after a bulk insert.
+    /// Much faster than the incremental per-insert merges that `automerge=8`
+    /// (the default) would have done.
+    pub fn optimize_fts(&self) -> Result<()> {
+        use anyhow::Context;
+        self.conn
+            .execute_batch("INSERT INTO nodes_fts(nodes_fts) VALUES('optimize');")
+            .context("optimize_fts: nodes_fts")?;
+        self.conn
+            .execute_batch("INSERT INTO nodes_semantic_fts(nodes_semantic_fts) VALUES('optimize');")
+            .context("optimize_fts: nodes_semantic_fts")?;
         Ok(())
+    }
+
+    /// Begin a transaction
+    pub fn begin_transaction(&mut self) -> Result<()> {
+        use anyhow::Context;
+        self.conn
+            .execute("BEGIN TRANSACTION", [])
+            .context("begin_transaction")?;
+        Ok(())
+    }
+
+    /// Commit a transaction without checkpointing the WAL.
+    pub fn commit_transaction(&mut self) -> Result<()> {
+        self.conn.execute("COMMIT", []).context("commit: COMMIT")?;
+        Ok(())
+    }
+
+    /// Checkpoint the WAL and truncate it so the database file stays compact.
+    pub fn checkpoint_wal_truncate(&self) -> Result<()> {
+        self.conn
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE)")
+            .context("wal_checkpoint")?;
+        Ok(())
+    }
+
+    /// Commit a transaction and checkpoint the WAL so the file stays compact.
+    pub fn commit(&mut self) -> Result<()> {
+        self.commit_transaction()?;
+        self.checkpoint_wal_truncate()
     }
 
     /// Rollback a transaction
     pub fn rollback(&mut self) -> Result<()> {
-        self.conn.execute("ROLLBACK", [])?;
+        self.conn.execute("ROLLBACK", []).context("rollback")?;
+        Ok(())
+    }
+
+    /// Flush a shadow database to disk and close it before an atomic swap.
+    pub fn prepare_for_swap(self) -> Result<PathBuf> {
+        let path = self
+            .path
+            .clone()
+            .context("prepare_for_swap requires an on-disk database")?;
+        self.checkpoint_wal_truncate()?;
+        self.close()?;
+        cleanup_sqlite_sidecars(&path)?;
+        Ok(path)
+    }
+
+    /// Atomically replace this on-disk database file with a prepared shadow database.
+    pub fn replace_with_shadow<P: AsRef<Path>>(&mut self, shadow_path: P) -> Result<()> {
+        let live_path = self
+            .path
+            .clone()
+            .context("replace_with_shadow requires an on-disk database")?;
+        let shadow_path = shadow_path.as_ref().to_path_buf();
+
+        self.checkpoint_wal_truncate()?;
+
+        let placeholder = Connection::open_in_memory().context("opening placeholder connection")?;
+        let live_conn = std::mem::replace(&mut self.conn, placeholder);
+        if let Err((conn, err)) = live_conn.close() {
+            self.conn = conn;
+            return Err(err.into());
+        }
+
+        cleanup_sqlite_sidecars(&live_path)?;
+
+        if let Err(err) = fs::rename(&shadow_path, &live_path) {
+            self.reopen_from_path(&live_path)?;
+            return Err(err.into());
+        }
+
+        cleanup_sqlite_sidecars(&shadow_path)?;
+        self.reopen_from_path(&live_path)
+    }
+
+    /// Delete a database file and any SQLite sidecars if they exist.
+    pub fn cleanup_on_disk_path<P: AsRef<Path>>(path: P) -> Result<()> {
+        let path = path.as_ref();
+        remove_file_if_exists(path)?;
+        cleanup_sqlite_sidecars(path)
+    }
+
+    fn reopen_from_path(&mut self, path: &Path) -> Result<()> {
+        let reopened = Self::open(path)?;
+        self.conn = reopened.conn;
+        self.path = reopened.path;
         Ok(())
     }
 
@@ -1133,9 +1315,32 @@ fn normalize_query_for_fts(query: &str) -> String {
         .join(" ")
 }
 
+fn sqlite_sidecar_paths(path: &Path) -> [PathBuf; 2] {
+    [
+        PathBuf::from(format!("{}-wal", path.display())),
+        PathBuf::from(format!("{}-shm", path.display())),
+    ]
+}
+
+fn cleanup_sqlite_sidecars(path: &Path) -> Result<()> {
+    for sidecar in sqlite_sidecar_paths(path) {
+        remove_file_if_exists(&sidecar)?;
+    }
+    Ok(())
+}
+
+fn remove_file_if_exists(path: &Path) -> Result<()> {
+    match fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err.into()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     fn create_test_node(name: &str, kind: NodeKind, file_path: &str) -> Node {
         Node {
@@ -1177,6 +1382,15 @@ mod tests {
     fn test_in_memory_database_creation() {
         let db = Database::in_memory();
         assert!(db.is_ok());
+    }
+
+    #[test]
+    fn test_open_tracks_on_disk_path() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("tracked.db");
+
+        let db = Database::open(&path).unwrap();
+        assert_eq!(db.path(), Some(path.as_path()));
     }
 
     #[test]
@@ -1701,6 +1915,93 @@ mod tests {
 
         let stats = db.get_stats().unwrap();
         assert_eq!(stats.total_nodes, 0);
+    }
+
+    #[test]
+    fn test_prepare_for_swap_cleans_sidecars() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("shadow.db");
+        let db = Database::open(&path).unwrap();
+        let file = mk_file("shadow.rs");
+
+        db.insert_or_update_file(&file).unwrap();
+        db.insert_node(&create_test_node(
+            "shadow_fn",
+            NodeKind::Function,
+            "shadow.rs",
+        ))
+        .unwrap();
+
+        let prepared_path = db.prepare_for_swap().unwrap();
+        assert_eq!(prepared_path, path);
+        assert!(prepared_path.exists());
+        assert!(!PathBuf::from(format!("{}-wal", prepared_path.display())).exists());
+        assert!(!PathBuf::from(format!("{}-shm", prepared_path.display())).exists());
+    }
+
+    #[test]
+    fn test_replace_with_shadow_reopens_new_contents() {
+        let dir = tempdir().unwrap();
+        let live_path = dir.path().join("live.db");
+        let shadow_path = dir.path().join("shadow.db");
+
+        let mut live = Database::open(&live_path).unwrap();
+        let old_file = mk_file("old.rs");
+        live.insert_or_update_file(&old_file).unwrap();
+        live.insert_node(&create_test_node("old_fn", NodeKind::Function, "old.rs"))
+            .unwrap();
+
+        let shadow = Database::open(&shadow_path).unwrap();
+        let new_file = mk_file("new.rs");
+        shadow.insert_or_update_file(&new_file).unwrap();
+        shadow
+            .insert_node(&create_test_node("new_fn", NodeKind::Function, "new.rs"))
+            .unwrap();
+
+        let prepared_shadow = shadow.prepare_for_swap().unwrap();
+        live.replace_with_shadow(&prepared_shadow).unwrap();
+
+        assert_eq!(live.path(), Some(live_path.as_path()));
+        assert!(live.find_node_by_name("old_fn").unwrap().is_none());
+        assert!(live.find_node_by_name("new_fn").unwrap().is_some());
+        assert!(live.get_file("old.rs").unwrap().is_none());
+        assert!(live.get_file("new.rs").unwrap().is_some());
+        assert!(!prepared_shadow.exists());
+    }
+
+    #[test]
+    fn test_cleanup_on_disk_path_removes_db_and_sidecars() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("cleanup.db");
+
+        std::fs::write(&path, b"db").unwrap();
+        std::fs::write(format!("{}-wal", path.display()), b"wal").unwrap();
+        std::fs::write(format!("{}-shm", path.display()), b"shm").unwrap();
+
+        Database::cleanup_on_disk_path(&path).unwrap();
+
+        assert!(!path.exists());
+        assert!(!PathBuf::from(format!("{}-wal", path.display())).exists());
+        assert!(!PathBuf::from(format!("{}-shm", path.display())).exists());
+    }
+
+    #[test]
+    fn test_rebuild_fts_indexes_restores_search() {
+        let db = Database::in_memory().unwrap();
+        let file = mk_file("auth.rs");
+        db.insert_or_update_file(&file).unwrap();
+
+        let mut node = create_test_node("validateToken", NodeKind::Function, "auth.rs");
+        node.docstring = Some("Validate JWT bearer token".to_string());
+        db.insert_nodes_batch_without_fts(&mut [node]).unwrap();
+
+        assert!(db.semantic_search("jwt bearer", 10).unwrap().is_empty());
+
+        db.disable_fts_automerge().unwrap();
+        db.rebuild_fts_indexes().unwrap();
+
+        let hits = db.semantic_search("jwt bearer", 10).unwrap();
+        assert!(hits.iter().any(|n| n.name == "validateToken"));
     }
 
     #[test]

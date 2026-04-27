@@ -5,9 +5,11 @@ use tracing::info;
 
 use crate::context::{format_context_markdown, ContextBuilder, ContextOptions};
 use crate::db::Database;
-use crate::{index_codebase, IndexConfig};
+use crate::IndexConfig;
 
-use super::db_utils::{canonicalize_path, database_path, open_project_database};
+use super::db_utils::{
+    canonicalize_path, database_path, open_project_database, rebuild_project_database,
+};
 
 /// Index a codebase at the given path
 pub fn index_command(path: &str) -> Result<()> {
@@ -16,11 +18,11 @@ pub fn index_command(path: &str) -> Result<()> {
 
     let config = IndexConfig {
         root: project_root.clone(),
+        show_progress: true,
         ..Default::default()
     };
 
-    let stats = index_codebase(&mut db, &config)?;
-
+    let stats = rebuild_project_database(&mut db, &config)?;
     println!("\nIndexing complete!");
     println!("  Files indexed: {}", stats.files);
     println!("  Symbols found: {}", stats.nodes);

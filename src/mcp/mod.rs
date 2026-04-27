@@ -200,10 +200,10 @@ impl SymgraphHandler {
         self.with_db(|db| handlers::symbol::handle_references(db, &req))
     }
 
-    /// Trigger incremental reindexing (runs in background, returns immediately)
+    /// Trigger background reindexing (runs in background, returns immediately)
     #[tool(
         name = "symgraph-reindex",
-        description = "Trigger incremental reindexing of the codebase. Only changed files are re-parsed. Runs in background and returns immediately."
+        description = "Trigger reindexing of the codebase. When files are provided, only those files are updated in place; otherwise a full shadow rebuild runs in the background."
     )]
     fn symgraph_reindex(&self, Parameters(req): Parameters<ReindexRequest>) -> String {
         // If a reindex is already running, refuse to start another one.
@@ -241,7 +241,7 @@ impl SymgraphHandler {
                 n
             ),
             None => {
-                "Reindexing all changed files in background. Use symgraph-status to check progress."
+                "Rebuilding the full index in background. Use symgraph-status to check progress."
                     .to_string()
             }
         }
