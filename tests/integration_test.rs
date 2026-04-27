@@ -2,10 +2,14 @@
 //!
 //! These tests verify the end-to-end workflow of indexing and querying code.
 
+use std::fs;
+
+use symgraph::cli::{open_project_database, rebuild_project_database};
 use symgraph::db::Database;
 use symgraph::extraction::Extractor;
 use symgraph::graph::Graph;
 use symgraph::types::{EdgeKind, FileRecord, Language, NodeKind};
+use symgraph::{build_full_index, index_codebase, IndexConfig};
 use tempfile::tempdir;
 
 /// Helper to set up a test database with indexed code
@@ -269,6 +273,85 @@ fn test_database_persistence() {
         let file = db.get_file("test.rs").unwrap();
         assert!(file.is_some());
     }
+}
+
+#[test]
+fn test_build_full_index_populates_empty_target_db() {
+    let dir = tempdir().unwrap();
+    let src = dir.path().join("src");
+    fs::create_dir(&src).unwrap();
+    fs::write(
+        src.join("main.rs"),
+        "fn main() { helper(); }\nfn helper() {}\n",
+    )
+    .unwrap();
+
+    let db_path = dir.path().join("full-build.db");
+    let mut db = Database::open(&db_path).unwrap();
+    let config = IndexConfig {
+        root: dir.path().display().to_string(),
+        ..Default::default()
+    };
+
+    let stats = build_full_index(&mut db, &config).unwrap();
+
+    assert_eq!(stats.files, 1);
+    assert_eq!(stats.skipped, 0);
+    assert!(stats.nodes >= 2);
+    assert!(db.find_node_by_name("main").unwrap().is_some());
+    assert!(db.find_node_by_name("helper").unwrap().is_some());
+    assert!(!db.semantic_search("helper", 10).unwrap().is_empty());
+}
+
+#[test]
+fn test_rebuild_project_database_replaces_stale_rows() {
+    let dir = tempdir().unwrap();
+    let src = dir.path().join("src");
+    fs::create_dir(&src).unwrap();
+    fs::write(src.join("old.rs"), "fn old_symbol() {}\n").unwrap();
+
+    let project_root = dir.path().display().to_string();
+    let mut db = open_project_database(&project_root).unwrap();
+    let config = IndexConfig {
+        root: project_root.clone(),
+        ..Default::default()
+    };
+
+    rebuild_project_database(&mut db, &config).unwrap();
+    assert!(db.find_node_by_name("old_symbol").unwrap().is_some());
+
+    fs::remove_file(src.join("old.rs")).unwrap();
+    fs::write(src.join("new.rs"), "fn new_symbol() {}\n").unwrap();
+
+    rebuild_project_database(&mut db, &config).unwrap();
+
+    assert!(db.find_node_by_name("old_symbol").unwrap().is_none());
+    assert!(db.find_node_by_name("new_symbol").unwrap().is_some());
+    assert_eq!(db.get_stats().unwrap().total_files, 1);
+}
+
+#[test]
+fn test_rebuild_project_database_keeps_live_db_on_failure() {
+    let dir = tempdir().unwrap();
+    let src = dir.path().join("src");
+    fs::create_dir(&src).unwrap();
+    fs::write(src.join("live.rs"), "fn live_symbol() {}\n").unwrap();
+
+    let project_root = dir.path().display().to_string();
+    let mut db = open_project_database(&project_root).unwrap();
+    let good_config = IndexConfig {
+        root: project_root.clone(),
+        ..Default::default()
+    };
+    rebuild_project_database(&mut db, &good_config).unwrap();
+
+    let bad_config = IndexConfig {
+        root: src.join("live.rs").display().to_string(),
+        ..Default::default()
+    };
+    assert!(rebuild_project_database(&mut db, &bad_config).is_err());
+
+    assert!(db.find_node_by_name("live_symbol").unwrap().is_some());
 }
 
 #[test]
@@ -666,4 +749,36 @@ fn test_search_performance() {
         "Search took too long: {:?}",
         duration
     );
+}
+
+/// Stress test: exercise the periodic-commit / WAL-checkpoint branch for
+/// in-place incremental indexing by crossing CHECKPOINT_INTERVAL (200).
+/// Uses an on-disk database to mirror the write path that still batches
+/// commits mid-loop.
+#[test]
+fn test_incremental_index_codebase_periodic_checkpoint() {
+    let dir = tempdir().unwrap();
+    let src = dir.path().join("src");
+    fs::create_dir(&src).unwrap();
+
+    // 250 small Rust files — enough to cross the 200-file checkpoint boundary.
+    for i in 0..250 {
+        let path = src.join(format!("mod_{:03}.rs", i));
+        let body = format!(
+            "pub fn handler_{i}() {{ helper_{i}(); }}\nfn helper_{i}() {{}}\n",
+            i = i
+        );
+        fs::write(&path, body).unwrap();
+    }
+
+    let db_path = dir.path().join("symgraph.db");
+    let mut db = Database::open(&db_path).unwrap();
+    let config = IndexConfig {
+        root: dir.path().display().to_string(),
+        ..Default::default()
+    };
+
+    let stats = index_codebase(&mut db, &config).expect("index_codebase failed");
+    assert_eq!(stats.files, 250);
+    assert!(stats.nodes >= 500);
 }

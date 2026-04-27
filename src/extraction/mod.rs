@@ -159,32 +159,47 @@ struct ExtractionContext<'a> {
 }
 
 impl<'a> ExtractionContext<'a> {
-    fn traverse_node(&mut self, node: tree_sitter::Node) {
-        let node_type = node.kind();
+    fn traverse_node<'tree>(&mut self, root: tree_sitter::Node<'tree>) {
+        enum Work<'t> {
+            Visit(tree_sitter::Node<'t>),
+            PopStack,
+        }
 
-        // Check if this is a symbol we care about
-        if let Some(kind) = self.config.node_type_to_kind(node_type) {
-            self.extract_symbol(node, kind);
-        } else {
-            // Continue traversing children
+        fn push_children<'t>(node: tree_sitter::Node<'t>, work: &mut Vec<Work<'t>>) {
             let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                self.traverse_node(child);
+            let children: Vec<_> = node.children(&mut cursor).collect();
+            for child in children.into_iter().rev() {
+                work.push(Work::Visit(child));
+            }
+        }
+
+        let mut work: Vec<Work<'tree>> = vec![Work::Visit(root)];
+
+        while let Some(item) = work.pop() {
+            match item {
+                Work::PopStack => {
+                    self.node_stack.pop();
+                }
+                Work::Visit(node) => {
+                    let node_type = node.kind();
+                    if let Some(kind) = self.config.node_type_to_kind(node_type) {
+                        let name = self.extract_name(&node, kind);
+                        if name.is_empty() {
+                            push_children(node, &mut work);
+                        } else {
+                            self.emit_symbol(node, kind, name);
+                            work.push(Work::PopStack);
+                            push_children(node, &mut work);
+                        }
+                    } else {
+                        push_children(node, &mut work);
+                    }
+                }
             }
         }
     }
 
-    fn extract_symbol(&mut self, node: tree_sitter::Node, kind: NodeKind) {
-        let name = self.extract_name(&node, kind);
-        if name.is_empty() {
-            // Skip anonymous nodes
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                self.traverse_node(child);
-            }
-            return;
-        }
-
+    fn emit_symbol(&mut self, node: tree_sitter::Node, kind: NodeKind, name: String) {
         let start = node.start_position();
         let end = node.end_position();
 
@@ -214,7 +229,6 @@ impl<'a> ExtractionContext<'a> {
         self.next_id += 1;
         self.result.nodes.push(symbol);
 
-        // Create contains edge from parent
         if let Some(&parent_id) = self.node_stack.last() {
             let edge = Edge {
                 id: 0,
@@ -228,19 +242,8 @@ impl<'a> ExtractionContext<'a> {
             self.result.edges.push(edge);
         }
 
-        // Push this symbol onto the stack and traverse children
         self.node_stack.push(symbol_id);
-
-        // Extract function calls and other references from body
-        self.extract_references(&node, symbol_id);
-
-        // Traverse children for nested definitions
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.traverse_node(child);
-        }
-
-        self.node_stack.pop();
+        self.find_calls(node, symbol_id);
     }
 
     fn extract_name(&self, node: &tree_sitter::Node, _kind: NodeKind) -> String {
@@ -282,7 +285,11 @@ impl<'a> ExtractionContext<'a> {
                 // Truncate at opening brace or newline
                 let sig = sig.split('{').next().unwrap_or(sig).trim();
                 if sig.len() > 200 {
-                    Some(format!("{}...", &sig[..200]))
+                    let boundary = (0..=200)
+                        .rev()
+                        .find(|&i| sig.is_char_boundary(i))
+                        .unwrap_or(0);
+                    Some(format!("{}...", &sig[..boundary]))
                 } else {
                     Some(sig.to_string())
                 }
@@ -481,33 +488,27 @@ impl<'a> ExtractionContext<'a> {
         Some(parts.join("::"))
     }
 
-    fn extract_references(&mut self, node: &tree_sitter::Node, source_id: i64) {
-        // Find call expressions within this node
-        self.find_calls(node, source_id);
-    }
-
-    fn find_calls(&mut self, node: &tree_sitter::Node, source_id: i64) {
-        let kind = node.kind();
-
-        if self.config.is_call_node(kind) {
-            if let Some(func_name) = self.extract_call_name(node) {
-                let start = node.start_position();
-                let uref = UnresolvedReference {
-                    source_node_id: source_id,
-                    reference_name: func_name,
-                    kind: EdgeKind::Calls,
-                    file_path: self.file_path.clone(),
-                    line: start.row as u32 + 1,
-                    column: start.column as u32,
-                };
-                self.result.unresolved_refs.push(uref);
+    fn find_calls<'tree>(&mut self, root: tree_sitter::Node<'tree>, source_id: i64) {
+        let mut stack: Vec<tree_sitter::Node<'tree>> = vec![root];
+        while let Some(node) = stack.pop() {
+            if self.config.is_call_node(node.kind()) {
+                if let Some(func_name) = self.extract_call_name(&node) {
+                    let start = node.start_position();
+                    self.result.unresolved_refs.push(UnresolvedReference {
+                        source_node_id: source_id,
+                        reference_name: func_name,
+                        kind: EdgeKind::Calls,
+                        file_path: self.file_path.clone(),
+                        line: start.row as u32 + 1,
+                        column: start.column as u32,
+                    });
+                }
             }
-        }
-
-        // Recurse into children
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.find_calls(&child, source_id);
+            let mut cursor = node.walk();
+            let children: Vec<_> = node.children(&mut cursor).collect();
+            for child in children.into_iter().rev() {
+                stack.push(child);
+            }
         }
     }
 
@@ -1256,6 +1257,29 @@ end
         ));
         assert!(is_generated_content("# @generated\nclass Foo:\n    pass\n"));
         assert!(!is_generated_content("fn foo() { 1 + 1 }"));
+    }
+
+    #[test]
+    fn test_deeply_nested_does_not_overflow() {
+        // Regression test: the old recursive traverse_node would stack-overflow
+        // on ASTs deeper than ~500 levels. The iterative rewrite must handle this.
+        let mut extractor = Extractor::new();
+        let depth = 500usize;
+        let mut code = String::new();
+        for i in 0..depth {
+            code.push_str(&format!("fn f{}(){{", i));
+        }
+        code.push_str(&"}".repeat(depth));
+        let result = extractor.extract_file("deep.rs", &code);
+        assert!(result.errors.is_empty());
+        assert_eq!(
+            result
+                .nodes
+                .iter()
+                .filter(|n| n.kind == NodeKind::Function)
+                .count(),
+            depth
+        );
     }
 
     #[test]

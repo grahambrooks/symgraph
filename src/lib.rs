@@ -41,6 +41,11 @@ use std::time::SystemTime;
 
 use anyhow::Result;
 use ignore::WalkBuilder;
+use indicatif::{ProgressBar, ProgressStyle};
+
+/// Commit and checkpoint the WAL after this many files during bulk indexing.
+/// Keeps WAL size bounded without requiring a single massive transaction.
+const CHECKPOINT_INTERVAL: usize = 200;
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use tracing::{debug, info, warn};
@@ -63,6 +68,8 @@ pub struct IndexConfig {
     pub respect_gitignore: bool,
     /// Skip the global resolve_references pass (for scoped resolution)
     pub skip_resolve: bool,
+    /// Render progress bars to stderr during indexing (disable for library/server use)
+    pub show_progress: bool,
 }
 
 impl Default for IndexConfig {
@@ -103,6 +110,7 @@ impl Default for IndexConfig {
             ],
             respect_gitignore: true,
             skip_resolve: false,
+            show_progress: false,
         }
     }
 }
@@ -124,24 +132,76 @@ struct ExtractedFile {
     result: ExtractionResult,
 }
 
-/// Index a codebase into the database
+/// Indexing behavior for a storage target.
+#[cfg(feature = "sqlite")]
+#[derive(Clone, Copy)]
+enum IndexMode {
+    Incremental,
+    FullBuild,
+}
+
+/// Incrementally index only changed files into an existing database.
 #[cfg(feature = "sqlite")]
 pub fn index_codebase(db: &mut Database, config: &IndexConfig) -> Result<IndexingStats> {
+    run_index_codebase(db, config, IndexMode::Incremental)
+}
+
+/// Build a complete index into an empty target database.
+#[cfg(feature = "sqlite")]
+pub fn build_full_index(db: &mut Database, config: &IndexConfig) -> Result<IndexingStats> {
+    run_index_codebase(db, config, IndexMode::FullBuild)
+}
+
+#[cfg(feature = "sqlite")]
+fn run_index_codebase(
+    db: &mut Database,
+    config: &IndexConfig,
+    mode: IndexMode,
+) -> Result<IndexingStats> {
     let root = Path::new(&config.root).canonicalize()?;
     info!("Indexing codebase at {}", root.display());
 
     let mut stats = IndexingStats::default();
+    let entries_to_extract = collect_entries(db, config, &root, mode, &mut stats)?;
+    let extracted = extract_entries(entries_to_extract, config.show_progress);
 
-    // Build the walker
-    let mut walker = WalkBuilder::new(&root);
+    match mode {
+        IndexMode::Incremental => store_incremental_index(db, config, extracted, &mut stats)?,
+        IndexMode::FullBuild => store_full_index(db, config, extracted, &mut stats)?,
+    }
+
+    info!(
+        "Indexed {} files, {} nodes, {} edges ({} refs resolved)",
+        stats.files, stats.nodes, stats.edges, stats.resolved_refs
+    );
+
+    Ok(stats)
+}
+
+#[cfg(feature = "sqlite")]
+fn collect_entries(
+    db: &Database,
+    config: &IndexConfig,
+    root: &Path,
+    mode: IndexMode,
+    stats: &mut IndexingStats,
+) -> Result<Vec<FileEntry>> {
+    let mut walker = WalkBuilder::new(root);
     walker
         .hidden(false)
         .git_ignore(config.respect_gitignore)
         .git_global(config.respect_gitignore)
         .git_exclude(config.respect_gitignore);
 
-    // Phase 1a: Sequentially walk directory, read files, compute hashes, check reindex need
-    let mut entries_to_extract: Vec<FileEntry> = Vec::new();
+    let mut entries_to_extract = Vec::new();
+    let scan_pb = if config.show_progress {
+        let pb = ProgressBar::new_spinner();
+        pb.set_prefix("Scanning");
+        pb.enable_steady_tick(std::time::Duration::from_millis(100));
+        pb
+    } else {
+        ProgressBar::hidden()
+    };
 
     for entry in walker.build() {
         let entry = match entry {
@@ -153,26 +213,21 @@ pub fn index_codebase(db: &mut Database, config: &IndexConfig) -> Result<Indexin
         };
 
         let path = entry.path();
-
-        // Skip directories
         if !path.is_file() {
             continue;
         }
 
-        // Check if this is a manifest file (detected by filename)
         let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         let is_manifest = extraction::manifest::is_manifest_file(filename);
 
-        // Check extension
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         if !is_manifest
             && !config.extensions.is_empty()
-            && !config.extensions.iter().any(|e| e == ext)
+            && !config.extensions.iter().any(|allowed| allowed == ext)
         {
             continue;
         }
 
-        // Check if language is supported (manifest files use their ecosystem language)
         let language = if is_manifest {
             extraction::manifest::manifest_language(filename)
         } else {
@@ -182,17 +237,15 @@ pub fn index_codebase(db: &mut Database, config: &IndexConfig) -> Result<Indexin
             continue;
         }
 
-        // Check excluded directories
-        if path.components().any(|c| {
+        if path.components().any(|component| {
             config
                 .exclude_dirs
                 .iter()
-                .any(|d| c.as_os_str() == d.as_str())
+                .any(|dir| component.as_os_str() == dir.as_str())
         }) {
             continue;
         }
 
-        // Read file content
         let content = match std::fs::read_to_string(path) {
             Ok(c) => c,
             Err(err) => {
@@ -202,20 +255,17 @@ pub fn index_codebase(db: &mut Database, config: &IndexConfig) -> Result<Indexin
             }
         };
 
-        // Compute content hash
         let mut hasher = Sha256::new();
         hasher.update(content.as_bytes());
         let content_hash = hex::encode(hasher.finalize());
 
-        // Get relative path
         let rel_path = path
-            .strip_prefix(&root)
+            .strip_prefix(root)
             .unwrap_or(path)
             .display()
             .to_string();
 
-        // Check if file needs reindexing (requires DB access, done sequentially)
-        if !db.needs_reindex(&rel_path, &content_hash)? {
+        if matches!(mode, IndexMode::Incremental) && !db.needs_reindex(&rel_path, &content_hash)? {
             debug!("Skipping unchanged file: {}", rel_path);
             stats.skipped += 1;
             continue;
@@ -229,6 +279,7 @@ pub fn index_codebase(db: &mut Database, config: &IndexConfig) -> Result<Indexin
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
 
+        scan_pb.set_message(format!("{} files queued", entries_to_extract.len() + 1));
         entries_to_extract.push(FileEntry {
             rel_path,
             content,
@@ -238,79 +289,192 @@ pub fn index_codebase(db: &mut Database, config: &IndexConfig) -> Result<Indexin
         });
     }
 
-    // Phase 1b: Parallel tree-sitter extraction using rayon
-    // Each thread creates its own Extractor (Parser is not Send)
+    scan_pb.finish_and_clear();
+    Ok(entries_to_extract)
+}
+
+#[cfg(feature = "sqlite")]
+fn extract_entries(entries_to_extract: Vec<FileEntry>, show_progress: bool) -> Vec<ExtractedFile> {
+    let parse_pb = if show_progress {
+        let pb = ProgressBar::new(entries_to_extract.len() as u64);
+        pb.set_style(
+            ProgressStyle::with_template(
+                "  {prefix:<10} [{bar:40.cyan/blue}] {pos:>5}/{len:<5} {msg}",
+            )
+            .unwrap()
+            .progress_chars("=> "),
+        );
+        pb.set_prefix("Parsing");
+        pb
+    } else {
+        ProgressBar::hidden()
+    };
+
     let extracted: Vec<ExtractedFile> = entries_to_extract
         .into_par_iter()
         .map(|entry| {
             let mut extractor = Extractor::new();
             let result = extractor.extract_file(&entry.rel_path, &entry.content);
+            parse_pb.inc(1);
             ExtractedFile { entry, result }
         })
         .collect();
+    parse_pb.finish_and_clear();
+    extracted
+}
 
-    // Phase 2: Sequential database operations inside a transaction
+#[cfg(feature = "sqlite")]
+fn store_incremental_index(
+    db: &mut Database,
+    config: &IndexConfig,
+    extracted: Vec<ExtractedFile>,
+    stats: &mut IndexingStats,
+) -> Result<()> {
+    let total = extracted.len();
+    db.begin_transaction()?;
+    db.disable_fts_automerge()?;
+
+    let store_pb = make_store_progress_bar(total, config.show_progress);
+    for (i, extracted_file) in extracted.into_iter().enumerate() {
+        store_extracted_file(db, extracted_file, stats, true, true)?;
+        store_pb.inc(1);
+
+        let is_last = i + 1 == total;
+        if (i + 1) % CHECKPOINT_INTERVAL == 0 && !is_last {
+            db.commit()?;
+            db.begin_transaction()?;
+        }
+    }
+    store_pb.finish_and_clear();
+
+    db.optimize_fts()?;
+    resolve_references_if_needed(db, config, stats)?;
+    db.commit()?;
+    Ok(())
+}
+
+#[cfg(feature = "sqlite")]
+fn store_full_index(
+    db: &mut Database,
+    config: &IndexConfig,
+    extracted: Vec<ExtractedFile>,
+    stats: &mut IndexingStats,
+) -> Result<()> {
     db.begin_transaction()?;
 
+    let store_pb = make_store_progress_bar(extracted.len(), config.show_progress);
     for extracted_file in extracted {
-        let entry = extracted_file.entry;
-        let result = extracted_file.result;
+        store_extracted_file(db, extracted_file, stats, false, false)?;
+        store_pb.inc(1);
+    }
+    store_pb.finish_and_clear();
 
-        debug!("Indexing: {}", entry.rel_path);
+    resolve_references_if_needed(db, config, stats)?;
+    db.disable_fts_automerge()?;
+    db.rebuild_fts_indexes()?;
+    db.commit_transaction()?;
+    Ok(())
+}
 
-        // Delete existing data for this file
+#[cfg(feature = "sqlite")]
+fn make_store_progress_bar(total: usize, show_progress: bool) -> ProgressBar {
+    if show_progress {
+        let pb = ProgressBar::new(total as u64);
+        pb.set_style(
+            ProgressStyle::with_template(
+                "  {prefix:<10} [{bar:40.cyan/blue}] {pos:>5}/{len:<5} {msg}",
+            )
+            .unwrap()
+            .progress_chars("=> "),
+        );
+        pb.set_prefix("Storing");
+        pb
+    } else {
+        ProgressBar::hidden()
+    }
+}
+
+#[cfg(feature = "sqlite")]
+fn store_extracted_file(
+    db: &Database,
+    extracted_file: ExtractedFile,
+    stats: &mut IndexingStats,
+    delete_existing: bool,
+    maintain_fts: bool,
+) -> Result<()> {
+    let entry = extracted_file.entry;
+    let result = extracted_file.result;
+
+    debug!("Indexing: {}", entry.rel_path);
+    if delete_existing {
         db.delete_file(&entry.rel_path)?;
-
-        // Store file record FIRST (nodes have FK to files)
-        let file_record = FileRecord {
-            path: entry.rel_path.clone(),
-            content_hash: entry.content_hash,
-            language: entry.language,
-            size: entry.content.len() as u64,
-            modified_at: entry.modified_at,
-            indexed_at: SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .map(|d| d.as_secs() as i64)
-                .unwrap_or(0),
-            node_count: result.nodes.len() as u32,
-        };
-        db.insert_or_update_file(&file_record)?;
-
-        // Store nodes (batch: prepare statement once, reuse for all rows)
-        let node_count = file_record.node_count;
-        let mut nodes = result.nodes;
-        let id_map = db.insert_nodes_batch(&mut nodes)?;
-
-        // Store edges with mapped IDs (batch)
-        let mut edges = result.edges;
-        let edge_count = db.insert_edges_batch(&mut edges, &id_map)?;
-        stats.edges += edge_count;
-
-        // Store unresolved references with mapped IDs (batch)
-        let mut unresolved_refs = result.unresolved_refs;
-        db.insert_unresolved_refs_batch(&mut unresolved_refs, &id_map)?;
-
-        stats.files += 1;
-        stats.nodes += node_count as u64;
-        stats.errors += result.errors.len() as u64;
     }
 
-    // Resolve references (unless caller will handle scoped resolution)
-    if !config.skip_resolve {
-        info!("Resolving references...");
-        let resolved = db.resolve_references()?;
-        stats.resolved_refs = resolved as u64;
+    let file_record = build_file_record(&entry, result.nodes.len());
+    let node_count = file_record.node_count;
+    let error_count = result.errors.len() as u64;
+    db.insert_or_update_file(&file_record)?;
+
+    let mut nodes = result.nodes;
+    let id_map = if maintain_fts {
+        db.insert_nodes_batch(&mut nodes)?
+    } else {
+        db.insert_nodes_batch_without_fts(&mut nodes)?
+    };
+
+    let mut edges = result.edges;
+    let edge_count = db.insert_edges_batch(&mut edges, &id_map)?;
+    stats.edges += edge_count;
+
+    let mut unresolved_refs = result.unresolved_refs;
+    db.insert_unresolved_refs_batch(&mut unresolved_refs, &id_map)?;
+
+    stats.files += 1;
+    stats.nodes += node_count as u64;
+    stats.errors += error_count;
+    Ok(())
+}
+
+#[cfg(feature = "sqlite")]
+fn build_file_record(entry: &FileEntry, node_count: usize) -> FileRecord {
+    FileRecord {
+        path: entry.rel_path.clone(),
+        content_hash: entry.content_hash.clone(),
+        language: entry.language,
+        size: entry.content.len() as u64,
+        modified_at: entry.modified_at,
+        indexed_at: SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0),
+        node_count: node_count as u32,
+    }
+}
+
+#[cfg(feature = "sqlite")]
+fn resolve_references_if_needed(
+    db: &Database,
+    config: &IndexConfig,
+    stats: &mut IndexingStats,
+) -> Result<()> {
+    if config.skip_resolve {
+        return Ok(());
     }
 
-    // Commit transaction
-    db.commit()?;
-
-    info!(
-        "Indexed {} files, {} nodes, {} edges ({} refs resolved)",
-        stats.files, stats.nodes, stats.edges, stats.resolved_refs
-    );
-
-    Ok(stats)
+    info!("Resolving references...");
+    let resolve_pb = if config.show_progress {
+        let pb = ProgressBar::new_spinner();
+        pb.set_prefix("Resolving");
+        pb.set_message("references...");
+        pb.enable_steady_tick(std::time::Duration::from_millis(100));
+        pb
+    } else {
+        ProgressBar::hidden()
+    };
+    let resolved = db.resolve_references()?;
+    resolve_pb.finish_and_clear();
+    stats.resolved_refs = resolved as u64;
+    Ok(())
 }
 
 /// Statistics from an indexing operation
