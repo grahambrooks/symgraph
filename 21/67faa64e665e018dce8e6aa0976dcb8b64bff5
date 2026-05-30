@@ -1,0 +1,19 @@
+.claude/skills/explore-code/SKILL.md
+  s_2f62657004e15e::t_b46a590091cc30 3,5,10,15-18,25,27-55,63-64
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "2167faa64e665e018dce8e6aa0976dcb8b64bff5",
+  "prompts": {},
+  "sessions": {
+    "s_2f62657004e15e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e244f527-7252-4232-94b2-7c51117bf344",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}
