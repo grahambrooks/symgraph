@@ -164,40 +164,55 @@ struct ExtractionContext<'a> {
 }
 
 impl<'a> ExtractionContext<'a> {
-    fn traverse_node(&mut self, node: tree_sitter::Node) {
-        let node_type = node.kind();
-
-        // Import edge: container (file/module) imports the named target.
-        // Handled here (not in extract_symbol) because import statements often
-        // have no extractable "name" and would otherwise be skipped.
-        if self.config.is_import_node(node_type) && !self.config.is_call_node(node_type) {
-            let container_id = self.node_stack.last().copied().unwrap_or(1);
-            self.find_import_target(&node, container_id);
+    fn traverse_node<'tree>(&mut self, root: tree_sitter::Node<'tree>) {
+        enum Work<'t> {
+            Visit(tree_sitter::Node<'t>),
+            PopStack,
         }
 
-        // Check if this is a symbol we care about
-        if let Some(kind) = self.config.node_type_to_kind(node_type) {
-            self.extract_symbol(node, kind);
-        } else {
-            // Continue traversing children
+        fn push_children<'t>(node: tree_sitter::Node<'t>, work: &mut Vec<Work<'t>>) {
             let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                self.traverse_node(child);
+            let children: Vec<_> = node.children(&mut cursor).collect();
+            for child in children.into_iter().rev() {
+                work.push(Work::Visit(child));
+            }
+        }
+
+        let mut work: Vec<Work<'tree>> = vec![Work::Visit(root)];
+
+        while let Some(item) = work.pop() {
+            match item {
+                Work::PopStack => {
+                    self.node_stack.pop();
+                }
+                Work::Visit(node) => {
+                    let node_type = node.kind();
+                    // Import edge: container (file/module) imports the named
+                    // target. Handled here because import statements often have
+                    // no extractable "name" and would otherwise be skipped.
+                    if self.config.is_import_node(node_type) && !self.config.is_call_node(node_type)
+                    {
+                        let container_id = self.node_stack.last().copied().unwrap_or(1);
+                        self.find_import_target(&node, container_id);
+                    }
+                    if let Some(kind) = self.config.node_type_to_kind(node_type) {
+                        let name = self.extract_name(&node, kind);
+                        if name.is_empty() {
+                            push_children(node, &mut work);
+                        } else {
+                            self.emit_symbol(node, kind, name);
+                            work.push(Work::PopStack);
+                            push_children(node, &mut work);
+                        }
+                    } else {
+                        push_children(node, &mut work);
+                    }
+                }
             }
         }
     }
 
-    fn extract_symbol(&mut self, node: tree_sitter::Node, kind: NodeKind) {
-        let name = self.extract_name(&node, kind);
-        if name.is_empty() {
-            // Skip anonymous nodes
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                self.traverse_node(child);
-            }
-            return;
-        }
-
+    fn emit_symbol(&mut self, node: tree_sitter::Node, kind: NodeKind, name: String) {
         let start = node.start_position();
         let end = node.end_position();
 
@@ -227,7 +242,6 @@ impl<'a> ExtractionContext<'a> {
         self.next_id += 1;
         self.result.nodes.push(symbol);
 
-        // Create contains edge from parent
         if let Some(&parent_id) = self.node_stack.last() {
             let edge = Edge {
                 id: 0,
@@ -247,19 +261,8 @@ impl<'a> ExtractionContext<'a> {
             self.find_mut_params(&node, symbol_id);
         }
 
-        // Push this symbol onto the stack and traverse children
         self.node_stack.push(symbol_id);
-
-        // Extract function calls and other references from body
-        self.extract_references(&node, symbol_id);
-
-        // Traverse children for nested definitions
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.traverse_node(child);
-        }
-
-        self.node_stack.pop();
+        self.find_references(node, symbol_id);
     }
 
     fn extract_name(&self, node: &tree_sitter::Node, _kind: NodeKind) -> String {
@@ -301,7 +304,11 @@ impl<'a> ExtractionContext<'a> {
                 // Truncate at opening brace or newline
                 let sig = sig.split('{').next().unwrap_or(sig).trim();
                 if sig.len() > 200 {
-                    Some(format!("{}...", &sig[..200]))
+                    let boundary = (0..=200)
+                        .rev()
+                        .find(|&i| sig.is_char_boundary(i))
+                        .unwrap_or(0);
+                    Some(format!("{}...", &sig[..boundary]))
                 } else {
                     Some(sig.to_string())
                 }
@@ -500,43 +507,42 @@ impl<'a> ExtractionContext<'a> {
         Some(parts.join("::"))
     }
 
-    fn extract_references(&mut self, node: &tree_sitter::Node, source_id: i64) {
-        // Walk the symbol body for calls, field accesses and enum dispatch.
-        self.find_references(node, source_id);
-    }
-
-    /// Single pass over a symbol's body that records:
+    /// Walk a symbol's body iteratively (stack-safe on deeply nested ASTs) and
+    /// record references:
     /// - `Calls` for call expressions,
     /// - `Accesses` / `Mutates` for field reads / writes,
     /// - `References` (detail "dispatch") for enum variants inside match/switch.
-    fn find_references(&mut self, node: &tree_sitter::Node, source_id: i64) {
-        let kind = node.kind();
+    fn find_references<'tree>(&mut self, root: tree_sitter::Node<'tree>, source_id: i64) {
+        let mut stack: Vec<tree_sitter::Node<'tree>> = vec![root];
+        while let Some(node) = stack.pop() {
+            let kind = node.kind();
 
-        if self.config.is_call_node(kind) {
-            if let Some(func_name) = self.extract_call_name(node) {
-                self.push_ref(source_id, func_name, EdgeKind::Calls, node, None);
+            if self.config.is_call_node(kind) {
+                if let Some(func_name) = self.extract_call_name(&node) {
+                    self.push_ref(source_id, func_name, EdgeKind::Calls, &node, None);
+                }
+            } else if self.config.is_field_access_node(kind) && !self.is_call_callee(&node) {
+                if let Some(field_name) = self.extract_field_name(&node) {
+                    let edge_kind = if self.is_write_target(&node) {
+                        EdgeKind::Mutates
+                    } else {
+                        EdgeKind::Accesses
+                    };
+                    self.push_ref(source_id, field_name, edge_kind, &node, None);
+                }
             }
-        } else if self.config.is_field_access_node(kind) && !self.is_call_callee(node) {
-            if let Some(field_name) = self.extract_field_name(node) {
-                let edge_kind = if self.is_write_target(node) {
-                    EdgeKind::Mutates
-                } else {
-                    EdgeKind::Accesses
-                };
-                self.push_ref(source_id, field_name, edge_kind, node, None);
+
+            // Scattered enum dispatch: scan match/switch subtrees for qualified
+            // variant references (e.g. `ViewKind::List`).
+            if self.config.is_enum_match_node(kind) {
+                self.find_enum_dispatch(&node, source_id);
             }
-        }
 
-        // Scattered enum dispatch: scan match/switch subtrees for qualified
-        // variant references (e.g. `ViewKind::List`).
-        if self.config.is_enum_match_node(kind) {
-            self.find_enum_dispatch(node, source_id);
-        }
-
-        // Recurse into children
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            self.find_references(&child, source_id);
+            let mut cursor = node.walk();
+            let children: Vec<_> = node.children(&mut cursor).collect();
+            for child in children.into_iter().rev() {
+                stack.push(child);
+            }
         }
     }
 
@@ -1454,6 +1460,29 @@ end
         ));
         assert!(is_generated_content("# @generated\nclass Foo:\n    pass\n"));
         assert!(!is_generated_content("fn foo() { 1 + 1 }"));
+    }
+
+    #[test]
+    fn test_deeply_nested_does_not_overflow() {
+        // Regression test: the old recursive traverse_node would stack-overflow
+        // on ASTs deeper than ~500 levels. The iterative rewrite must handle this.
+        let mut extractor = Extractor::new();
+        let depth = 500usize;
+        let mut code = String::new();
+        for i in 0..depth {
+            code.push_str(&format!("fn f{}(){{", i));
+        }
+        code.push_str(&"}".repeat(depth));
+        let result = extractor.extract_file("deep.rs", &code);
+        assert!(result.errors.is_empty());
+        assert_eq!(
+            result
+                .nodes
+                .iter()
+                .filter(|n| n.kind == NodeKind::Function)
+                .count(),
+            depth
+        );
     }
 
     #[test]
