@@ -2,49 +2,23 @@
 
 use crate::db::Database;
 use crate::graph::Graph;
-use crate::mcp::constants::{DEFAULT_GRAPH_LIMIT, DEFAULT_IMPACT_DEPTH};
-use crate::mcp::format::format_node_simple;
+use crate::mcp::constants::DEFAULT_IMPACT_DEPTH;
 use crate::mcp::handlers::churn::file_churn;
 use crate::mcp::types::{wants_json, ImpactRequest, SymbolRequest};
+use crate::ops::{self, present, Format};
 
 pub fn handle_callers(db: &Database, req: &SymbolRequest) -> Result<String, String> {
-    let graph = Graph::new(db);
-    let callers = graph
-        .find_callers(&req.symbol, DEFAULT_GRAPH_LIMIT)
-        .map_err(|e| e.to_string())?;
-
-    if callers.is_empty() {
-        return Ok(format!("No callers found for '{}'", req.symbol));
-    }
-
-    let mut output = format!("Found {} callers of '{}':\n\n", callers.len(), req.symbol);
-
-    for caller in callers {
-        output.push_str(&format_node_simple(&caller));
-        output.push('\n');
-    }
-
-    Ok(output)
+    present(
+        &ops::callers(db, &req.symbol)?,
+        Format::from_request(&req.format),
+    )
 }
 
 pub fn handle_callees(db: &Database, req: &SymbolRequest) -> Result<String, String> {
-    let graph = Graph::new(db);
-    let callees = graph
-        .find_callees(&req.symbol, DEFAULT_GRAPH_LIMIT)
-        .map_err(|e| e.to_string())?;
-
-    if callees.is_empty() {
-        return Ok(format!("No callees found for '{}'", req.symbol));
-    }
-
-    let mut output = format!("'{}' calls {} functions:\n\n", req.symbol, callees.len());
-
-    for callee in callees {
-        output.push_str(&format_node_simple(&callee));
-        output.push('\n');
-    }
-
-    Ok(output)
+    present(
+        &ops::callees(db, &req.symbol)?,
+        Format::from_request(&req.format),
+    )
 }
 
 pub fn handle_impact(

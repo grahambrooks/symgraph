@@ -114,14 +114,48 @@ symgraph serve --port 8080
 
 ### CLI Commands
 
+Almost every MCP tool is also a CLI subcommand (handy for testing and for
+agents driven by a CLI skill instead of MCP). Run `symgraph help` for the full
+list with arguments and options.
+
 ```bash
-symgraph index [path]           # Index a codebase
-symgraph serve                  # Start MCP server (stdio)
-symgraph serve --port <PORT>    # Start MCP server (HTTP)
-symgraph status [path]          # Show index statistics
-symgraph search <query>         # Search for symbols
-symgraph context <task>         # Build context for a task
+# Core
+symgraph index [path]                 # Index a codebase
+symgraph serve [--port <PORT>]        # Start the MCP server (stdio / HTTP)
+symgraph status [path]                # Show index statistics
+symgraph search <query>               # Find symbols by name
+symgraph context <task...>            # Build context for a task
+symgraph where [path]                 # Show where the index is stored
+symgraph prune                        # Remove stale cached indexes
+
+# Symbol relationships (query the current project's index)
+symgraph callers <symbol>             # Who calls this symbol
+symgraph callees <symbol>             # What this symbol calls
+symgraph references <symbol>          # All references to a symbol
+symgraph node <symbol>                # Detailed symbol info
+symgraph definition <symbol>          # Source of a symbol [--context-lines N]
+symgraph hierarchy <symbol>           # Parent/child (contains) hierarchy
+symgraph implementations <symbol>     # Interface/trait implementations
+symgraph file <path>                  # Symbols defined in a file
+symgraph path <from> <to>             # Call path(s) between two symbols
+symgraph unused                       # Dead code (no incoming references)
+
+# Impact, git history & coupling
+symgraph impact <symbol> [--churn]    # Change impact + coupling breakdown
+symgraph diff-impact [--git-ref REF]  # Impact of a region / diff
+symgraph blame <symbol>               # git blame a symbol's definition
+symgraph churn [path] [--days N]      # File change frequency (volatility)
+symgraph module-graph [--granularity file|dir|module]   # Deps, fan-in/out, cycles
+symgraph coupling-score [--churn]     # Rank coupling: strength × distance × volatility
+symgraph god-struct [--churn]         # Structs ranked by architectural debt
+symgraph dispatch-sites <enum>        # Files that match/switch on an enum
 ```
+
+Add `--format json` for machine-readable output (supported by every command
+except `blame`, `churn`, and `diff-impact`), and `--db <path>` to point at a
+specific index database. The MCP tools accept the same `format: "json"`
+argument — both surfaces render through one shared `ops` layer, so CLI and
+server output match.
 
 ## MCP Tools
 

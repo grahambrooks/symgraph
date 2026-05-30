@@ -21,11 +21,14 @@ pub struct SearchRequest {
     pub semantic: Option<bool>,
 }
 
-/// Request for symbol-based tools (callers, callees, impact, node)
+/// Request for symbol-based tools (callers, callees, node, references,
+/// hierarchy, implementations)
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct SymbolRequest {
     #[schemars(description = "Function/method/class name")]
     pub symbol: String,
+    #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
+    pub format: Option<String>,
 }
 
 /// Request for the impact tool (symbol + coupling-breakdown options)
@@ -48,6 +51,8 @@ pub struct ImpactRequest {
 pub struct FileRequest {
     #[schemars(description = "File path relative to project root (e.g., 'src/main.rs')")]
     pub path: String,
+    #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
+    pub format: Option<String>,
 }
 
 /// Request for definition tool with context options
@@ -57,6 +62,15 @@ pub struct DefinitionRequest {
     pub symbol: String,
     #[schemars(description = "Number of context lines before/after (default: 3)")]
     pub context_lines: Option<u32>,
+    #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
+    pub format: Option<String>,
+}
+
+/// Request carrying only an output format (for parameterless tools like unused).
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+pub struct FormatRequest {
+    #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
+    pub format: Option<String>,
 }
 
 /// Request for reindex tool
@@ -75,6 +89,8 @@ pub struct PathRequest {
     pub from: String,
     #[schemars(description = "Target symbol name")]
     pub to: String,
+    #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
+    pub format: Option<String>,
 }
 
 /// Request for diff impact tool

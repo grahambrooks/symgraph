@@ -35,6 +35,8 @@ pub mod extraction;
 pub mod graph;
 #[cfg(feature = "sqlite")]
 pub mod mcp;
+#[cfg(feature = "sqlite")]
+pub mod ops;
 pub mod security;
 pub mod types;
 
@@ -483,7 +485,7 @@ fn resolve_references_if_needed(
 }
 
 /// Statistics from an indexing operation
-#[derive(Debug, Default)]
+#[derive(Debug, Default, serde::Serialize)]
 pub struct IndexingStats {
     pub files: u64,
     pub nodes: u64,

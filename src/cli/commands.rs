@@ -1,28 +1,99 @@
 //! Command implementations for CLI operations
 
 use anyhow::{Context, Result};
+use serde::Serialize;
 use tracing::info;
 
 use crate::context::{format_context_markdown, ContextBuilder, ContextOptions};
 use crate::db::Database;
+use crate::types::{IndexStats, Node};
 use crate::IndexConfig;
 
 use super::db_utils::{
     canonicalize_path, open_project_database, prune_cache, rebuild_project_database, resolve_db,
 };
 
+/// Output format selected on the command line (`--format text|json`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum OutputFormat {
+    #[default]
+    Text,
+    Json,
+}
+
+impl OutputFormat {
+    /// Parse a `--format` value; `None` if unrecognized.
+    pub fn parse(s: &str) -> Option<OutputFormat> {
+        match s.to_ascii_lowercase().as_str() {
+            "text" | "txt" => Some(OutputFormat::Text),
+            "json" => Some(OutputFormat::Json),
+            _ => None,
+        }
+    }
+
+    fn is_json(self) -> bool {
+        matches!(self, OutputFormat::Json)
+    }
+
+    /// The value to put in a handler request's `format` field
+    /// (`Some("json")` for JSON, `None` for the handler's default markdown).
+    pub fn request_format(self) -> Option<String> {
+        if self.is_json() {
+            Some("json".to_string())
+        } else {
+            None
+        }
+    }
+}
+
+/// Print a value as pretty JSON to stdout.
+fn print_json<T: Serialize>(value: &T) -> Result<()> {
+    println!("{}", serde_json::to_string_pretty(value)?);
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct SearchReport {
+    query: String,
+    count: usize,
+    results: Vec<Node>,
+}
+
+#[derive(Serialize)]
+struct StatusReport {
+    indexed: bool,
+    database: String,
+    strategy: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stats: Option<IndexStats>,
+}
+
+#[derive(Serialize)]
+struct WhereReport {
+    project_root: String,
+    index_path: String,
+    strategy: String,
+    present: bool,
+}
+
 /// Index a codebase at the given path
-pub fn index_command(path: &str) -> Result<()> {
+pub fn index_command(path: &str, fmt: OutputFormat) -> Result<()> {
     let project_root = canonicalize_path(path)?;
     let mut db = open_project_database(&project_root)?;
 
     let config = IndexConfig {
         root: project_root.clone(),
-        show_progress: true,
+        // Keep stdout clean for JSON; show the progress bar only in text mode.
+        show_progress: !fmt.is_json(),
         ..Default::default()
     };
 
     let stats = rebuild_project_database(&mut db, &config)?;
+
+    if fmt.is_json() {
+        return print_json(&stats);
+    }
+
     println!("\nIndexing complete!");
     println!("  Files indexed: {}", stats.files);
     println!("  Symbols found: {}", stats.nodes);
@@ -37,12 +108,20 @@ pub fn index_command(path: &str) -> Result<()> {
 }
 
 /// Show index statistics for a project
-pub fn status_command(path: &str) -> Result<()> {
+pub fn status_command(path: &str, fmt: OutputFormat) -> Result<()> {
     let project_root = canonicalize_path(path)?;
     let resolved = resolve_db(&project_root)?;
     let db_path = resolved.path;
 
     if !db_path.exists() {
+        if fmt.is_json() {
+            return print_json(&StatusReport {
+                indexed: false,
+                database: db_path.display().to_string(),
+                strategy: resolved.label.to_string(),
+                stats: None,
+            });
+        }
         println!(
             "No index found at {} [{}]",
             db_path.display(),
@@ -54,6 +133,15 @@ pub fn status_command(path: &str) -> Result<()> {
 
     let db = Database::open(&db_path)?;
     let stats = db.get_stats()?;
+
+    if fmt.is_json() {
+        return print_json(&StatusReport {
+            indexed: true,
+            database: db_path.display().to_string(),
+            strategy: resolved.label.to_string(),
+            stats: Some(stats),
+        });
+    }
 
     println!("symgraph Index Status");
     println!("=====================");
@@ -81,17 +169,32 @@ pub fn status_command(path: &str) -> Result<()> {
 }
 
 /// Search for symbols by name
-pub fn search_command(path: &str, query: &str) -> Result<()> {
+pub fn search_command(path: &str, query: &str, fmt: OutputFormat) -> Result<()> {
     let project_root = canonicalize_path(path)?;
     let db_path = resolve_db(&project_root)?.path;
 
     if !db_path.exists() {
+        if fmt.is_json() {
+            return print_json(&SearchReport {
+                query: query.to_string(),
+                count: 0,
+                results: Vec::new(),
+            });
+        }
         println!("No index found. Run 'symgraph index' first.");
         return Ok(());
     }
 
     let db = Database::open(&db_path)?;
     let results = db.search_nodes(query, None, 20)?;
+
+    if fmt.is_json() {
+        return print_json(&SearchReport {
+            query: query.to_string(),
+            count: results.len(),
+            results,
+        });
+    }
 
     if results.is_empty() {
         println!("No symbols found matching '{}'", query);
@@ -122,11 +225,14 @@ pub fn search_command(path: &str, query: &str) -> Result<()> {
 }
 
 /// Build AI context for a task
-pub fn context_command(path: &str, task: &str) -> Result<()> {
+pub fn context_command(path: &str, task: &str, fmt: OutputFormat) -> Result<()> {
     let project_root = canonicalize_path(path)?;
     let db_path = resolve_db(&project_root)?.path;
 
     if !db_path.exists() {
+        if fmt.is_json() {
+            return print_json(&serde_json::json!({ "error": "no index", "task": task }));
+        }
         println!("No index found. Run 'symgraph index' first.");
         return Ok(());
     }
@@ -142,23 +248,37 @@ pub fn context_command(path: &str, task: &str) -> Result<()> {
     };
 
     let context = builder.build_context(task, &options)?;
-    let markdown = format_context_markdown(&context);
 
-    println!("{}", markdown);
+    if fmt.is_json() {
+        return print_json(&context);
+    }
+
+    println!("{}", format_context_markdown(&context));
 
     Ok(())
 }
 
 /// Print the resolved index location (and whether it exists) for a project.
-pub fn where_command(path: &str) -> Result<()> {
+pub fn where_command(path: &str, fmt: OutputFormat) -> Result<()> {
     let project_root = canonicalize_path(path)?;
     let resolved = resolve_db(&project_root)?;
+    let present = resolved.path.exists();
+
+    if fmt.is_json() {
+        return print_json(&WhereReport {
+            project_root,
+            index_path: resolved.path.display().to_string(),
+            strategy: resolved.label.to_string(),
+            present,
+        });
+    }
+
     println!("Project root: {}", project_root);
     println!("Index path:   {}", resolved.path.display());
     println!("Strategy:     {}", resolved.label);
     println!(
         "Status:       {}",
-        if resolved.path.exists() {
+        if present {
             "present"
         } else {
             "not indexed (run 'symgraph index')"
@@ -168,8 +288,11 @@ pub fn where_command(path: &str) -> Result<()> {
 }
 
 /// Remove cache-stored indexes whose source repository no longer exists.
-pub fn prune_command() -> Result<()> {
+pub fn prune_command(fmt: OutputFormat) -> Result<()> {
     let removed = prune_cache()?;
+    if fmt.is_json() {
+        return print_json(&serde_json::json!({ "pruned": removed }));
+    }
     println!("Pruned {} stale cache index(es).", removed);
     Ok(())
 }

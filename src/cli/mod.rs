@@ -8,6 +8,7 @@
 
 mod commands;
 mod db_utils;
+pub mod tools;
 
 pub use commands::*;
 pub use db_utils::*;

@@ -24,9 +24,10 @@
 //! - symgraph-god-struct: Rank structs by architectural debt
 //! - symgraph-dispatch-sites: Find where an enum is matched (control coupling)
 
-mod constants;
-mod format;
-mod handlers;
+pub(crate) mod constants;
+pub(crate) mod format;
+/// Tool handlers, shared by the MCP server and the CLI (`cli::tools`).
+pub mod handlers;
 mod types;
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -302,8 +303,8 @@ impl SymgraphHandler {
         name = "symgraph-unused",
         description = "Find unused symbols (functions, methods, classes) with no incoming references. Helps identify dead code."
     )]
-    fn symgraph_unused(&self) -> String {
-        self.with_db(handlers::unused::handle_unused)
+    fn symgraph_unused(&self, Parameters(req): Parameters<FormatRequest>) -> String {
+        self.with_db(|db| handlers::unused::handle_unused(db, &req.format))
     }
 
     /// Find implementations of an interface/trait
