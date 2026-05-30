@@ -1,0 +1,21 @@
+.github/workflows/ci.yml
+  s_2f62657004e15e::t_eebe77f6e16e03 20,29,39,53,75
+.github/workflows/release.yml
+  s_2f62657004e15e::t_eebe77f6e16e03 38,71,81,84,89,163,173,176,220,234,256
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "b7d459cb0046a24895bc6cd32ffc94952fbab169",
+  "prompts": {},
+  "sessions": {
+    "s_2f62657004e15e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e244f527-7252-4232-94b2-7c51117bf344",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}
