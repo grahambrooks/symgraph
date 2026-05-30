@@ -31,6 +31,22 @@ pub struct LanguageConfig {
     pub variable_types: &'static [&'static str],
     /// Node types that map to modules/namespaces
     pub module_types: &'static [&'static str],
+    /// Node types that represent a field/member access (e.g. `obj.field`)
+    pub field_access_types: &'static [&'static str],
+    /// tree-sitter field name holding the accessed member identifier
+    /// (e.g. "field" in Rust, "property" in TS, "attribute" in Python).
+    /// Empty string disables field-access extraction for the language.
+    pub field_name_field: &'static str,
+    /// Node types that represent an assignment; the left-hand side of one of
+    /// these is treated as a field *write* (Mutates) rather than read.
+    pub assignment_types: &'static [&'static str],
+    /// Node types that represent a match/switch construct, used to detect
+    /// scattered enum dispatch (control coupling).
+    pub enum_match_types: &'static [&'static str],
+    /// Node types that map to struct/class fields
+    pub field_types: &'static [&'static str],
+    /// Node types that map to enum variants/members
+    pub enum_member_types: &'static [&'static str],
 }
 
 impl LanguageConfig {
@@ -54,6 +70,13 @@ impl LanguageConfig {
         if self.enum_types.contains(&node_type) {
             return Some(NodeKind::Enum);
         }
+        // Enum members before fields: some grammars reuse field-ish nodes.
+        if self.enum_member_types.contains(&node_type) {
+            return Some(NodeKind::EnumMember);
+        }
+        if self.field_types.contains(&node_type) {
+            return Some(NodeKind::Field);
+        }
         if self.import_types.contains(&node_type) {
             return Some(NodeKind::Import);
         }
@@ -72,6 +95,26 @@ impl LanguageConfig {
     /// Check if a node type represents a function call
     pub fn is_call_node(&self, node_type: &str) -> bool {
         self.call_types.contains(&node_type)
+    }
+
+    /// Check if a node type represents a field/member access
+    pub fn is_field_access_node(&self, node_type: &str) -> bool {
+        !self.field_name_field.is_empty() && self.field_access_types.contains(&node_type)
+    }
+
+    /// Check if a node type represents an assignment
+    pub fn is_assignment_node(&self, node_type: &str) -> bool {
+        self.assignment_types.contains(&node_type)
+    }
+
+    /// Check if a node type represents an import statement
+    pub fn is_import_node(&self, node_type: &str) -> bool {
+        self.import_types.contains(&node_type)
+    }
+
+    /// Check if a node type represents a match/switch construct
+    pub fn is_enum_match_node(&self, node_type: &str) -> bool {
+        self.enum_match_types.contains(&node_type)
     }
 }
 
@@ -130,6 +173,12 @@ static DEFAULT_CONFIG: LanguageConfig = LanguageConfig {
     constant_types: &[],
     variable_types: &[],
     module_types: &[],
+    field_access_types: &[],
+    field_name_field: "",
+    assignment_types: &[],
+    enum_match_types: &[],
+    field_types: &[],
+    enum_member_types: &[],
 };
 
 static RUST_CONFIG: LanguageConfig = LanguageConfig {
@@ -145,6 +194,12 @@ static RUST_CONFIG: LanguageConfig = LanguageConfig {
     constant_types: &["const_item", "static_item"],
     variable_types: &["let_declaration"],
     module_types: &["mod_item"],
+    field_access_types: &["field_expression"],
+    field_name_field: "field",
+    assignment_types: &["assignment_expression", "compound_assignment_expr"],
+    enum_match_types: &["match_expression"],
+    field_types: &["field_declaration"],
+    enum_member_types: &["enum_variant"],
 };
 
 static TYPESCRIPT_CONFIG: LanguageConfig = LanguageConfig {
@@ -165,6 +220,12 @@ static TYPESCRIPT_CONFIG: LanguageConfig = LanguageConfig {
     constant_types: &[],
     variable_types: &["variable_declaration", "lexical_declaration"],
     module_types: &["module", "namespace_declaration"],
+    field_access_types: &["member_expression"],
+    field_name_field: "property",
+    assignment_types: &["assignment_expression", "augmented_assignment_expression"],
+    enum_match_types: &["switch_statement"],
+    field_types: &["public_field_definition", "property_signature"],
+    enum_member_types: &["enum_assignment"],
 };
 
 static JAVASCRIPT_CONFIG: LanguageConfig = LanguageConfig {
@@ -185,6 +246,12 @@ static JAVASCRIPT_CONFIG: LanguageConfig = LanguageConfig {
     constant_types: &[],
     variable_types: &["variable_declaration", "lexical_declaration"],
     module_types: &[],
+    field_access_types: &["member_expression"],
+    field_name_field: "property",
+    assignment_types: &["assignment_expression", "augmented_assignment_expression"],
+    enum_match_types: &["switch_statement"],
+    field_types: &[],
+    enum_member_types: &[],
 };
 
 static PYTHON_CONFIG: LanguageConfig = LanguageConfig {
@@ -200,6 +267,12 @@ static PYTHON_CONFIG: LanguageConfig = LanguageConfig {
     constant_types: &[],
     variable_types: &["assignment"],
     module_types: &[],
+    field_access_types: &["attribute"],
+    field_name_field: "attribute",
+    assignment_types: &["assignment", "augmented_assignment"],
+    enum_match_types: &["match_statement"],
+    field_types: &[],
+    enum_member_types: &[],
 };
 
 static GO_CONFIG: LanguageConfig = LanguageConfig {
@@ -215,6 +288,12 @@ static GO_CONFIG: LanguageConfig = LanguageConfig {
     constant_types: &["const_declaration"],
     variable_types: &["var_declaration", "short_var_declaration"],
     module_types: &["package_clause"],
+    field_access_types: &[],
+    field_name_field: "",
+    assignment_types: &[],
+    enum_match_types: &[],
+    field_types: &[],
+    enum_member_types: &[],
 };
 
 static JAVA_CONFIG: LanguageConfig = LanguageConfig {
@@ -230,6 +309,12 @@ static JAVA_CONFIG: LanguageConfig = LanguageConfig {
     constant_types: &["field_declaration"],
     variable_types: &["local_variable_declaration"],
     module_types: &["package_declaration"],
+    field_access_types: &[],
+    field_name_field: "",
+    assignment_types: &[],
+    enum_match_types: &[],
+    field_types: &[],
+    enum_member_types: &[],
 };
 
 static C_CONFIG: LanguageConfig = LanguageConfig {
@@ -245,6 +330,12 @@ static C_CONFIG: LanguageConfig = LanguageConfig {
     constant_types: &["preproc_def"],
     variable_types: &["declaration"],
     module_types: &[],
+    field_access_types: &[],
+    field_name_field: "",
+    assignment_types: &[],
+    enum_match_types: &[],
+    field_types: &[],
+    enum_member_types: &[],
 };
 
 static CPP_CONFIG: LanguageConfig = LanguageConfig {
@@ -260,6 +351,12 @@ static CPP_CONFIG: LanguageConfig = LanguageConfig {
     constant_types: &["preproc_def"],
     variable_types: &["declaration"],
     module_types: &["namespace_definition"],
+    field_access_types: &[],
+    field_name_field: "",
+    assignment_types: &[],
+    enum_match_types: &[],
+    field_types: &[],
+    enum_member_types: &[],
 };
 
 static CSHARP_CONFIG: LanguageConfig = LanguageConfig {
@@ -281,6 +378,12 @@ static CSHARP_CONFIG: LanguageConfig = LanguageConfig {
     constant_types: &["field_declaration"], // C# constants are field_declaration with const modifier
     variable_types: &["variable_declaration"],
     module_types: &["namespace_declaration"],
+    field_access_types: &[],
+    field_name_field: "",
+    assignment_types: &[],
+    enum_match_types: &[],
+    field_types: &[],
+    enum_member_types: &[],
 };
 
 static KOTLIN_CONFIG: LanguageConfig = LanguageConfig {
@@ -296,6 +399,12 @@ static KOTLIN_CONFIG: LanguageConfig = LanguageConfig {
     constant_types: &["property_declaration"],
     variable_types: &["property_declaration"],
     module_types: &["package_header", "companion_object"],
+    field_access_types: &[],
+    field_name_field: "",
+    assignment_types: &[],
+    enum_match_types: &[],
+    field_types: &[],
+    enum_member_types: &[],
 };
 
 static SCALA_CONFIG: LanguageConfig = LanguageConfig {
@@ -311,6 +420,12 @@ static SCALA_CONFIG: LanguageConfig = LanguageConfig {
     constant_types: &["val_definition", "val_declaration"],
     variable_types: &["var_definition", "var_declaration"],
     module_types: &["package_clause", "package_object"],
+    field_access_types: &[],
+    field_name_field: "",
+    assignment_types: &[],
+    enum_match_types: &[],
+    field_types: &[],
+    enum_member_types: &[],
 };
 
 static RUBY_CONFIG: LanguageConfig = LanguageConfig {
@@ -326,6 +441,12 @@ static RUBY_CONFIG: LanguageConfig = LanguageConfig {
     constant_types: &["assignment"], // ALLCAPS = ... — best-effort
     variable_types: &["assignment"],
     module_types: &["module"],
+    field_access_types: &[],
+    field_name_field: "",
+    assignment_types: &[],
+    enum_match_types: &[],
+    field_types: &[],
+    enum_member_types: &[],
 };
 
 static GROOVY_CONFIG: LanguageConfig = LanguageConfig {
@@ -345,4 +466,10 @@ static GROOVY_CONFIG: LanguageConfig = LanguageConfig {
     constant_types: &["constant_declaration", "field_declaration"],
     variable_types: &["local_variable_declaration"],
     module_types: &["package_declaration"],
+    field_access_types: &[],
+    field_name_field: "",
+    assignment_types: &[],
+    enum_match_types: &[],
+    field_types: &[],
+    enum_member_types: &[],
 };

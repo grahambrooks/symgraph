@@ -102,6 +102,91 @@ impl<'a> Graph<'a> {
         })
     }
 
+    /// Break down how dependents couple to a symbol, by edge kind.
+    ///
+    /// Counts inbound edges to the symbol *and* its direct members (fields,
+    /// methods, enum variants), so a struct's field reads/writes and method
+    /// calls are all attributed to it. Returns `None` if the symbol is absent.
+    pub fn impact_breakdown(
+        &self,
+        symbol: &str,
+        churn: Option<&std::collections::HashMap<String, u32>>,
+    ) -> Result<Option<ImpactBreakdown>> {
+        use crate::coupling::{boundary_of, Granularity};
+        use crate::types::EdgeKind;
+
+        let root = match self.db.find_node_by_name(symbol)? {
+            Some(n) => n,
+            None => return Ok(None),
+        };
+
+        // Target the symbol plus its direct contained members.
+        let mut target_ids = vec![root.id];
+        for e in self.db.get_outgoing_edges(root.id)? {
+            if e.kind == EdgeKind::Contains {
+                target_ids.push(e.target_id);
+            }
+        }
+
+        let mut by_kind: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
+        let mut modules: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        let mut total = 0usize;
+
+        for id in target_ids {
+            for e in self.db.get_incoming_edges(id)? {
+                if e.kind == EdgeKind::Contains {
+                    continue;
+                }
+                *by_kind
+                    .entry(coupling_label(e.kind).to_string())
+                    .or_insert(0) += 1;
+                total += 1;
+                if let Some(fp) = e.file_path {
+                    *modules
+                        .entry(boundary_of(&fp, Granularity::Module))
+                        .or_insert(0) += 1;
+                }
+            }
+        }
+
+        let mut module_list: Vec<ModuleImpact> = modules
+            .into_iter()
+            .map(|(module, edges)| {
+                let churn = churn.as_ref().and_then(|c| {
+                    // Sum churn of files under this module boundary.
+                    let total: u32 = c
+                        .iter()
+                        .filter(|(p, _)| boundary_of(p, Granularity::Module) == module)
+                        .map(|(_, n)| *n)
+                        .sum();
+                    if total > 0 {
+                        Some(total)
+                    } else {
+                        None
+                    }
+                });
+                ModuleImpact {
+                    module,
+                    edges,
+                    churn,
+                }
+            })
+            .collect();
+        module_list.sort_by(|a, b| b.edges.cmp(&a.edges).then_with(|| a.module.cmp(&b.module)));
+
+        Ok(Some(ImpactBreakdown {
+            symbol: root.name.clone(),
+            kind: root.kind.as_str().to_string(),
+            location: format!("{}:{}-{}", root.file_path, root.start_line, root.end_line),
+            total_inbound: total,
+            inbound_modules: module_list.len(),
+            by_kind,
+            modules: module_list,
+        }))
+    }
+
     /// Extract a subgraph around a set of nodes
     pub fn extract_subgraph(
         &self,
@@ -262,6 +347,44 @@ pub struct Subgraph {
     pub edges: Vec<Edge>,
 }
 
+/// Edge-kind breakdown of how dependents couple to a symbol.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ImpactBreakdown {
+    pub symbol: String,
+    pub kind: String,
+    pub location: String,
+    pub total_inbound: usize,
+    pub inbound_modules: usize,
+    /// Inbound edge counts keyed by coupling label
+    /// (method-call / field-read / field-write / reference / ...).
+    pub by_kind: std::collections::BTreeMap<String, usize>,
+    pub modules: Vec<ModuleImpact>,
+}
+
+/// One inbound module's contribution to a symbol's impact.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ModuleImpact {
+    pub module: String,
+    pub edges: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub churn: Option<u32>,
+}
+
+/// Map an edge kind to a coupling-oriented label used in impact output.
+fn coupling_label(kind: crate::types::EdgeKind) -> &'static str {
+    use crate::types::EdgeKind::*;
+    match kind {
+        Calls => "method-call (contract)",
+        Accesses => "field-read (model)",
+        Mutates => "field-write (intrusive)",
+        Imports => "import (model)",
+        Implements | Overrides => "implements (contract)",
+        References => "reference",
+        Tests => "test",
+        other => other.as_str(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -351,6 +474,7 @@ mod tests {
             file_path: None,
             line: None,
             column: None,
+            detail: None,
         };
         db.insert_edge(&edge).unwrap();
 
@@ -382,6 +506,7 @@ mod tests {
             file_path: None,
             line: None,
             column: None,
+            detail: None,
         };
         db.insert_edge(&edge).unwrap();
 
@@ -418,6 +543,7 @@ mod tests {
                 file_path: None,
                 line: None,
                 column: None,
+                detail: None,
             };
             db.insert_edge(&edge).unwrap();
         }
@@ -475,6 +601,7 @@ mod tests {
             file_path: None,
             line: None,
             column: None,
+            detail: None,
         };
         db.insert_edge(&edge).unwrap();
 
@@ -509,6 +636,7 @@ mod tests {
             file_path: None,
             line: None,
             column: None,
+            detail: None,
         })
         .unwrap();
 
@@ -520,6 +648,7 @@ mod tests {
             file_path: None,
             line: None,
             column: None,
+            detail: None,
         })
         .unwrap();
 
@@ -557,6 +686,7 @@ mod tests {
             file_path: None,
             line: None,
             column: None,
+            detail: None,
         })
         .unwrap();
         db.insert_edge(&Edge {
@@ -567,6 +697,7 @@ mod tests {
             file_path: None,
             line: None,
             column: None,
+            detail: None,
         })
         .unwrap();
         db.insert_edge(&Edge {
@@ -577,6 +708,7 @@ mod tests {
             file_path: None,
             line: None,
             column: None,
+            detail: None,
         })
         .unwrap();
 
@@ -642,6 +774,7 @@ mod tests {
             file_path: None,
             line: None,
             column: None,
+            detail: None,
         })
         .unwrap();
 
@@ -684,6 +817,7 @@ mod tests {
             file_path: None,
             line: None,
             column: None,
+            detail: None,
         })
         .unwrap();
 
@@ -719,6 +853,7 @@ mod tests {
             file_path: None,
             line: None,
             column: None,
+            detail: None,
         })
         .unwrap();
         db.insert_edge(&Edge {
@@ -729,6 +864,7 @@ mod tests {
             file_path: None,
             line: None,
             column: None,
+            detail: None,
         })
         .unwrap();
         db.insert_edge(&Edge {
@@ -739,6 +875,7 @@ mod tests {
             file_path: None,
             line: None,
             column: None,
+            detail: None,
         })
         .unwrap();
 

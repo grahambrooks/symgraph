@@ -1,7 +1,7 @@
 {
   "manifest_version": "1",
   "name": "symgraph",
-  "version": "2026.4.12",
+  "version": "2026.5.30",
   "display_name": "Code Map",
   "description": "Semantic code intelligence - build knowledge graphs of codebases for AI-assisted exploration",
   "long_description": "Code Map uses tree-sitter to parse source code and build a knowledge graph of symbols and their relationships. It provides MCP tools for searching symbols, finding callers/callees, analyzing change impact, and building focused context for AI tasks.\n\nSupported languages: Rust, TypeScript, JavaScript, Python, Go, Java, C, C++",
@@ -55,7 +55,19 @@
     },
     {
       "name": "symgraph-impact",
-      "description": "Analyze the impact radius of changing a symbol."
+      "description": "Analyze the impact of changing a symbol. Breaks inbound coupling down by edge kind (method-call/contract, field-read/model, field-write/intrusive), counts inbound modules, and (with churn=true) annotates volatility. Supports format='json'."
+    },
+    {
+      "name": "symgraph-definition",
+      "description": "Get the full source code of a symbol with surrounding context lines."
+    },
+    {
+      "name": "symgraph-file",
+      "description": "List all symbols defined in a specific file."
+    },
+    {
+      "name": "symgraph-references",
+      "description": "Find all references to a symbol including calls, imports, type usages, and other relationships."
     },
     {
       "name": "symgraph-node",
@@ -64,6 +76,54 @@
     {
       "name": "symgraph-status",
       "description": "Get the status of the symgraph index. Shows statistics about indexed files, symbols, and relationships."
+    },
+    {
+      "name": "symgraph-hierarchy",
+      "description": "Get the parent/child contains hierarchy of a symbol (e.g., class contains methods)."
+    },
+    {
+      "name": "symgraph-path",
+      "description": "Find call paths from one symbol to another."
+    },
+    {
+      "name": "symgraph-unused",
+      "description": "Find unused symbols with no incoming references (dead code)."
+    },
+    {
+      "name": "symgraph-implementations",
+      "description": "Find all classes/structs that implement an interface or extend a trait/class."
+    },
+    {
+      "name": "symgraph-diff-impact",
+      "description": "Analyze the impact of changing a specific region of code or a git diff."
+    },
+    {
+      "name": "symgraph-blame",
+      "description": "Run git blame over the lines of a symbol's definition."
+    },
+    {
+      "name": "symgraph-churn",
+      "description": "Show file change frequency (churn) over a recent window — the volatility dimension."
+    },
+    {
+      "name": "symgraph-module-graph",
+      "description": "Aggregate the graph to a file/dir/module boundary: dependency adjacency, fan-in/fan-out, and cycles (SCCs). Supports format='json'."
+    },
+    {
+      "name": "symgraph-coupling-score",
+      "description": "Rank module-pair coupling on strength × distance × volatility (churn). Produces the hotspots table. Supports format='json'."
+    },
+    {
+      "name": "symgraph-god-struct",
+      "description": "Rank structs/classes by pub-field count × inbound-reference count × churn — the architectural-debt entry point. Supports format='json'."
+    },
+    {
+      "name": "symgraph-dispatch-sites",
+      "description": "Find every file that dispatches on a member of the given enum (control coupling). Supports format='json'."
+    },
+    {
+      "name": "symgraph-reindex",
+      "description": "Trigger incremental reindexing of the codebase. Runs in background."
     }
   ],
   "user_config": [

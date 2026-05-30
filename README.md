@@ -133,7 +133,7 @@ symgraph context <task>         # Build context for a task
 | `symgraph-search`     | Quick symbol search by name                       |
 | `symgraph-callers`    | Find all callers of a symbol                      |
 | `symgraph-callees`    | Find all callees of a symbol                      |
-| `symgraph-impact`     | Analyze the impact radius of changes              |
+| `symgraph-impact`     | Impact + inbound coupling breakdown (contract/model/intrusive) |
 | `symgraph-node`       | Get detailed symbol information                   |
 | `symgraph-definition` | Get the full source code of a symbol with context |
 | `symgraph-file`       | List all symbols defined in a specific file       |
@@ -150,6 +150,28 @@ symgraph context <task>         # Build context for a task
 | `symgraph-unused`          | Find unused/dead code with no incoming references       |
 | `symgraph-implementations` | Find all implementations of an interface/trait          |
 | `symgraph-diff-impact`     | Analyze the impact of changing a specific code region   |
+
+### Git-aware Tools
+
+| Tool               | Description                                              |
+|--------------------|---------------------------------------------------------|
+| `symgraph-blame`   | Git blame a symbol's definition lines                   |
+| `symgraph-churn`   | File change frequency over a recent window (volatility) |
+
+### Coupling Analysis Tools
+
+These fold the resolved graph onto the strength × distance × volatility
+framework. Edges come from `accesses` (field reads), `mutates` (field
+writes / `&mut`), `imports`, and enum-dispatch `references` — so **run
+`symgraph-reindex` after code changes** to populate them. Resolution is
+name-based (heuristic), best for ranking hotspots. All accept `format="json"`.
+
+| Tool                      | Description                                                        |
+|---------------------------|-------------------------------------------------------------------|
+| `symgraph-module-graph`   | Dependency adjacency, fan-in/fan-out, and cycles (SCCs) at a `file`/`dir`/`module` boundary |
+| `symgraph-coupling-score` | Rank module-pair coupling by strength × distance × volatility (churn) |
+| `symgraph-god-struct`     | Rank structs/classes by pub-field × inbound-refs × churn (architectural debt) |
+| `symgraph-dispatch-sites` | Find every file that matches/switches on an enum's members (control coupling) |
 
 ### Example Use Cases
 
@@ -323,9 +345,33 @@ Then point your MCP client at `http://localhost:8080/mcp`.
 
 ### Environment Variables
 
-| Variable       | Description            | Default           |
-|----------------|------------------------|-------------------|
-| `SYMGRAPH_ROOT` | Project root directory | Current directory |
+| Variable             | Description                                   | Default           |
+|----------------------|-----------------------------------------------|-------------------|
+| `SYMGRAPH_ROOT`      | Project root directory                        | Current directory |
+| `SYMGRAPH_DB`        | Explicit index database path (highest priority) | —               |
+| `SYMGRAPH_STORAGE`   | Index location strategy: `git` / `cache` / `local` | auto         |
+| `SYMGRAPH_IN_MEMORY` | `1` ⇒ ephemeral in-memory index (no disk writes) | off            |
+| `SYMGRAPH_AUTH_TOKEN`| Bearer token for HTTP `/mcp`                  | —                 |
+
+### Index Storage
+
+The index is persistent and shared between the CLI and the MCP server, so you
+`symgraph index` once and both use it. The location is resolved by this chain
+(use `symgraph where` to see what's chosen):
+
+1. **`--db <path>` / `SYMGRAPH_DB`** — explicit override.
+2. **`--in-memory` / `SYMGRAPH_IN_MEMORY=1`** — ephemeral (good for long-running
+   MCP sessions, CI, and read-only checkouts; rebuilt on start).
+3. **`SYMGRAPH_STORAGE`** strategy, or the **auto** default:
+   - reuse an existing `.symgraph/` if present (back-compat), else
+   - **`git`** → `<git-common-dir>/symgraph/index.db` — co-located with the repo,
+     never tracked, **no `.gitignore` entry needed** (the default in a git repo;
+     handles worktrees/submodules), else
+   - **`cache`** → an OS cache dir keyed by the repo path (for non-git dirs).
+
+`symgraph prune` removes cached indexes whose source repo no longer exists.
+`local` storage writes a self-`.gitignore` so even in-tree indexes don't dirty
+`git status`.
 
 ## Architecture
 

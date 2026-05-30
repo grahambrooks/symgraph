@@ -103,6 +103,7 @@ impl Extractor {
             next_id: 1,
             file_is_test: false,
             file_is_generated: false,
+            seen_refs: std::collections::HashSet::new(),
         };
 
         let file_is_test = is_test_path(&file_path);
@@ -156,6 +157,10 @@ struct ExtractionContext<'a> {
     next_id: i64,
     file_is_test: bool,
     file_is_generated: bool,
+    /// Dedup set for structural edges (accesses/mutates/imports/dispatch),
+    /// keyed by (source node, edge kind, target name). Calls are not deduped
+    /// to preserve existing call-graph semantics.
+    seen_refs: std::collections::HashSet<(i64, EdgeKind, String)>,
 }
 
 impl<'a> ExtractionContext<'a> {
@@ -182,6 +187,14 @@ impl<'a> ExtractionContext<'a> {
                 }
                 Work::Visit(node) => {
                     let node_type = node.kind();
+                    // Import edge: container (file/module) imports the named
+                    // target. Handled here because import statements often have
+                    // no extractable "name" and would otherwise be skipped.
+                    if self.config.is_import_node(node_type) && !self.config.is_call_node(node_type)
+                    {
+                        let container_id = self.node_stack.last().copied().unwrap_or(1);
+                        self.find_import_target(&node, container_id);
+                    }
                     if let Some(kind) = self.config.node_type_to_kind(node_type) {
                         let name = self.extract_name(&node, kind);
                         if name.is_empty() {
@@ -238,12 +251,18 @@ impl<'a> ExtractionContext<'a> {
                 file_path: Some(self.file_path.clone()),
                 line: Some(start.row as u32 + 1),
                 column: Some(start.column as u32),
+                detail: None,
             };
             self.result.edges.push(edge);
         }
 
+        // `&mut T` parameters are an intrusive/common-coupling signal.
+        if matches!(kind, NodeKind::Function | NodeKind::Method) {
+            self.find_mut_params(&node, symbol_id);
+        }
+
         self.node_stack.push(symbol_id);
-        self.find_calls(node, symbol_id);
+        self.find_references(node, symbol_id);
     }
 
     fn extract_name(&self, node: &tree_sitter::Node, _kind: NodeKind) -> String {
@@ -488,27 +507,211 @@ impl<'a> ExtractionContext<'a> {
         Some(parts.join("::"))
     }
 
-    fn find_calls<'tree>(&mut self, root: tree_sitter::Node<'tree>, source_id: i64) {
+    /// Walk a symbol's body iteratively (stack-safe on deeply nested ASTs) and
+    /// record references:
+    /// - `Calls` for call expressions,
+    /// - `Accesses` / `Mutates` for field reads / writes,
+    /// - `References` (detail "dispatch") for enum variants inside match/switch.
+    fn find_references<'tree>(&mut self, root: tree_sitter::Node<'tree>, source_id: i64) {
         let mut stack: Vec<tree_sitter::Node<'tree>> = vec![root];
         while let Some(node) = stack.pop() {
-            if self.config.is_call_node(node.kind()) {
+            let kind = node.kind();
+
+            if self.config.is_call_node(kind) {
                 if let Some(func_name) = self.extract_call_name(&node) {
-                    let start = node.start_position();
-                    self.result.unresolved_refs.push(UnresolvedReference {
-                        source_node_id: source_id,
-                        reference_name: func_name,
-                        kind: EdgeKind::Calls,
-                        file_path: self.file_path.clone(),
-                        line: start.row as u32 + 1,
-                        column: start.column as u32,
-                    });
+                    self.push_ref(source_id, func_name, EdgeKind::Calls, &node, None);
+                }
+            } else if self.config.is_field_access_node(kind) && !self.is_call_callee(&node) {
+                if let Some(field_name) = self.extract_field_name(&node) {
+                    let edge_kind = if self.is_write_target(&node) {
+                        EdgeKind::Mutates
+                    } else {
+                        EdgeKind::Accesses
+                    };
+                    self.push_ref(source_id, field_name, edge_kind, &node, None);
                 }
             }
+
+            // Scattered enum dispatch: scan match/switch subtrees for qualified
+            // variant references (e.g. `ViewKind::List`).
+            if self.config.is_enum_match_node(kind) {
+                self.find_enum_dispatch(&node, source_id);
+            }
+
             let mut cursor = node.walk();
             let children: Vec<_> = node.children(&mut cursor).collect();
             for child in children.into_iter().rev() {
                 stack.push(child);
             }
+        }
+    }
+
+    /// Push an unresolved reference, deduping structural (non-call) edges per
+    /// (source, kind, name) so common field reads don't explode the graph.
+    fn push_ref(
+        &mut self,
+        source_id: i64,
+        name: String,
+        kind: EdgeKind,
+        node: &tree_sitter::Node,
+        detail: Option<String>,
+    ) {
+        if name.is_empty() {
+            return;
+        }
+        if kind != EdgeKind::Calls && !self.seen_refs.insert((source_id, kind, name.clone())) {
+            return;
+        }
+        let start = node.start_position();
+        self.result.unresolved_refs.push(UnresolvedReference {
+            source_node_id: source_id,
+            reference_name: name,
+            kind,
+            file_path: self.file_path.clone(),
+            line: start.row as u32 + 1,
+            column: start.column as u32,
+            detail,
+        });
+    }
+
+    /// True if `node` is the callee (function position) of a call expression,
+    /// so a method call `obj.method()` isn't also counted as a field read.
+    fn is_call_callee(&self, node: &tree_sitter::Node) -> bool {
+        if let Some(parent) = node.parent() {
+            if self.config.is_call_node(parent.kind()) {
+                if let Some(func) = parent.child_by_field_name("function") {
+                    return func.id() == node.id();
+                }
+            }
+        }
+        false
+    }
+
+    /// True if `node` is the left-hand side of an assignment (a field write).
+    fn is_write_target(&self, node: &tree_sitter::Node) -> bool {
+        if let Some(parent) = node.parent() {
+            if self.config.is_assignment_node(parent.kind()) {
+                if let Some(left) = parent.child_by_field_name("left") {
+                    return left.id() == node.id();
+                }
+            }
+        }
+        false
+    }
+
+    /// Extract the accessed member identifier from a field-access node.
+    fn extract_field_name(&self, node: &tree_sitter::Node) -> Option<String> {
+        let field = self.config.field_name_field;
+        let child = node.child_by_field_name(field)?;
+        let text = self.get_node_text(&child);
+        if text.is_empty() {
+            None
+        } else {
+            Some(text)
+        }
+    }
+
+    /// Scan a match/switch construct for qualified enum variant references
+    /// (`Type::Variant`) and record them as `References` dispatch edges.
+    fn find_enum_dispatch(&mut self, node: &tree_sitter::Node, source_id: i64) {
+        if node.kind() == "scoped_identifier" {
+            let text = self.get_node_text(node);
+            if let Some(pos) = text.rfind("::") {
+                let variant = text[pos + 2..].trim().to_string();
+                self.push_ref(
+                    source_id,
+                    variant,
+                    EdgeKind::References,
+                    node,
+                    Some("dispatch".to_string()),
+                );
+            }
+            return;
+        }
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            self.find_enum_dispatch(&child, source_id);
+        }
+    }
+
+    /// Emit an `Imports` edge from `container_id` to the imported target.
+    /// Glob imports (`use x::*`, `from x import *`) carry detail "glob".
+    fn find_import_target(&mut self, node: &tree_sitter::Node, container_id: i64) {
+        let text = self.get_node_text(node);
+        let is_glob = text.contains('*');
+        let tokens: Vec<&str> = text
+            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .filter(|t| {
+                !t.is_empty()
+                    && !matches!(
+                        *t,
+                        "use" | "import" | "from" | "as" | "pub" | "crate" | "self" | "super"
+                    )
+            })
+            .collect();
+        if let Some(&name) = tokens.last() {
+            let detail = if is_glob {
+                Some("glob".to_string())
+            } else {
+                None
+            };
+            self.push_ref(
+                container_id,
+                name.to_string(),
+                EdgeKind::Imports,
+                node,
+                detail,
+            );
+        }
+    }
+
+    /// Detect `&mut T` parameters (Rust) and record a `Mutates` edge from the
+    /// function to the borrowed type — a common-coupling signal.
+    fn find_mut_params(&mut self, node: &tree_sitter::Node, source_id: i64) {
+        if self.language != Language::Rust {
+            return;
+        }
+        let Some(params) = node.child_by_field_name("parameters") else {
+            return;
+        };
+        let mut cursor = params.walk();
+        for param in params.children(&mut cursor) {
+            if let Some(ty) = param.child_by_field_name("type") {
+                if ty.kind() == "reference_type" && self.has_mut_specifier(&ty) {
+                    if let Some(inner) = ty.child_by_field_name("type") {
+                        if let Some(name) = self.type_base_name(&inner) {
+                            self.push_ref(
+                                source_id,
+                                name,
+                                EdgeKind::Mutates,
+                                &ty,
+                                Some("mut_param".to_string()),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn has_mut_specifier(&self, node: &tree_sitter::Node) -> bool {
+        let mut cursor = node.walk();
+        let found = node
+            .children(&mut cursor)
+            .any(|c| c.kind() == "mutable_specifier");
+        found
+    }
+
+    /// Base type name from a type node, dropping path prefix and generics:
+    /// `crate::model::Model<T>` -> `Model`.
+    fn type_base_name(&self, node: &tree_sitter::Node) -> Option<String> {
+        let text = self.get_node_text(node);
+        let base = text.split('<').next().unwrap_or(&text);
+        let seg = base.rsplit("::").next().unwrap_or(base).trim();
+        if seg.is_empty() {
+            None
+        } else {
+            Some(seg.to_string())
         }
     }
 
@@ -1334,5 +1537,157 @@ fn checks_addition() {
             .nodes
             .iter()
             .any(|n| n.name == "express" && n.kind == NodeKind::Import));
+    }
+
+    // ---- New coupling edges (accesses / mutates / imports / dispatch) ----
+
+    fn refs_of(result: &ExtractionResult, kind: EdgeKind) -> Vec<String> {
+        result
+            .unresolved_refs
+            .iter()
+            .filter(|r| r.kind == kind)
+            .map(|r| r.reference_name.clone())
+            .collect()
+    }
+
+    #[test]
+    fn test_rust_field_read_and_write() {
+        let mut extractor = Extractor::new();
+        let code = r#"
+struct Model { count: u32, name: String }
+fn work(m: &Model) {
+    let _ = m.name;
+}
+fn mutate(m: &mut Model) {
+    m.count = 5;
+}
+"#;
+        let result = extractor.extract_file("test.rs", code);
+        let reads = refs_of(&result, EdgeKind::Accesses);
+        let writes = refs_of(&result, EdgeKind::Mutates);
+        assert!(reads.contains(&"name".to_string()), "reads={:?}", reads);
+        assert!(writes.contains(&"count".to_string()), "writes={:?}", writes);
+        // `count` is written, not read.
+        assert!(!reads.contains(&"count".to_string()));
+    }
+
+    #[test]
+    fn test_rust_mut_param_emits_mutates_on_type() {
+        let mut extractor = Extractor::new();
+        let code = r#"
+struct Model;
+fn apply(m: &mut Model) {}
+"#;
+        let result = extractor.extract_file("test.rs", code);
+        let muts = result
+            .unresolved_refs
+            .iter()
+            .filter(|r| r.kind == EdgeKind::Mutates && r.detail.as_deref() == Some("mut_param"))
+            .map(|r| r.reference_name.clone())
+            .collect::<Vec<_>>();
+        assert!(muts.contains(&"Model".to_string()), "mut_params={:?}", muts);
+    }
+
+    #[test]
+    fn test_rust_method_call_not_counted_as_field_read() {
+        let mut extractor = Extractor::new();
+        let code = r#"
+fn caller(m: &Foo) {
+    m.do_thing();
+}
+"#;
+        let result = extractor.extract_file("test.rs", code);
+        assert!(refs_of(&result, EdgeKind::Calls).contains(&"do_thing".to_string()));
+        assert!(
+            !refs_of(&result, EdgeKind::Accesses).contains(&"do_thing".to_string()),
+            "method callee should not be a field access"
+        );
+    }
+
+    #[test]
+    fn test_rust_glob_import_flagged() {
+        let mut extractor = Extractor::new();
+        let code = "use crate::model::*;\nuse crate::db::Database;\n";
+        let result = extractor.extract_file("test.rs", code);
+        let glob = result
+            .unresolved_refs
+            .iter()
+            .find(|r| r.kind == EdgeKind::Imports && r.detail.as_deref() == Some("glob"));
+        assert!(glob.is_some(), "expected a glob import");
+        assert_eq!(glob.unwrap().reference_name, "model");
+        // Named import resolves to the symbol, no glob detail.
+        assert!(result
+            .unresolved_refs
+            .iter()
+            .any(|r| r.kind == EdgeKind::Imports
+                && r.reference_name == "Database"
+                && r.detail.is_none()));
+    }
+
+    #[test]
+    fn test_rust_enum_dispatch_references() {
+        let mut extractor = Extractor::new();
+        let code = r#"
+fn render(k: ViewKind) -> u8 {
+    match k {
+        ViewKind::List => 1,
+        ViewKind::Grid => 2,
+    }
+}
+"#;
+        let result = extractor.extract_file("test.rs", code);
+        let dispatch = result
+            .unresolved_refs
+            .iter()
+            .filter(|r| r.kind == EdgeKind::References && r.detail.as_deref() == Some("dispatch"))
+            .map(|r| r.reference_name.clone())
+            .collect::<Vec<_>>();
+        assert!(
+            dispatch.contains(&"List".to_string()),
+            "dispatch={:?}",
+            dispatch
+        );
+        assert!(
+            dispatch.contains(&"Grid".to_string()),
+            "dispatch={:?}",
+            dispatch
+        );
+    }
+
+    #[test]
+    fn test_python_attribute_access() {
+        let mut extractor = Extractor::new();
+        let code = "def work(m):\n    x = m.name\n    m.count = 5\n";
+        let result = extractor.extract_file("test.py", code);
+        assert!(refs_of(&result, EdgeKind::Accesses).contains(&"name".to_string()));
+        assert!(refs_of(&result, EdgeKind::Mutates).contains(&"count".to_string()));
+    }
+
+    #[test]
+    fn test_typescript_member_access() {
+        let mut extractor = Extractor::new();
+        let code = "function work(m: Model) {\n  const x = m.name;\n  m.count = 5;\n}\n";
+        let result = extractor.extract_file("test.ts", code);
+        assert!(refs_of(&result, EdgeKind::Accesses).contains(&"name".to_string()));
+        assert!(refs_of(&result, EdgeKind::Mutates).contains(&"count".to_string()));
+    }
+
+    #[test]
+    fn test_field_access_deduped() {
+        let mut extractor = Extractor::new();
+        let code = r#"
+fn work(m: &Foo) {
+    let _ = m.value;
+    let _ = m.value;
+    let _ = m.value;
+}
+"#;
+        let result = extractor.extract_file("test.rs", code);
+        let count = result
+            .unresolved_refs
+            .iter()
+            .filter(|r| r.kind == EdgeKind::Accesses && r.reference_name == "value")
+            .count();
+        assert_eq!(count, 1, "repeated field reads should dedup to one edge");
     }
 }

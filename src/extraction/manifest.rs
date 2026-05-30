@@ -219,6 +219,7 @@ fn add_node(
         file_path: Some(file_path.to_string()),
         line: Some(line),
         column: Some(0),
+        detail: None,
     });
 
     id
@@ -309,7 +310,7 @@ fn extract_cargo_toml(
     next_id: &mut i64,
     result: &mut ExtractionResult,
 ) {
-    let Ok(toml) = content.parse::<toml::Value>() else {
+    let Ok(toml) = toml::from_str::<toml::Table>(content) else {
         return;
     };
 
@@ -490,7 +491,7 @@ fn extract_pyproject_toml(
     next_id: &mut i64,
     result: &mut ExtractionResult,
 ) {
-    let Ok(toml) = content.parse::<toml::Value>() else {
+    let Ok(toml) = toml::from_str::<toml::Table>(content) else {
         return;
     };
 

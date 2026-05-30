@@ -27,6 +27,8 @@ pub mod cli;
 #[cfg(feature = "sqlite")]
 pub mod context;
 #[cfg(feature = "sqlite")]
+pub mod coupling;
+#[cfg(feature = "sqlite")]
 pub mod db;
 pub mod extraction;
 #[cfg(feature = "sqlite")]
@@ -159,6 +161,9 @@ fn run_index_codebase(
     mode: IndexMode,
 ) -> Result<IndexingStats> {
     let root = Path::new(&config.root).canonicalize()?;
+    if !root.is_dir() {
+        anyhow::bail!("index root is not a directory: {}", root.display());
+    }
     info!("Indexing codebase at {}", root.display());
 
     let mut stats = IndexingStats::default();
