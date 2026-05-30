@@ -16,14 +16,26 @@ use anyhow::Result;
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 
-use symgraph::cli::{context_command, index_command, search_command, status_command};
+use symgraph::cli::{
+    context_command, index_command, prune_command, search_command, status_command, where_command,
+};
 
 fn main() -> Result<()> {
-    let args: Vec<String> = env::args().collect();
+    let mut args: Vec<String> = env::args().collect();
 
     if args.len() < 2 {
         print_usage();
         return Ok(());
+    }
+
+    // Global `--db <path>` override: applies to every command (CLI + serve) by
+    // seeding SYMGRAPH_DB, which the path resolver consults first. Strip the
+    // flag and its value so the remaining positional arguments are unaffected.
+    if let Some(i) = args.iter().position(|a| a == "--db") {
+        if i + 1 < args.len() {
+            env::set_var("SYMGRAPH_DB", &args[i + 1]);
+            args.drain(i..=i + 1);
+        }
     }
 
     match args[1].as_str() {
@@ -69,6 +81,13 @@ fn main() -> Result<()> {
         "status" => {
             let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
             status_command(path)?;
+        }
+        "where" => {
+            let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
+            where_command(path)?;
+        }
+        "prune" => {
+            prune_command()?;
         }
         "search" => {
             if args.len() < 3 {
@@ -119,10 +138,19 @@ COMMANDS:
     status [path]            Show index statistics
     search <query>           Search for symbols by name
     context <task>           Build context for a task description
+    where [path]             Show the resolved index location for a project
+    prune                    Remove cached indexes for repos that no longer exist
     help                     Show this help message
+
+OPTIONS:
+    --db <path>             Use an explicit index database path (any command)
 
 ENVIRONMENT:
     SYMGRAPH_ROOT           Project root directory (default: current directory)
+    SYMGRAPH_DB             Explicit index database path (overrides storage)
+    SYMGRAPH_STORAGE        Index location strategy: git | cache | local.
+                            Default: reuse existing .symgraph/, else the git dir
+                            (<git-common-dir>/symgraph), else an OS cache dir.
     SYMGRAPH_IN_MEMORY=1    Use in-memory database (alternative to --in-memory)
     SYMGRAPH_AUTH_TOKEN     Bearer token required on /mcp (required for non-
                             loopback binds; optional on 127.0.0.1)

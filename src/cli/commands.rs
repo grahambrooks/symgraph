@@ -7,7 +7,7 @@ use crate::context::{format_context_markdown, ContextBuilder, ContextOptions};
 use crate::db::Database;
 use crate::{index_codebase, IndexConfig};
 
-use super::db_utils::{canonicalize_path, database_path, open_project_database};
+use super::db_utils::{canonicalize_path, open_project_database, prune_cache, resolve_db};
 
 /// Index a codebase at the given path
 pub fn index_command(path: &str) -> Result<()> {
@@ -37,10 +37,15 @@ pub fn index_command(path: &str) -> Result<()> {
 /// Show index statistics for a project
 pub fn status_command(path: &str) -> Result<()> {
     let project_root = canonicalize_path(path)?;
-    let db_path = database_path(&project_root);
+    let resolved = resolve_db(&project_root)?;
+    let db_path = resolved.path;
 
     if !db_path.exists() {
-        println!("No index found at {}", db_path.display());
+        println!(
+            "No index found at {} [{}]",
+            db_path.display(),
+            resolved.label
+        );
         println!("Run 'symgraph index {}' first.", path);
         return Ok(());
     }
@@ -50,7 +55,7 @@ pub fn status_command(path: &str) -> Result<()> {
 
     println!("symgraph Index Status");
     println!("=====================");
-    println!("Database: {}", db_path.display());
+    println!("Database: {} [{}]", db_path.display(), resolved.label);
     println!("Files: {}", stats.total_files);
     println!("Symbols: {}", stats.total_nodes);
     println!("Relationships: {}", stats.total_edges);
@@ -76,7 +81,7 @@ pub fn status_command(path: &str) -> Result<()> {
 /// Search for symbols by name
 pub fn search_command(path: &str, query: &str) -> Result<()> {
     let project_root = canonicalize_path(path)?;
-    let db_path = database_path(&project_root);
+    let db_path = resolve_db(&project_root)?.path;
 
     if !db_path.exists() {
         println!("No index found. Run 'symgraph index' first.");
@@ -117,7 +122,7 @@ pub fn search_command(path: &str, query: &str) -> Result<()> {
 /// Build AI context for a task
 pub fn context_command(path: &str, task: &str) -> Result<()> {
     let project_root = canonicalize_path(path)?;
-    let db_path = database_path(&project_root);
+    let db_path = resolve_db(&project_root)?.path;
 
     if !db_path.exists() {
         println!("No index found. Run 'symgraph index' first.");
@@ -139,6 +144,31 @@ pub fn context_command(path: &str, task: &str) -> Result<()> {
 
     println!("{}", markdown);
 
+    Ok(())
+}
+
+/// Print the resolved index location (and whether it exists) for a project.
+pub fn where_command(path: &str) -> Result<()> {
+    let project_root = canonicalize_path(path)?;
+    let resolved = resolve_db(&project_root)?;
+    println!("Project root: {}", project_root);
+    println!("Index path:   {}", resolved.path.display());
+    println!("Strategy:     {}", resolved.label);
+    println!(
+        "Status:       {}",
+        if resolved.path.exists() {
+            "present"
+        } else {
+            "not indexed (run 'symgraph index')"
+        }
+    );
+    Ok(())
+}
+
+/// Remove cache-stored indexes whose source repository no longer exists.
+pub fn prune_command() -> Result<()> {
+    let removed = prune_cache()?;
+    println!("Pruned {} stale cache index(es).", removed);
     Ok(())
 }
 

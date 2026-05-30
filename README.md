@@ -345,9 +345,33 @@ Then point your MCP client at `http://localhost:8080/mcp`.
 
 ### Environment Variables
 
-| Variable       | Description            | Default           |
-|----------------|------------------------|-------------------|
-| `SYMGRAPH_ROOT` | Project root directory | Current directory |
+| Variable             | Description                                   | Default           |
+|----------------------|-----------------------------------------------|-------------------|
+| `SYMGRAPH_ROOT`      | Project root directory                        | Current directory |
+| `SYMGRAPH_DB`        | Explicit index database path (highest priority) | —               |
+| `SYMGRAPH_STORAGE`   | Index location strategy: `git` / `cache` / `local` | auto         |
+| `SYMGRAPH_IN_MEMORY` | `1` ⇒ ephemeral in-memory index (no disk writes) | off            |
+| `SYMGRAPH_AUTH_TOKEN`| Bearer token for HTTP `/mcp`                  | —                 |
+
+### Index Storage
+
+The index is persistent and shared between the CLI and the MCP server, so you
+`symgraph index` once and both use it. The location is resolved by this chain
+(use `symgraph where` to see what's chosen):
+
+1. **`--db <path>` / `SYMGRAPH_DB`** — explicit override.
+2. **`--in-memory` / `SYMGRAPH_IN_MEMORY=1`** — ephemeral (good for long-running
+   MCP sessions, CI, and read-only checkouts; rebuilt on start).
+3. **`SYMGRAPH_STORAGE`** strategy, or the **auto** default:
+   - reuse an existing `.symgraph/` if present (back-compat), else
+   - **`git`** → `<git-common-dir>/symgraph/index.db` — co-located with the repo,
+     never tracked, **no `.gitignore` entry needed** (the default in a git repo;
+     handles worktrees/submodules), else
+   - **`cache`** → an OS cache dir keyed by the repo path (for non-git dirs).
+
+`symgraph prune` removes cached indexes whose source repo no longer exists.
+`local` storage writes a self-`.gitignore` so even in-tree indexes don't dirty
+`git status`.
 
 ## Architecture
 
