@@ -487,6 +487,7 @@ fn test_large_codebase_simulation() {
         file_path: Some("a.rs".to_string()),
         line: None,
         column: None,
+        detail: None,
     };
     db.insert_edge(&edge_ab).unwrap();
 
@@ -498,6 +499,7 @@ fn test_large_codebase_simulation() {
         file_path: Some("b.rs".to_string()),
         line: None,
         column: None,
+        detail: None,
     };
     db.insert_edge(&edge_bc).unwrap();
 
@@ -509,6 +511,7 @@ fn test_large_codebase_simulation() {
         file_path: Some("c.rs".to_string()),
         line: None,
         column: None,
+        detail: None,
     };
     db.insert_edge(&edge_ca).unwrap();
 

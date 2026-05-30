@@ -27,6 +27,8 @@ pub mod cli;
 #[cfg(feature = "sqlite")]
 pub mod context;
 #[cfg(feature = "sqlite")]
+pub mod coupling;
+#[cfg(feature = "sqlite")]
 pub mod db;
 pub mod extraction;
 #[cfg(feature = "sqlite")]

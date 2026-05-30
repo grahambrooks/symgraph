@@ -9,17 +9,23 @@ use crate::security::safe_join;
 const DEFAULT_DAYS: u32 = 90;
 const DEFAULT_LIMIT: usize = 30;
 
-pub fn handle_churn(project_root: &str, req: &ChurnRequest) -> Result<String, String> {
-    let days = req.days.unwrap_or(DEFAULT_DAYS);
+/// Compute per-file change frequency (commits touching each file) over the
+/// last `days` days, optionally scoped to `path`. Returns a map of
+/// repo-relative file path → commit count. Reusable by coupling tools that
+/// need the volatility dimension.
+pub fn file_churn(
+    project_root: &str,
+    days: u32,
+    path: Option<&str>,
+) -> Result<HashMap<String, u32>, String> {
     let since = format!("--since={}.days.ago", days);
-
     let mut args: Vec<String> = vec![
         "log".into(),
         "--name-only".into(),
         "--pretty=format:".into(),
         since,
     ];
-    if let Some(path) = req.path.as_deref() {
+    if let Some(path) = path {
         // Validate before passing to git so callers can't pathspec-escape
         // into absolute paths or parent directories.
         safe_join(project_root, path).map_err(|e| e.to_string())?;
@@ -49,6 +55,12 @@ pub fn handle_churn(project_root: &str, req: &ChurnRequest) -> Result<String, St
         }
         *counts.entry(line.to_string()).or_insert(0) += 1;
     }
+    Ok(counts)
+}
+
+pub fn handle_churn(project_root: &str, req: &ChurnRequest) -> Result<String, String> {
+    let days = req.days.unwrap_or(DEFAULT_DAYS);
+    let counts = file_churn(project_root, days, req.path.as_deref())?;
 
     if counts.is_empty() {
         return Ok(format!(

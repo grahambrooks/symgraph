@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS edges (
     file_path TEXT,
     line INTEGER,
     column INTEGER,
+    detail TEXT,
     FOREIGN KEY (source_id) REFERENCES nodes(id),
     FOREIGN KEY (target_id) REFERENCES nodes(id)
 );
@@ -57,6 +58,7 @@ CREATE TABLE IF NOT EXISTS unresolved_refs (
     file_path TEXT NOT NULL,
     line INTEGER NOT NULL,
     column INTEGER NOT NULL,
+    detail TEXT,
     FOREIGN KEY (source_node_id) REFERENCES nodes(id)
 );
 
@@ -91,4 +93,7 @@ CREATE INDEX IF NOT EXISTS idx_nodes_is_generated ON nodes(is_generated);
 pub const MIGRATIONS: &[&str] = &[
     "ALTER TABLE nodes ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0",
     "ALTER TABLE nodes ADD COLUMN is_generated INTEGER NOT NULL DEFAULT 0",
+    // Optional per-edge detail (e.g. "glob" for `use x::*` imports).
+    "ALTER TABLE edges ADD COLUMN detail TEXT",
+    "ALTER TABLE unresolved_refs ADD COLUMN detail TEXT",
 ];

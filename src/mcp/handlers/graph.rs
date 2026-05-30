@@ -4,7 +4,8 @@ use crate::db::Database;
 use crate::graph::Graph;
 use crate::mcp::constants::{DEFAULT_GRAPH_LIMIT, DEFAULT_IMPACT_DEPTH};
 use crate::mcp::format::format_node_simple;
-use crate::mcp::types::SymbolRequest;
+use crate::mcp::handlers::churn::file_churn;
+use crate::mcp::types::{wants_json, ImpactRequest, SymbolRequest};
 
 pub fn handle_callers(db: &Database, req: &SymbolRequest) -> Result<String, String> {
     let graph = Graph::new(db);
@@ -46,25 +47,70 @@ pub fn handle_callees(db: &Database, req: &SymbolRequest) -> Result<String, Stri
     Ok(output)
 }
 
-pub fn handle_impact(db: &Database, req: &SymbolRequest) -> Result<String, String> {
+pub fn handle_impact(
+    db: &Database,
+    project_root: &str,
+    req: &ImpactRequest,
+) -> Result<String, String> {
     let graph = Graph::new(db);
+
+    let churn = if req.churn.unwrap_or(false) {
+        file_churn(project_root, req.days.unwrap_or(90), None).ok()
+    } else {
+        None
+    };
+
+    let breakdown = graph
+        .impact_breakdown(&req.symbol, churn.as_ref())
+        .map_err(|e| e.to_string())?;
+    let Some(breakdown) = breakdown else {
+        return Ok(format!("Symbol '{}' not found", req.symbol));
+    };
+
+    if wants_json(&req.format) {
+        return serde_json::to_string_pretty(&breakdown).map_err(|e| e.to_string());
+    }
+
     let analysis = graph
         .analyze_impact(&req.symbol, DEFAULT_IMPACT_DEPTH)
         .map_err(|e| e.to_string())?;
+    let root = match analysis.root {
+        Some(r) => r,
+        None => return Ok(format!("Symbol '{}' not found", req.symbol)),
+    };
 
-    if analysis.root.is_none() {
-        return Ok(format!("Symbol '{}' not found", req.symbol));
-    }
-
-    let root = analysis.root.unwrap();
     let mut output = format!(
         "## Impact Analysis for `{}`\n\n**Location:** {}:{}-{}\n\n",
         root.name, root.file_path, root.start_line, root.end_line
     );
 
+    // Coupling breakdown: how dependents couple (contract / model / intrusive).
     output.push_str(&format!(
-        "**Total Impact:** {} symbols affected\n\n",
-        analysis.total_impact
+        "**Inbound coupling:** {} edges from {} module(s)\n\n",
+        breakdown.total_inbound, breakdown.inbound_modules
+    ));
+    if !breakdown.by_kind.is_empty() {
+        output.push_str("| Coupling kind | Count |\n|---|---:|\n");
+        for (label, n) in &breakdown.by_kind {
+            output.push_str(&format!("| {} | {} |\n", label, n));
+        }
+        output.push('\n');
+    }
+    if !breakdown.modules.is_empty() {
+        output.push_str("**Inbound modules:**\n\n");
+        for m in breakdown.modules.iter().take(15) {
+            let churn = m
+                .churn
+                .map(|c| format!(", churn {}", c))
+                .unwrap_or_default();
+            output.push_str(&format!("- `{}` — {} edges{}\n", m.module, m.edges, churn));
+        }
+        output.push('\n');
+    }
+
+    output.push_str(&format!(
+        "**Call-graph impact (depth {}):** {} symbols affected\n\n",
+        DEFAULT_IMPACT_DEPTH, analysis.total_impact
     ));
 
     if !analysis.direct_callers.is_empty() {

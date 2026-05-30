@@ -123,6 +123,11 @@ pub enum EdgeKind {
     Decorates,
     /// Source is a test that exercises target
     Tests,
+    /// Source reads a field/property of target (model coupling)
+    Accesses,
+    /// Source writes/mutates a field of target, or takes it by `&mut`
+    /// (intrusive / common coupling)
+    Mutates,
 }
 
 impl EdgeKind {
@@ -141,6 +146,24 @@ impl EdgeKind {
             EdgeKind::Overrides => "overrides",
             EdgeKind::Decorates => "decorates",
             EdgeKind::Tests => "tests",
+            EdgeKind::Accesses => "accesses",
+            EdgeKind::Mutates => "mutates",
+        }
+    }
+
+    /// Integration-strength weight for coupling analysis.
+    ///
+    /// Higher = more coupling risk. Contract-level edges (function/method
+    /// calls, interface implementation) expose only a published surface (1).
+    /// Model-level edges (field reads, imports) bind to shared structure (2).
+    /// Intrusive edges (field writes, `&mut` borrows) reach into another
+    /// module's internals (3). Structural/other edges score 0.
+    pub fn strength(&self) -> u8 {
+        match self {
+            EdgeKind::Calls | EdgeKind::Implements | EdgeKind::Overrides => 1,
+            EdgeKind::Accesses | EdgeKind::Imports | EdgeKind::TypeOf | EdgeKind::Returns => 2,
+            EdgeKind::Mutates => 3,
+            _ => 0,
         }
     }
 
@@ -159,6 +182,8 @@ impl EdgeKind {
             "overrides" => Some(EdgeKind::Overrides),
             "decorates" => Some(EdgeKind::Decorates),
             "tests" => Some(EdgeKind::Tests),
+            "accesses" => Some(EdgeKind::Accesses),
+            "mutates" => Some(EdgeKind::Mutates),
             _ => None,
         }
     }
@@ -336,6 +361,9 @@ pub struct Edge {
     pub file_path: Option<String>,
     pub line: Option<u32>,
     pub column: Option<u32>,
+    /// Optional edge qualifier (e.g. "glob" for `use x::*` imports).
+    #[serde(default)]
+    pub detail: Option<String>,
 }
 
 /// Metadata about an indexed file
@@ -359,6 +387,9 @@ pub struct UnresolvedReference {
     pub file_path: String,
     pub line: u32,
     pub column: u32,
+    /// Optional edge qualifier carried through resolution (e.g. "glob").
+    #[serde(default)]
+    pub detail: Option<String>,
 }
 
 /// Result of extracting symbols from a file
@@ -650,6 +681,7 @@ mod tests {
             file_path: Some("src/lib.rs".to_string()),
             line: Some(15),
             column: Some(4),
+            detail: None,
         };
 
         assert_eq!(edge.source_id, 10);

@@ -22,6 +22,16 @@ pub struct Database {
     conn: Connection,
 }
 
+/// A resolved edge reduced to its source/target file paths and kind — the
+/// raw material for folding the graph to a module/file boundary.
+#[derive(Debug, Clone)]
+pub struct EdgeEndpoint {
+    pub source_file: String,
+    pub target_file: String,
+    pub kind: EdgeKind,
+    pub detail: Option<String>,
+}
+
 impl Database {
     /// Open or create a database at the given path
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self> {
@@ -339,6 +349,85 @@ impl Database {
         Ok(nodes)
     }
 
+    /// Get all resolved edges reduced to their source/target file paths.
+    ///
+    /// This is the bulk-edge accessor used to fold the graph to a file / dir /
+    /// module boundary for coupling analysis. Self-edges (same source and
+    /// target file) are kept; callers filter them out as needed.
+    pub fn get_edge_endpoints(&self) -> Result<Vec<EdgeEndpoint>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT s.file_path, t.file_path, e.kind, e.detail \
+             FROM edges e \
+             JOIN nodes s ON e.source_id = s.id \
+             JOIN nodes t ON e.target_id = t.id",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok(EdgeEndpoint {
+                source_file: row.get(0)?,
+                target_file: row.get(1)?,
+                kind: EdgeKind::parse(&row.get::<_, String>(2)?).unwrap_or(EdgeKind::References),
+                detail: row.get(3)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// All nodes of a given kind (e.g. every struct/class).
+    pub fn get_nodes_by_kind(&self, kind: NodeKind) -> Result<Vec<Node>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT * FROM nodes WHERE kind = ?1 ORDER BY name")?;
+        let rows = stmt.query_map(params![kind.as_str()], Self::row_to_node)?;
+        let mut nodes = Vec::new();
+        for row in rows {
+            nodes.push(row?);
+        }
+        Ok(nodes)
+    }
+
+    /// Fields/properties contained by the named struct/class/interface.
+    pub fn get_struct_fields(&self, struct_name: &str) -> Result<Vec<Node>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT t.* FROM nodes t \
+             JOIN edges e ON e.target_id = t.id AND e.kind = 'contains' \
+             JOIN nodes s ON e.source_id = s.id \
+             WHERE s.name = ?1 AND s.kind IN ('struct','class','interface','trait','protocol') \
+             AND t.kind IN ('field','property')",
+        )?;
+        let rows = stmt.query_map(params![struct_name], Self::row_to_node)?;
+        let mut nodes = Vec::new();
+        for row in rows {
+            nodes.push(row?);
+        }
+        Ok(nodes)
+    }
+
+    /// Files that dispatch on a member of the named enum (control coupling).
+    /// Returns (file_path, member_name) pairs for `references` edges whose
+    /// target is an enum member contained by `enum_name`.
+    pub fn get_dispatch_sites(&self, enum_name: &str) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT DISTINCT e.file_path, m.name \
+             FROM edges e \
+             JOIN nodes m ON e.target_id = m.id AND m.kind = 'enum_member' \
+             JOIN edges c ON c.target_id = m.id AND c.kind = 'contains' \
+             JOIN nodes en ON c.source_id = en.id AND en.kind = 'enum' \
+             WHERE e.kind = 'references' AND en.name = ?1 AND e.file_path IS NOT NULL",
+        )?;
+        let rows = stmt.query_map(params![enum_name], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
     /// Find a node by name (exact match)
     pub fn find_node_by_name(&self, name: &str) -> Result<Option<Node>> {
         let result = self
@@ -383,8 +472,8 @@ impl Database {
     pub fn insert_edge(&self, edge: &Edge) -> Result<i64> {
         self.conn.execute(
             r#"
-            INSERT INTO edges (source_id, target_id, kind, file_path, line, column)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            INSERT INTO edges (source_id, target_id, kind, file_path, line, column, detail)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             "#,
             params![
                 edge.source_id,
@@ -393,6 +482,7 @@ impl Database {
                 edge.file_path,
                 edge.line.map(|l| l as i64),
                 edge.column.map(|c| c as i64),
+                edge.detail,
             ],
         )?;
         Ok(self.conn.last_insert_rowid())
@@ -473,6 +563,7 @@ impl Database {
             file_path: row.get(4)?,
             line: row.get::<_, Option<i64>>(5)?.map(|l| l as u32),
             column: row.get::<_, Option<i64>>(6)?.map(|c| c as u32),
+            detail: row.get(7)?,
         })
     }
 
@@ -484,8 +575,8 @@ impl Database {
     pub fn insert_unresolved_ref(&self, uref: &UnresolvedReference) -> Result<()> {
         self.conn.execute(
             r#"
-            INSERT INTO unresolved_refs (source_node_id, reference_name, kind, file_path, line, column)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            INSERT INTO unresolved_refs (source_node_id, reference_name, kind, file_path, line, column, detail)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             "#,
             params![
                 uref.source_node_id,
@@ -494,6 +585,7 @@ impl Database {
                 uref.file_path,
                 uref.line as i64,
                 uref.column as i64,
+                uref.detail,
             ],
         )?;
         Ok(())
@@ -510,6 +602,7 @@ impl Database {
                 file_path: row.get(4)?,
                 line: row.get::<_, i64>(5)? as u32,
                 column: row.get::<_, i64>(6)? as u32,
+                detail: row.get(7)?,
             })
         })?;
 
@@ -542,6 +635,7 @@ impl Database {
                     file_path: Some(uref.file_path.clone()),
                     line: Some(uref.line),
                     column: Some(uref.column),
+                    detail: uref.detail.clone(),
                 };
                 self.insert_edge(&edge)?;
                 resolved += 1;
@@ -564,6 +658,7 @@ impl Database {
                             file_path: Some(uref.file_path.clone()),
                             line: Some(uref.line),
                             column: Some(uref.column),
+                            detail: None,
                         };
                         self.insert_edge(&test_edge)?;
                     }
@@ -592,7 +687,7 @@ impl Database {
 
         for file_path in files {
             let mut stmt = self.conn.prepare(
-                "SELECT source_node_id, reference_name, kind, file_path, line, column \
+                "SELECT source_node_id, reference_name, kind, file_path, line, column, detail \
                  FROM unresolved_refs WHERE file_path = ?1",
             )?;
 
@@ -605,6 +700,7 @@ impl Database {
                         file_path: row.get(3)?,
                         line: row.get::<_, i64>(4)? as u32,
                         column: row.get::<_, i64>(5)? as u32,
+                        detail: row.get(6)?,
                     })
                 })?
                 .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -621,6 +717,7 @@ impl Database {
                         file_path: Some(uref.file_path.clone()),
                         line: Some(uref.line),
                         column: Some(uref.column),
+                        detail: uref.detail.clone(),
                     };
                     self.insert_edge(&edge)?;
                     resolved += 1;
@@ -643,6 +740,7 @@ impl Database {
                                 file_path: Some(uref.file_path.clone()),
                                 line: Some(uref.line),
                                 column: Some(uref.column),
+                                detail: None,
                             };
                             self.insert_edge(&test_edge)?;
                         }
@@ -730,8 +828,8 @@ impl Database {
         let mut count: u64 = 0;
         let mut stmt = self.conn.prepare(
             r#"
-            INSERT INTO edges (source_id, target_id, kind, file_path, line, column)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            INSERT INTO edges (source_id, target_id, kind, file_path, line, column, detail)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             "#,
         )?;
         for edge in edges.iter_mut() {
@@ -747,6 +845,7 @@ impl Database {
                     edge.file_path,
                     edge.line.map(|l| l as i64),
                     edge.column.map(|c| c as i64),
+                    edge.detail,
                 ])?;
                 count += 1;
             }
@@ -764,8 +863,8 @@ impl Database {
     ) -> Result<()> {
         let mut stmt = self.conn.prepare(
             r#"
-            INSERT INTO unresolved_refs (source_node_id, reference_name, kind, file_path, line, column)
-            VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+            INSERT INTO unresolved_refs (source_node_id, reference_name, kind, file_path, line, column, detail)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             "#,
         )?;
         for uref in refs.iter_mut() {
@@ -778,6 +877,7 @@ impl Database {
                     uref.file_path,
                     uref.line as i64,
                     uref.column as i64,
+                    uref.detail,
                 ])?;
             }
         }
@@ -1394,6 +1494,7 @@ mod tests {
             file_path: Some("test.rs".to_string()),
             line: Some(5),
             column: Some(10),
+            detail: None,
         };
 
         let edge_id = db.insert_edge(&edge).unwrap();
@@ -1421,6 +1522,7 @@ mod tests {
             file_path: None,
             line: None,
             column: None,
+            detail: None,
         };
         db.insert_edge(&edge).unwrap();
 
@@ -1454,6 +1556,7 @@ mod tests {
             file_path: None,
             line: None,
             column: None,
+            detail: None,
         };
         db.insert_edge(&edge).unwrap();
 
@@ -1484,6 +1587,7 @@ mod tests {
             file_path: "src/lib.rs".to_string(),
             line: 5,
             column: 10,
+            detail: None,
         };
 
         db.insert_unresolved_ref(&uref).unwrap();
@@ -1517,6 +1621,7 @@ mod tests {
             file_path: "test.rs".to_string(),
             line: 5,
             column: 10,
+            detail: None,
         };
         db.insert_unresolved_ref(&uref).unwrap();
 
@@ -1574,6 +1679,7 @@ mod tests {
             file_path: "src/a.rs".to_string(),
             line: 10,
             column: 5,
+            detail: None,
         })
         .unwrap();
         db.insert_unresolved_ref(&UnresolvedReference {
@@ -1583,6 +1689,7 @@ mod tests {
             file_path: "src/b.rs".to_string(),
             line: 20,
             column: 5,
+            detail: None,
         })
         .unwrap();
 
@@ -1653,6 +1760,7 @@ mod tests {
             file_path: Some("test.rs".to_string()),
             line: None,
             column: None,
+            detail: None,
         };
         db.insert_edge(&edge).unwrap();
 
@@ -1726,6 +1834,7 @@ mod tests {
             file_path: None,
             line: None,
             column: None,
+            detail: None,
         };
         db.insert_edge(&edge).unwrap();
 
@@ -1765,6 +1874,7 @@ mod tests {
             file_path: None,
             line: None,
             column: None,
+            detail: None,
         })
         .unwrap();
 
@@ -1776,6 +1886,7 @@ mod tests {
             file_path: None,
             line: None,
             column: None,
+            detail: None,
         })
         .unwrap();
 
@@ -1822,6 +1933,7 @@ mod tests {
             file_path: None,
             line: None,
             column: None,
+            detail: None,
         })
         .unwrap();
 
@@ -1858,6 +1970,7 @@ mod tests {
             file_path: None,
             line: None,
             column: None,
+            detail: None,
         })
         .unwrap();
 
@@ -1869,6 +1982,7 @@ mod tests {
             file_path: None,
             line: None,
             column: None,
+            detail: None,
         })
         .unwrap();
 
@@ -1908,6 +2022,7 @@ mod tests {
             file_path: None,
             line: None,
             column: None,
+            detail: None,
         })
         .unwrap();
 
@@ -2072,6 +2187,7 @@ mod language_tests_2 {
             file_path: "a.rs".to_string(),
             line: 1,
             column: 0,
+            detail: None,
         })
         .unwrap();
 

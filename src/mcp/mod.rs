@@ -17,6 +17,12 @@
 //! - symgraph-unused: Find unused/dead code
 //! - symgraph-implementations: Find implementations of interfaces/traits
 //! - symgraph-diff-impact: Analyze impact of code changes
+//! - symgraph-blame: Git blame a symbol's definition
+//! - symgraph-churn: File change frequency (volatility)
+//! - symgraph-module-graph: Dependency graph folded to a file/dir/module boundary
+//! - symgraph-coupling-score: Rank coupling on strength × distance × volatility
+//! - symgraph-god-struct: Rank structs by architectural debt
+//! - symgraph-dispatch-sites: Find where an enum is matched (control coupling)
 
 mod constants;
 mod format;
@@ -166,10 +172,11 @@ impl SymgraphHandler {
     /// Analyze the impact of changing a symbol
     #[tool(
         name = "symgraph-impact",
-        description = "Analyze the impact radius of changing a symbol."
+        description = "Analyze the impact of changing a symbol. Breaks inbound coupling down by edge kind (method-call/contract, field-read/model, field-write/intrusive), counts inbound modules, and (with churn=true) annotates volatility. Supports format='json'."
     )]
-    fn symgraph_impact(&self, Parameters(req): Parameters<SymbolRequest>) -> String {
-        self.with_db(|db| handlers::graph::handle_impact(db, &req))
+    fn symgraph_impact(&self, Parameters(req): Parameters<ImpactRequest>) -> String {
+        let project_root = self.project_root.clone();
+        self.with_db(|db| handlers::graph::handle_impact(db, &project_root, &req))
     }
 
     /// Get the full source code definition of a symbol
@@ -340,6 +347,45 @@ impl SymgraphHandler {
             Err(e) => format!("Error: {}", e),
         }
     }
+
+    /// Module dependency graph: fan-in/out and cycles at a chosen boundary
+    #[tool(
+        name = "symgraph-module-graph",
+        description = "Aggregate the resolved graph to a file/dir/module boundary. Returns the dependency adjacency list with edge counts, fan-in/fan-out per node, and detected cycles (SCCs). Supports format='json'. Reindex after edits."
+    )]
+    fn symgraph_module_graph(&self, Parameters(req): Parameters<ModuleGraphRequest>) -> String {
+        let project_root = self.project_root.clone();
+        self.with_db(|db| handlers::module_graph::handle_module_graph(db, &project_root, &req))
+    }
+
+    /// Coupling score: strength × distance × volatility per module pair
+    #[tool(
+        name = "symgraph-coupling-score",
+        description = "Rank module-pair coupling on strength (contract/model/intrusive) × distance × volatility (churn). Produces the hotspots table directly. Supports format='json'. Reindex after edits."
+    )]
+    fn symgraph_coupling_score(&self, Parameters(req): Parameters<ModuleGraphRequest>) -> String {
+        let project_root = self.project_root.clone();
+        self.with_db(|db| handlers::module_graph::handle_coupling_score(db, &project_root, &req))
+    }
+
+    /// God-struct / hub report: structs ranked by architectural debt
+    #[tool(
+        name = "symgraph-god-struct",
+        description = "Rank structs/classes by pub-field count × inbound-reference count × churn — the 'where is the architectural debt' entry point. Supports format='json'."
+    )]
+    fn symgraph_god_struct(&self, Parameters(req): Parameters<GodStructRequest>) -> String {
+        let project_root = self.project_root.clone();
+        self.with_db(|db| handlers::god_struct::handle_god_struct(db, &project_root, &req))
+    }
+
+    /// Dispatch sites: files that match/switch on an enum's members
+    #[tool(
+        name = "symgraph-dispatch-sites",
+        description = "Find every file that dispatches on a member of the given enum (control coupling). Verifies completeness before a trait/strategy refactor. Supports format='json'."
+    )]
+    fn symgraph_dispatch_sites(&self, Parameters(req): Parameters<DispatchSitesRequest>) -> String {
+        self.with_db(|db| handlers::dispatch_sites::handle_dispatch_sites(db, &req))
+    }
 }
 
 #[tool_handler]
@@ -354,7 +400,13 @@ impl ServerHandler for SymgraphHandler {
             symgraph-references for all usages of a symbol, symgraph-hierarchy for class/module structure, \
             symgraph-path to find call paths between functions, symgraph-unused to find dead code, \
             symgraph-implementations to find interface/trait implementations, \
-            symgraph-diff-impact to analyze change impact, and symgraph-reindex to refresh after edits."
+            symgraph-diff-impact to analyze change impact, symgraph-blame and symgraph-churn for \
+            git history/volatility, and symgraph-reindex to refresh after edits. \
+            For coupling analysis: symgraph-module-graph aggregates dependencies to a file/dir/module \
+            boundary with fan-in/out and cycles; symgraph-coupling-score ranks hotspots on \
+            strength × distance × volatility; symgraph-god-struct surfaces architectural debt; and \
+            symgraph-dispatch-sites finds where an enum is matched. Coupling tools rely on field/import/ \
+            dispatch edges, so run symgraph-reindex after code changes."
                 .into(),
         );
         info
