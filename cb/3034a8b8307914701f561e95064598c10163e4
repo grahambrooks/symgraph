@@ -1,0 +1,62 @@
+src/coupling.rs
+  s_2f62657004e15e::t_052a433bdc0432 1-463
+src/graph/mod.rs
+  s_2f62657004e15e::t_052a433bdc0432 105-189,350-387,477,509,546,604,639,651,689,700,711,777,820,856,867,878
+src/mcp/handlers/dispatch_sites.rs
+  s_2f62657004e15e::t_052a433bdc0432 1-70
+src/mcp/handlers/churn.rs
+  s_2f62657004e15e::t_052a433bdc0432 12-20,28,58-63
+src/mcp/mod.rs
+  s_2f62657004e15e::t_052a433bdc0432 20-25,175,177-179,350-388,403-409
+src/mcp/types.rs
+  s_2f62657004e15e::t_052a433bdc0432 31-45,112-158
+src/mcp/handlers/god_struct.rs
+  s_2f62657004e15e::t_052a433bdc0432 1-113
+src/db/mod.rs
+  s_2f62657004e15e::t_052a433bdc0432 35-44,371-449,494-495,504,585,597-598,607,624,657,680,709,722,739,762,904-905,921,939-940,953,1711,1739,1773,1804,1838,1896,1906,1977,2138,2178,2190,2237,2274,2286,2326,2491
+src/main.rs
+  s_2f62657004e15e::t_052a433bdc0432 19-21,24,31-40,85-91,141-142,145-147,150-153
+src/cli/commands.rs
+  ai_agent 11,42-43,46-50,60,86,127,152-173
+src/extraction/languages.rs
+  s_2f62657004e15e::t_052a433bdc0432 34-49,73-79,99-118,176-181,197-202,223-228,249-254,270-275,291-296,312-317,333-338,354-359,381-386,402-407,423-428,444-449,469-474
+src/mcp/handlers/module_graph.rs
+  s_2f62657004e15e::t_052a433bdc0432 1-139
+README.md
+  s_2f62657004e15e::t_052a433bdc0432 136,154-175,348-374
+src/lib.rs
+  s_2f62657004e15e::t_564f93d7b9f0af 164-166
+  s_2f62657004e15e::t_052a433bdc0432 30-31
+src/mcp/handlers/mod.rs
+  s_2f62657004e15e::t_052a433bdc0432 7,9,13
+manifest.json
+  s_2f62657004e15e::t_052a433bdc0432 4,58-70,79-126
+src/types.rs
+  s_2f62657004e15e::t_052a433bdc0432 126-130,149-166,185-186,364-366,390-392,684
+tests/integration_test.rs
+  s_2f62657004e15e::t_052a433bdc0432 573,585,597
+src/mcp/handlers/graph.rs
+  s_2f62657004e15e::t_052a433bdc0432 7-8,50-54,57-66,68-71,74-81,87-110,112-113
+src/db/schema.rs
+  s_2f62657004e15e::t_052a433bdc0432 47,61,96-98
+src/extraction/manifest.rs
+  s_2f62657004e15e::t_052a433bdc0432 222,313,494
+Cargo.toml
+  s_2f62657004e15e::t_052a433bdc0432 3,45,50,55,65
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "cb3034a8b8307914701f561e95064598c10163e4",
+  "prompts": {},
+  "sessions": {
+    "s_2f62657004e15e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e244f527-7252-4232-94b2-7c51117bf344",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}
