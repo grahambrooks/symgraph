@@ -1,0 +1,37 @@
+src/cli/db_utils.rs
+  s_2f62657004e15e::t_60ea697903dc33 167,169-171,173,175-178
+  s_2f62657004e15e::t_500d0d9151ec6a 251,253-255,266-272,278,283
+  s_2f62657004e15e::t_e9d3ac178ebdbf 1-13,17,24-107,111-140,143-166,168,172,174,181-199,203,205-207,217-250,252,256-265,273-277,279-282,284-300
+  s_2f62657004e15e::t_a55460358373cf 141-142
+src/cli/commands.rs
+  s_2f62657004e15e::t_317efa1772ae4b 84
+  s_2f62657004e15e::t_d1bec1dcc5911a 150-174
+  s_2f62657004e15e::t_650d568fd19d32 40-41,58
+  s_2f62657004e15e::t_a55460358373cf 44-48
+  s_2f62657004e15e::t_f9a793e2896548 10
+  s_2f62657004e15e::t_465fc69f5eee19 125
+README.md
+  s_2f62657004e15e::t_dfd336f3f8f1c1 348-374
+src/main.rs
+  s_2f62657004e15e::t_3a4c9020e01313 86
+  s_2f62657004e15e::t_40c51554e4199a 19-21,31,34,38
+  s_2f62657004e15e::t_e41142ff733b74 85,87-91
+  s_2f62657004e15e::t_f9fb2d75deb028 24,32-33,35-37
+  s_2f62657004e15e::t_1b56ca2928b65f 141-142,145-147,150-153
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "ae669d26fc2edd9574de81ccdbade3a95499279b",
+  "prompts": {},
+  "sessions": {
+    "s_2f62657004e15e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e244f527-7252-4232-94b2-7c51117bf344",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}
