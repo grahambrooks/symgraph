@@ -1,0 +1,23 @@
+docs/cli-mcp-parity.md
+  s_2f62657004e15e::t_00557bf6446b5d 1-33,36,39-40,42-43,45,49,107,110,112,116-117,122-125,129-209,213-239
+  s_2f62657004e15e::t_1ae813a5a29e17 34-35,37-38,41
+  s_2f62657004e15e::t_e6271e27b8643c 44,46-48,50-106,108-109,111,113-115,118-121,126-128
+  s_2f62657004e15e::t_cbf9452caa07b9 210-212
+  s_2f62657004e15e::t_b84c490fbb1451 240-273
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "57e96cedf1627304bb2473ec72615a140a852434",
+  "prompts": {},
+  "sessions": {
+    "s_2f62657004e15e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e244f527-7252-4232-94b2-7c51117bf344",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}
