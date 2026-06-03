@@ -64,26 +64,13 @@ pub fn extract_manifest<P: AsRef<Path>>(path: P, content: &str) -> ExtractionRes
     let mut next_id: i64 = 1;
 
     // Create file node
-    let file_node = Node {
-        id: next_id,
-        kind: NodeKind::File,
-        name: filename.to_string(),
-        qualified_name: Some(file_path.clone()),
-        file_path: file_path.clone(),
-        start_line: 0,
-        end_line: content.lines().count() as u32,
-        start_column: 0,
-        end_column: 0,
-        signature: None,
-        visibility: Visibility::Public,
-        docstring: None,
-        is_async: false,
-        is_static: false,
-        is_exported: true,
-        is_test: false,
-        is_generated: false,
-        language,
-    };
+    let file_node = Node::builder(NodeKind::File, filename, file_path.clone(), language)
+        .id(next_id)
+        .span(0, content.lines().count() as u32, 0, 0)
+        .qualified_name(Some(file_path.clone()))
+        .visibility(Visibility::Public)
+        .is_exported(true)
+        .build();
     let file_id = next_id;
     next_id += 1;
     result.nodes.push(file_node);
@@ -190,37 +177,19 @@ fn add_node(
     let id = *next_id;
     *next_id += 1;
 
-    result.nodes.push(Node {
-        id,
-        kind,
-        name,
-        qualified_name: None,
-        file_path: file_path.to_string(),
-        start_line: line,
-        end_line: line,
-        start_column: 0,
-        end_column: 0,
-        signature,
-        visibility: Visibility::Public,
-        docstring: None,
-        is_async: false,
-        is_static: false,
-        is_exported: true,
-        is_test: false,
-        is_generated: false,
-        language,
-    });
+    result.nodes.push(
+        Node::builder(kind, name, file_path, language)
+            .id(id)
+            .span(line, line, 0, 0)
+            .signature(signature)
+            .visibility(Visibility::Public)
+            .is_exported(true)
+            .build(),
+    );
 
-    result.edges.push(Edge {
-        id: 0,
-        source_id: parent_id,
-        target_id: id,
-        kind: EdgeKind::Contains,
-        file_path: Some(file_path.to_string()),
-        line: Some(line),
-        column: Some(0),
-        detail: None,
-    });
+    result
+        .edges
+        .push(Edge::new(parent_id, id, EdgeKind::Contains).at(file_path.to_string(), line, 0));
 
     id
 }

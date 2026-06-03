@@ -429,12 +429,10 @@ fn store_extracted_file(
         db.insert_nodes_batch_without_fts(&mut nodes)?
     };
 
-    let mut edges = result.edges;
-    let edge_count = db.insert_edges_batch(&mut edges, &id_map)?;
+    let edge_count = db.insert_edges_batch(&result.edges, &id_map)?;
     stats.edges += edge_count;
 
-    let mut unresolved_refs = result.unresolved_refs;
-    db.insert_unresolved_refs_batch(&mut unresolved_refs, &id_map)?;
+    db.insert_unresolved_refs_batch(&result.unresolved_refs, &id_map)?;
 
     stats.files += 1;
     stats.nodes += node_count as u64;

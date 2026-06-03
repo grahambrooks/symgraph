@@ -646,16 +646,9 @@ impl Database {
             if let Some(target) =
                 self.find_target_preferring_file(&uref.reference_name, &uref.file_path)?
             {
-                let edge = Edge {
-                    id: 0,
-                    source_id: uref.source_node_id,
-                    target_id: target.id,
-                    kind: uref.kind,
-                    file_path: Some(uref.file_path.clone()),
-                    line: Some(uref.line),
-                    column: Some(uref.column),
-                    detail: uref.detail.clone(),
-                };
+                let edge = Edge::new(uref.source_node_id, target.id, uref.kind)
+                    .at(uref.file_path.clone(), uref.line, uref.column)
+                    .detail(uref.detail.clone());
                 self.insert_edge(&edge)?;
                 resolved += 1;
 
@@ -669,16 +662,8 @@ impl Database {
                         )
                         .unwrap_or(false);
                     if source_is_test {
-                        let test_edge = Edge {
-                            id: 0,
-                            source_id: uref.source_node_id,
-                            target_id: target.id,
-                            kind: EdgeKind::Tests,
-                            file_path: Some(uref.file_path.clone()),
-                            line: Some(uref.line),
-                            column: Some(uref.column),
-                            detail: None,
-                        };
+                        let test_edge = Edge::new(uref.source_node_id, target.id, EdgeKind::Tests)
+                            .at(uref.file_path.clone(), uref.line, uref.column);
                         self.insert_edge(&test_edge)?;
                     }
                 }
@@ -728,16 +713,9 @@ impl Database {
                 if let Some(target) =
                     self.find_target_preferring_file(&uref.reference_name, &uref.file_path)?
                 {
-                    let edge = Edge {
-                        id: 0,
-                        source_id: uref.source_node_id,
-                        target_id: target.id,
-                        kind: uref.kind,
-                        file_path: Some(uref.file_path.clone()),
-                        line: Some(uref.line),
-                        column: Some(uref.column),
-                        detail: uref.detail.clone(),
-                    };
+                    let edge = Edge::new(uref.source_node_id, target.id, uref.kind)
+                        .at(uref.file_path.clone(), uref.line, uref.column)
+                        .detail(uref.detail.clone());
                     self.insert_edge(&edge)?;
                     resolved += 1;
 
@@ -751,16 +729,12 @@ impl Database {
                             )
                             .unwrap_or(false);
                         if source_is_test {
-                            let test_edge = Edge {
-                                id: 0,
-                                source_id: uref.source_node_id,
-                                target_id: target.id,
-                                kind: EdgeKind::Tests,
-                                file_path: Some(uref.file_path.clone()),
-                                line: Some(uref.line),
-                                column: Some(uref.column),
-                                detail: None,
-                            };
+                            let test_edge =
+                                Edge::new(uref.source_node_id, target.id, EdgeKind::Tests).at(
+                                    uref.file_path.clone(),
+                                    uref.line,
+                                    uref.column,
+                                );
                             self.insert_edge(&test_edge)?;
                         }
                     }
@@ -895,7 +869,7 @@ impl Database {
     /// Returns the number of edges actually inserted.
     pub fn insert_edges_batch(
         &self,
-        edges: &mut [Edge],
+        edges: &[Edge],
         id_map: &std::collections::HashMap<i64, i64>,
     ) -> Result<u64> {
         let mut count: u64 = 0;
@@ -905,15 +879,14 @@ impl Database {
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             "#,
         )?;
-        for edge in edges.iter_mut() {
+        for edge in edges {
+            // Bind the remapped ids directly rather than mutating the edge.
             if let (Some(&new_source), Some(&new_target)) =
                 (id_map.get(&edge.source_id), id_map.get(&edge.target_id))
             {
-                edge.source_id = new_source;
-                edge.target_id = new_target;
                 stmt.execute(params![
-                    edge.source_id,
-                    edge.target_id,
+                    new_source,
+                    new_target,
                     edge.kind.as_str(),
                     edge.file_path,
                     edge.line.map(|l| l as i64),
@@ -931,7 +904,7 @@ impl Database {
     /// are silently skipped.
     pub fn insert_unresolved_refs_batch(
         &self,
-        refs: &mut [UnresolvedReference],
+        refs: &[UnresolvedReference],
         id_map: &std::collections::HashMap<i64, i64>,
     ) -> Result<()> {
         let mut stmt = self.conn.prepare_cached(
@@ -940,11 +913,11 @@ impl Database {
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             "#,
         )?;
-        for uref in refs.iter_mut() {
+        for uref in refs {
+            // Bind the remapped source id directly rather than mutating the ref.
             if let Some(&new_source) = id_map.get(&uref.source_node_id) {
-                uref.source_node_id = new_source;
                 stmt.execute(params![
-                    uref.source_node_id,
+                    new_source,
                     uref.reference_name,
                     uref.kind.as_str(),
                     uref.file_path,

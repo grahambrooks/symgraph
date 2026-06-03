@@ -366,6 +366,134 @@ pub struct Edge {
     pub detail: Option<String>,
 }
 
+impl Edge {
+    /// A new edge between two (extraction-local or resolved) node ids.
+    /// Optional location/detail are set with the chained builders below; this
+    /// keeps the field list defined once instead of at every construction site.
+    pub fn new(source_id: i64, target_id: i64, kind: EdgeKind) -> Self {
+        Edge {
+            source_id,
+            target_id,
+            kind,
+            ..Default::default()
+        }
+    }
+
+    /// Record where in the source the edge originates.
+    pub fn at(mut self, file_path: impl Into<String>, line: u32, column: u32) -> Self {
+        self.file_path = Some(file_path.into());
+        self.line = Some(line);
+        self.column = Some(column);
+        self
+    }
+
+    /// Carry an optional qualifier (e.g. "glob", "dispatch", "mut_param").
+    pub fn detail(mut self, detail: Option<String>) -> Self {
+        self.detail = detail;
+        self
+    }
+}
+
+/// Builder for [`Node`] — defines the (large) field set once so adding a field
+/// doesn't ripple through every construction site (contract over connascence
+/// of position on the struct literal).
+pub struct NodeBuilder {
+    node: Node,
+}
+
+impl Node {
+    /// Start building a node with its required identity; everything else
+    /// defaults (id 0, private/unknown, no spans/signature/flags).
+    pub fn builder(
+        kind: NodeKind,
+        name: impl Into<String>,
+        file_path: impl Into<String>,
+        language: Language,
+    ) -> NodeBuilder {
+        NodeBuilder {
+            node: Node {
+                id: 0,
+                kind,
+                name: name.into(),
+                qualified_name: None,
+                file_path: file_path.into(),
+                start_line: 0,
+                end_line: 0,
+                start_column: 0,
+                end_column: 0,
+                signature: None,
+                visibility: Visibility::Unknown,
+                docstring: None,
+                is_async: false,
+                is_static: false,
+                is_exported: false,
+                is_test: false,
+                is_generated: false,
+                language,
+            },
+        }
+    }
+}
+
+impl NodeBuilder {
+    pub fn id(mut self, id: i64) -> Self {
+        self.node.id = id;
+        self
+    }
+    pub fn span(
+        mut self,
+        start_line: u32,
+        end_line: u32,
+        start_column: u32,
+        end_column: u32,
+    ) -> Self {
+        self.node.start_line = start_line;
+        self.node.end_line = end_line;
+        self.node.start_column = start_column;
+        self.node.end_column = end_column;
+        self
+    }
+    pub fn qualified_name(mut self, qualified_name: Option<String>) -> Self {
+        self.node.qualified_name = qualified_name;
+        self
+    }
+    pub fn signature(mut self, signature: Option<String>) -> Self {
+        self.node.signature = signature;
+        self
+    }
+    pub fn visibility(mut self, visibility: Visibility) -> Self {
+        self.node.visibility = visibility;
+        self
+    }
+    pub fn docstring(mut self, docstring: Option<String>) -> Self {
+        self.node.docstring = docstring;
+        self
+    }
+    pub fn is_async(mut self, v: bool) -> Self {
+        self.node.is_async = v;
+        self
+    }
+    pub fn is_static(mut self, v: bool) -> Self {
+        self.node.is_static = v;
+        self
+    }
+    pub fn is_exported(mut self, v: bool) -> Self {
+        self.node.is_exported = v;
+        self
+    }
+    pub fn is_test(mut self, v: bool) -> Self {
+        self.node.is_test = v;
+        self
+    }
+    pub fn is_generated(mut self, v: bool) -> Self {
+        self.node.is_generated = v;
+        self
+    }
+    pub fn build(self) -> Node {
+        self.node
+    }
+}
+
 /// Metadata about an indexed file
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FileRecord {

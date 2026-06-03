@@ -110,30 +110,20 @@ impl Extractor {
         let file_is_generated = is_generated_path(&file_path) || is_generated_content(content);
 
         // Create file node
-        let file_node = Node {
-            id: ctx.next_id,
-            kind: NodeKind::File,
-            name: path
-                .file_name()
-                .unwrap_or_default()
-                .to_string_lossy()
-                .to_string(),
-            qualified_name: Some(file_path.clone()),
-            file_path: file_path.clone(),
-            start_line: 0,
-            end_line: content.lines().count() as u32,
-            start_column: 0,
-            end_column: 0,
-            signature: None,
-            visibility: Visibility::Public,
-            docstring: None,
-            is_async: false,
-            is_static: false,
-            is_exported: true,
-            is_test: file_is_test,
-            is_generated: file_is_generated,
-            language,
-        };
+        let file_name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let file_node = Node::builder(NodeKind::File, file_name, file_path.clone(), language)
+            .id(ctx.next_id)
+            .span(0, content.lines().count() as u32, 0, 0)
+            .qualified_name(Some(file_path.clone()))
+            .visibility(Visibility::Public)
+            .is_exported(true)
+            .is_test(file_is_test)
+            .is_generated(file_is_generated)
+            .build();
         ctx.file_is_test = file_is_test;
         ctx.file_is_generated = file_is_generated;
         ctx.next_id += 1;
@@ -217,42 +207,35 @@ impl<'a> ExtractionContext<'a> {
         let end = node.end_position();
 
         let is_test = self.file_is_test || self.is_test_symbol(&node, &name, kind);
-        let symbol = Node {
-            id: self.next_id,
-            kind,
-            name: name.clone(),
-            qualified_name: self.build_qualified_name(&name),
-            file_path: self.file_path.clone(),
-            start_line: start.row as u32 + 1,
-            end_line: end.row as u32 + 1,
-            start_column: start.column as u32,
-            end_column: end.column as u32,
-            signature: self.extract_signature(&node, kind),
-            visibility: self.extract_visibility(&node),
-            docstring: self.extract_docstring(&node),
-            is_async: self.check_async(&node),
-            is_static: self.check_static(&node),
-            is_exported: self.check_exported(&node),
-            is_test,
-            is_generated: self.file_is_generated,
-            language: self.language,
-        };
+        let symbol = Node::builder(kind, name.clone(), self.file_path.clone(), self.language)
+            .id(self.next_id)
+            .qualified_name(self.build_qualified_name(&name))
+            .span(
+                start.row as u32 + 1,
+                end.row as u32 + 1,
+                start.column as u32,
+                end.column as u32,
+            )
+            .signature(self.extract_signature(&node, kind))
+            .visibility(self.extract_visibility(&node))
+            .docstring(self.extract_docstring(&node))
+            .is_async(self.check_async(&node))
+            .is_static(self.check_static(&node))
+            .is_exported(self.check_exported(&node))
+            .is_test(is_test)
+            .is_generated(self.file_is_generated)
+            .build();
 
         let symbol_id = self.next_id;
         self.next_id += 1;
         self.result.nodes.push(symbol);
 
         if let Some(&parent_id) = self.node_stack.last() {
-            let edge = Edge {
-                id: 0,
-                source_id: parent_id,
-                target_id: symbol_id,
-                kind: EdgeKind::Contains,
-                file_path: Some(self.file_path.clone()),
-                line: Some(start.row as u32 + 1),
-                column: Some(start.column as u32),
-                detail: None,
-            };
+            let edge = Edge::new(parent_id, symbol_id, EdgeKind::Contains).at(
+                self.file_path.clone(),
+                start.row as u32 + 1,
+                start.column as u32,
+            );
             self.result.edges.push(edge);
         }
 
