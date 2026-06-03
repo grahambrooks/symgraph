@@ -2,8 +2,8 @@
 
 use crate::cli::rebuild_project_database;
 use crate::db::Database;
-use crate::mcp::format::normalize_path;
 use crate::mcp::types::ReindexRequest;
+use crate::ops::format::normalize_path;
 use crate::security::validate_relative;
 use crate::{index_codebase, IndexConfig};
 

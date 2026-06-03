@@ -6,6 +6,12 @@
 //! result that implements both [`serde::Serialize`] (for `--format json` /
 //! `format: "json"`) and [`Render`] (the markdown the server has always
 //! produced). [`present`] picks the representation.
+//!
+//! `ops` is the lowest tool layer: it owns the shared `format` and `constants`
+//! helpers and never depends on `mcp` (so the dependency is one-way, mcp → ops).
+
+pub mod constants;
+pub mod format;
 
 use std::fs;
 
@@ -13,10 +19,10 @@ use serde::Serialize;
 
 use crate::db::Database;
 use crate::graph::Graph;
-use crate::mcp::constants::{DEFAULT_CONTEXT_LINES, DEFAULT_GRAPH_LIMIT, MAX_REFERENCES_PER_KIND};
-use crate::mcp::format;
 use crate::security::{safe_join, validate_relative};
 use crate::types::{EdgeKind, Node};
+
+use constants::{DEFAULT_CONTEXT_LINES, DEFAULT_GRAPH_LIMIT, MAX_REFERENCES_PER_KIND};
 
 /// Output representation for a tool result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

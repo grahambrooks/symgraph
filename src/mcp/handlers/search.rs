@@ -1,9 +1,9 @@
 //! Symbol search handler
 
 use crate::db::Database;
-use crate::mcp::constants::DEFAULT_SEARCH_LIMIT;
-use crate::mcp::format::format_node_with_signature;
 use crate::mcp::types::SearchRequest;
+use crate::ops::constants::DEFAULT_SEARCH_LIMIT;
+use crate::ops::format::format_node_with_signature;
 
 pub fn handle_search(db: &Database, req: &SearchRequest) -> Result<String, String> {
     let semantic = req.semantic.unwrap_or(false);

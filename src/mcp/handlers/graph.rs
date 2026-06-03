@@ -2,9 +2,9 @@
 
 use crate::db::Database;
 use crate::graph::Graph;
-use crate::mcp::constants::DEFAULT_IMPACT_DEPTH;
 use crate::mcp::handlers::churn::file_churn;
 use crate::mcp::types::{wants_json, ImpactRequest, SymbolRequest};
+use crate::ops::constants::DEFAULT_IMPACT_DEPTH;
 use crate::ops::{self, present, Format};
 
 pub fn handle_callers(db: &Database, req: &SymbolRequest) -> Result<String, String> {

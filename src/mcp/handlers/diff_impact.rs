@@ -3,8 +3,8 @@
 use std::process::Command;
 
 use crate::db::Database;
-use crate::mcp::format;
 use crate::mcp::types::DiffImpactRequest;
+use crate::ops::format;
 use crate::security::safe_join;
 use crate::types::Node;
 

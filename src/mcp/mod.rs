@@ -24,8 +24,6 @@
 //! - symgraph-god-struct: Rank structs by architectural debt
 //! - symgraph-dispatch-sites: Find where an enum is matched (control coupling)
 
-pub(crate) mod constants;
-pub(crate) mod format;
 /// Tool handlers, shared by the MCP server and the CLI (`cli::tools`).
 pub mod handlers;
 mod types;
