@@ -1,0 +1,38 @@
+src/lib.rs
+  s_2f62657004e15e::t_8b4aac1649687a 432,435
+src/db/mod.rs
+  s_2f62657004e15e::t_181ab77ef05561 907,916-917,920
+  s_2f62657004e15e::t_c1769fe01216ff 665-666
+  s_2f62657004e15e::t_b1d880f19acfe8 732
+  s_2f62657004e15e::t_579be12a618995 733-737
+  s_2f62657004e15e::t_fed7a75e8da5f2 649-651
+  s_2f62657004e15e::t_070918c35c7370 872,882-883,888-889
+  s_2f62657004e15e::t_efb61a04b8faf6 716-718
+src/extraction/mod.rs
+  s_2f62657004e15e::t_a7c25a106af99e 113-126
+  s_2f62657004e15e::t_4b0dd633c2a039 210-227,234-238
+src/extraction/manifest.rs
+  s_2f62657004e15e::t_2acacc4718fe18 180-188
+  s_2f62657004e15e::t_5cdb22895f8542 67-73
+  s_2f62657004e15e::t_579be12a618995 190-192
+src/types.rs
+  s_2f62657004e15e::t_6365741ec651d5 369-389,393-442,450-496
+  s_2f62657004e15e::t_545360f7cf5370 390-392
+  s_2f62657004e15e::t_579be12a618995 443-449
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.2",
+  "base_commit_sha": "8480d8f62ddc3a33b4a6cd4750cf80e103c27d43",
+  "prompts": {},
+  "sessions": {
+    "s_2f62657004e15e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e244f527-7252-4232-94b2-7c51117bf344",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}
