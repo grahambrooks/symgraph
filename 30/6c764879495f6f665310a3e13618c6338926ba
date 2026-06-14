@@ -1,0 +1,21 @@
+manifest.json
+  s_c16597c1a236e0::t_bc762afec0603b 4
+Cargo.toml
+  s_c16597c1a236e0::t_bc762afec0603b 3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.6",
+  "base_commit_sha": "306c764879495f6f665310a3e13618c6338926ba",
+  "prompts": {},
+  "sessions": {
+    "s_c16597c1a236e0": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5d0eb05a-63d8-4f0a-9584-0079f148c958",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}
