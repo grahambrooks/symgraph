@@ -205,6 +205,22 @@ fn prepare_location(project_root: &str, resolved: &ResolvedDb) -> Result<()> {
     Ok(())
 }
 
+/// Path to the index progress log, co-located with the resolved index DB so it
+/// lives wherever the index lives (git-dir / OS cache / `.symgraph`) instead of
+/// the working tree. Ensures the parent directory exists. Callers that index in
+/// the background point the process log here so it never pollutes the repo.
+pub fn index_log_path(project_root: &str) -> Result<PathBuf> {
+    let root = canonicalize_path(project_root)?;
+    let resolved = resolve_db(&root)?;
+    let dir = resolved
+        .path
+        .parent()
+        .context("resolved database path has no parent directory")?;
+    std::fs::create_dir_all(dir)
+        .with_context(|| format!("creating index directory {}", dir.display()))?;
+    Ok(dir.join("index.log"))
+}
+
 /// Open or initialize the database for a project (creating the location).
 pub fn open_project_database(project_root: &str) -> Result<Database> {
     let resolved = resolve_db(project_root)?;

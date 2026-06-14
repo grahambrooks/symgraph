@@ -118,8 +118,10 @@ fn main() -> Result<()> {
             }
         }
         "index" => {
-            setup_logging();
             let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
+            // Log to a file beside the index so background indexing never
+            // writes into the working tree.
+            setup_logging(symgraph::cli::index_log_path(path).ok().as_deref());
             index_command(path, format)?;
         }
         "status" => {
@@ -375,6 +377,8 @@ ENVIRONMENT:
     SYMGRAPH_STORAGE        Index location strategy: git | cache | local.
                             Default: reuse existing .symgraph/, else the git dir
                             (<git-common-dir>/symgraph), else an OS cache dir.
+                            `symgraph index` writes its progress log to
+                            index.log in this same directory (never the worktree).
     SYMGRAPH_IN_MEMORY=1    Use in-memory database (same as serve --in-memory)
     SYMGRAPH_AUTH_TOKEN     Bearer token required on /mcp (required for non-
                             loopback binds; optional on 127.0.0.1)
@@ -403,11 +407,24 @@ fn print_version() {
     println!("symgraph {}", env!("CARGO_PKG_VERSION"));
 }
 
-fn setup_logging() {
-    let subscriber = FmtSubscriber::builder()
+/// Install the global tracing subscriber. When `log_file` is `Some` and can be
+/// created, index progress is written there (co-located with the index, never
+/// the working tree); otherwise it falls back to stderr.
+fn setup_logging(log_file: Option<&std::path::Path>) {
+    let builder = FmtSubscriber::builder()
         .with_max_level(Level::INFO)
-        .with_target(false)
-        .with_writer(std::io::stderr)
-        .finish();
-    tracing::subscriber::set_global_default(subscriber).ok();
+        .with_target(false);
+    match log_file.and_then(|p| std::fs::File::create(p).ok()) {
+        Some(file) => {
+            let subscriber = builder
+                .with_ansi(false)
+                .with_writer(std::sync::Mutex::new(file))
+                .finish();
+            tracing::subscriber::set_global_default(subscriber).ok();
+        }
+        None => {
+            let subscriber = builder.with_writer(std::io::stderr).finish();
+            tracing::subscriber::set_global_default(subscriber).ok();
+        }
+    }
 }
