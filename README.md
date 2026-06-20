@@ -280,14 +280,19 @@ Or add `.mcp.json` to your project root:
 }
 ```
 
-**Optional: Add the `/explore-code` skill** for guided code exploration:
+**Optional: Install the `code-intelligence` plugin** for the guided
+`/explore-code` skill (plus a SessionStart hook that auto-indexes new projects).
+The skill now ships via the [gb-agent-skills](https://github.com/grahambrooks/gb-agent-skills)
+plugin marketplace rather than being copied into your project. In Claude Code:
 
-```bash
-mkdir -p .claude/skills
-cp -r /path/to/symgraph/.claude/skills/explore-code .claude/skills/
+```
+/plugin marketplace add grahambrooks/gb-agent-skills
+/plugin install code-intelligence@gb-agent-skills
 ```
 
-Then use it in Claude Code:
+The plugin uses [`bx`](https://github.com/grahambrooks/bx) to launch the symgraph
+MCP server on demand, so install `bx` first. Once installed, use the skill in
+Claude Code:
 
 ```
 /explore-code how does the authentication middleware work?

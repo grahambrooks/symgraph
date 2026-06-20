@@ -45,6 +45,10 @@ fn flag_u32(args: &[String], name: &str) -> Option<u32> {
     flag_value(args, name).and_then(|s| s.parse().ok())
 }
 
+fn flag_u64(args: &[String], name: &str) -> Option<u64> {
+    flag_value(args, name).and_then(|s| s.parse().ok())
+}
+
 fn has_flag(args: &[String], name: &str) -> bool {
     args.iter().any(|a| a == name)
 }
@@ -133,7 +137,7 @@ fn main() -> Result<()> {
             where_command(path, format)?;
         }
         "prune" => {
-            prune_command(format)?;
+            prune_command(flag_u64(&args, "--max-age-days"), format)?;
         }
         "search" => {
             if args.len() < 3 {
@@ -312,7 +316,8 @@ CORE COMMANDS:
     search <QUERY>           Find symbols whose name matches QUERY
     context <TASK...>        Build focused context for a coding task
     where [PATH]             Show where this project's index is stored
-    prune                    Delete cached indexes whose repo no longer exists
+    prune [--max-age-days N] Delete cached indexes that are gone, now indexed
+                             elsewhere (git dir / in-tree), or older than N days
     serve [OPTIONS]          Run the MCP server (see SERVE OPTIONS)
     help, version            Show this help / the version
 

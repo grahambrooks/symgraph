@@ -21,7 +21,13 @@ use crate::types::{
     Visibility,
 };
 
-const CONNECTION_PRAGMAS: &str = "PRAGMA foreign_keys = ON; \
+// `auto_vacuum = INCREMENTAL` is set first, before any table is created, so a
+// freshly created database carries it in its file header (changing it later
+// would require a full VACUUM). It keeps freed pages on a freelist that
+// `compact()` / `PRAGMA incremental_vacuum` can return to the OS, so the index
+// file does not bloat as files are deleted and reindexed over time.
+const CONNECTION_PRAGMAS: &str = "PRAGMA auto_vacuum = INCREMENTAL; \
+             PRAGMA foreign_keys = ON; \
              PRAGMA journal_mode = WAL; \
              PRAGMA synchronous = NORMAL; \
              PRAGMA cache_size = -64000;";
@@ -1058,6 +1064,18 @@ impl Database {
         Ok(())
     }
 
+    /// Return free pages to the OS and truncate the WAL so the on-disk file
+    /// stays compact after incremental edits. `incremental_vacuum` is a no-op on
+    /// legacy databases created without incremental auto-vacuum; those reclaim
+    /// their space on the next full rebuild (which VACUUMs the shadow). Must be
+    /// called outside a transaction.
+    pub fn compact(&self) -> Result<()> {
+        self.conn
+            .execute_batch("PRAGMA incremental_vacuum;")
+            .context("compact: incremental_vacuum")?;
+        self.checkpoint_wal_truncate()
+    }
+
     /// Commit a transaction and checkpoint the WAL so the file stays compact.
     pub fn commit(&mut self) -> Result<()> {
         self.commit_transaction()?;
@@ -1076,6 +1094,13 @@ impl Database {
             .path
             .clone()
             .context("prepare_for_swap requires an on-disk database")?;
+        // Fully compact the freshly built shadow before it becomes the live
+        // index: VACUUM rebuilds the file with no freelist bloat and writes it
+        // with incremental auto-vacuum enabled, so replacing an older live
+        // database also migrates it to the compacting layout.
+        self.conn
+            .execute_batch("VACUUM;")
+            .context("prepare_for_swap: VACUUM")?;
         self.checkpoint_wal_truncate()?;
         self.close()?;
         cleanup_sqlite_sidecars(&path)?;

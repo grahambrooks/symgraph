@@ -307,34 +307,106 @@ pub fn canonicalize_path(path: &str) -> Result<String> {
     Ok(canonical.display().to_string())
 }
 
-/// Remove cache entries whose source repository no longer exists. Returns the
-/// number of stale entries removed.
-pub fn prune_cache() -> Result<usize> {
+/// Summary of a cache-prune pass.
+#[derive(Debug, Default, Clone, Copy, serde::Serialize)]
+pub struct PruneStats {
+    pub removed: usize,
+    pub bytes_freed: u64,
+}
+
+/// Remove OS-cache index entries that are no longer useful and report how much
+/// space was reclaimed. An entry is pruned when any of these hold:
+///   * its `source` marker is missing, or points at a path that no longer
+///     exists;
+///   * the source repository would not, by default, store its index in the
+///     cache — e.g. it is a git repo (index belongs under the git dir) or has
+///     an in-tree `.symgraph/`. An explicit `SYMGRAPH_STORAGE=cache` keeps such
+///     entries (the cache is then the active location);
+///   * `max_age_days` is set and the index has not been modified within that
+///     window.
+///
+/// Only the OS cache is touched. In-tree (`.symgraph/`) and git-dir indexes are
+/// left alone — they are removed together with their repositories.
+pub fn prune_cache(max_age_days: Option<u64>) -> Result<PruneStats> {
     let Some(base) = cache_base() else {
-        return Ok(0);
+        return Ok(PruneStats::default());
     };
     let root = base.join("symgraph");
     if !root.exists() {
-        return Ok(0);
+        return Ok(PruneStats::default());
     }
-    let mut removed = 0;
+
+    let max_age = max_age_days.map(|d| std::time::Duration::from_secs(d * 24 * 60 * 60));
+    let now = SystemTime::now();
+
+    let mut stats = PruneStats::default();
     for entry in std::fs::read_dir(&root)? {
         let entry = entry?;
-        if !entry.path().is_dir() {
+        let dir = entry.path();
+        if !dir.is_dir() {
             continue;
         }
-        let source_file = entry.path().join("source");
-        let stale = match std::fs::read_to_string(&source_file) {
-            Ok(src) => !std::path::Path::new(src.trim()).exists(),
-            // No marker (e.g. a partial dir) — treat as stale.
-            Err(_) => true,
-        };
-        if stale {
-            std::fs::remove_dir_all(entry.path())?;
-            removed += 1;
+        if cache_entry_is_stale(&dir, max_age, now) {
+            let freed = dir_size(&dir).unwrap_or(0);
+            std::fs::remove_dir_all(&dir)?;
+            stats.removed += 1;
+            stats.bytes_freed += freed;
         }
     }
-    Ok(removed)
+    Ok(stats)
+}
+
+/// Decide whether a single cache entry directory is no longer useful.
+fn cache_entry_is_stale(dir: &Path, max_age: Option<std::time::Duration>, now: SystemTime) -> bool {
+    let source = match std::fs::read_to_string(dir.join("source")) {
+        Ok(s) => s.trim().to_string(),
+        // No marker (partial/legacy dir) — can't attribute it; treat as stale.
+        Err(_) => return true,
+    };
+
+    // Source repository is gone.
+    if !Path::new(&source).exists() {
+        return true;
+    }
+
+    // The repo now resolves its index elsewhere (git dir / in-tree), so this
+    // cache copy is dead weight. Honor an explicit `SYMGRAPH_STORAGE=cache`,
+    // which keeps the cache as the active location; `SYMGRAPH_DB` is ignored on
+    // purpose (it would otherwise make every entry look redundant).
+    let strategy = Storage::from_env().unwrap_or_else(|| auto_strategy(&source));
+    if strategy != Storage::Cache {
+        return true;
+    }
+
+    // Age-based eviction for entries that do legitimately belong in the cache.
+    if let Some(max_age) = max_age {
+        if let Ok(modified) = std::fs::metadata(dir.join(DB_FILE)).and_then(|m| m.modified()) {
+            if now
+                .duration_since(modified)
+                .map(|age| age > max_age)
+                .unwrap_or(false)
+            {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
+/// Recursively sum the byte sizes of regular files under `dir`.
+fn dir_size(dir: &Path) -> Result<u64> {
+    let mut total = 0;
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let meta = entry.metadata()?;
+        if meta.is_dir() {
+            total += dir_size(&entry.path()).unwrap_or(0);
+        } else {
+            total += meta.len();
+        }
+    }
+    Ok(total)
 }
 
 #[cfg(test)]
@@ -375,6 +447,50 @@ mod tests {
                 assert!(r.label.starts_with("local"));
             });
         });
+    }
+
+    #[test]
+    fn prune_removes_missing_source_keeps_live_cache() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+        let cache = tempfile::tempdir().unwrap();
+        // A real, non-git directory that resolves to cache storage by default.
+        let live_repo = tempfile::tempdir().unwrap();
+
+        let sg = cache.path().join("symgraph");
+
+        // Entry 1: source points at a path that no longer exists -> pruned.
+        let gone = sg.join("gone");
+        std::fs::create_dir_all(&gone).unwrap();
+        std::fs::write(gone.join(DB_FILE), vec![0u8; 4096]).unwrap();
+        std::fs::write(gone.join("source"), "/no/such/path/xyz").unwrap();
+
+        // Entry 2: source exists and is not a git repo -> kept (active cache).
+        let live = sg.join("live");
+        std::fs::create_dir_all(&live).unwrap();
+        std::fs::write(live.join(DB_FILE), vec![0u8; 4096]).unwrap();
+        std::fs::write(
+            live.join("source"),
+            live_repo.path().canonicalize().unwrap().to_str().unwrap(),
+        )
+        .unwrap();
+
+        temp_env("SYMGRAPH_DB", None, || {
+            temp_env("SYMGRAPH_STORAGE", None, || {
+                temp_env(
+                    "XDG_CACHE_HOME",
+                    Some(cache.path().to_str().unwrap()),
+                    || {
+                        let stats = prune_cache(None).unwrap();
+                        assert_eq!(stats.removed, 1);
+                        assert!(stats.bytes_freed >= 4096);
+                    },
+                );
+            });
+        });
+
+        assert!(!gone.exists());
+        assert!(live.exists());
     }
 
     /// Minimal scoped env setter/restorer for tests.

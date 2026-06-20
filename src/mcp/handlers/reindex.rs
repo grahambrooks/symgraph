@@ -60,6 +60,12 @@ pub fn handle_reindex(
                     Err(e) => errors.push(format!("resolve refs: {}", e)),
                 }
 
+                // Reclaim pages freed by the delete-and-reinsert above so the
+                // live index file does not grow with each incremental reindex.
+                if let Err(e) = db.compact() {
+                    errors.push(format!("compact: {}", e));
+                }
+
                 let mut output = format!(
                     "## Reindex Complete\n\n**Files reindexed:** {}\n**Symbols found:** {}\n**Edges created:** {}\n**References resolved:** {}\n",
                     stats.files, stats.nodes, stats.edges, stats.resolved_refs

@@ -287,13 +287,18 @@ pub fn where_command(path: &str, fmt: OutputFormat) -> Result<()> {
     Ok(())
 }
 
-/// Remove cache-stored indexes whose source repository no longer exists.
-pub fn prune_command(fmt: OutputFormat) -> Result<()> {
-    let removed = prune_cache()?;
+/// Remove cache-stored indexes that are no longer useful (source repo gone, or
+/// now indexed under its git dir / in-tree, or — with `max_age_days` — stale).
+pub fn prune_command(max_age_days: Option<u64>, fmt: OutputFormat) -> Result<()> {
+    let stats = prune_cache(max_age_days)?;
     if fmt.is_json() {
-        return print_json(&serde_json::json!({ "pruned": removed }));
+        return print_json(&stats);
     }
-    println!("Pruned {} stale cache index(es).", removed);
+    println!(
+        "Pruned {} stale cache index(es), reclaiming {:.1} KB.",
+        stats.removed,
+        stats.bytes_freed as f64 / 1024.0
+    );
     Ok(())
 }
 
