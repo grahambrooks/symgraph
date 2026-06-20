@@ -1,0 +1,43 @@
+src/cli/commands.rs
+  s_c2908598ceaf23::t_041265b9189d85 290-293,295,297-301
+README.md
+  s_08db9e914edb37::t_8074a7a15a1bf8 283-286,288-290,293-295
+src/db/mod.rs
+  s_c2908598ceaf23::t_604f5c1effdef4 1067-1078
+  s_c2908598ceaf23::t_b095a97f507ffe 24-30
+  s_c2908598ceaf23::t_409fd35d7d8b3d 1097-1103
+src/cli/db_utils.rs
+  s_c2908598ceaf23::t_ed609a7ee9a9a0 310-330,332,336,338-342,345-346,349-406,409,494
+  s_c2908598ceaf23::t_5f556e5b156692 480-488
+  s_c2908598ceaf23::t_65d29b33a7403d 452-479,491-493
+src/main.rs
+  s_c2908598ceaf23::t_4ab222b56edbc2 140
+  s_c2908598ceaf23::t_79d7f9fbf5ef15 48-51
+  s_c2908598ceaf23::t_44d800d73efe00 319-320
+src/mcp/handlers/reindex.rs
+  s_c2908598ceaf23::t_f10f0873e7d1d4 63-68
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.5.9",
+  "base_commit_sha": "38b960c862d6c3abc872b1533bb196334ee41a1e",
+  "prompts": {},
+  "sessions": {
+    "s_08db9e914edb37": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "97bb0515-4527-434c-bf25-b4616913057f",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    },
+    "s_c2908598ceaf23": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "280f3a86-472f-4a49-9ff1-46683026efbb",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}
