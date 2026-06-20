@@ -11,6 +11,12 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Harden against transient crates.io download failures on GitHub runners.
+  # `SSL_ERROR_SYSCALL` / errno 0 is curl's HTTP/2 multiplexing dropping the
+  # connection mid-download; disabling multiplexing + retrying fixes it.
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_MULTIPLEXING: "false"
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
 jobs:
   check:
