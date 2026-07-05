@@ -21,7 +21,7 @@ exclude = [
 
 [dependencies]
 # MCP protocol
-rmcp = { version = "1.1.0", features = ["server", "server", "macros", "transport-io", "transport-streamable-http-server"] }
+rmcp = { version = "2.1.0", features = ["server", "macros", "transport-io", "transport-streamable-http-server"] }
 
 # HTTP server
 axum = "0.8"
@@ -47,7 +47,7 @@ tree-sitter-groovy = "0.1.2"
 tree-sitter-ruby = "0.23"
 
 # Database
-rusqlite = { version = "0.39.0", features = ["bundled"], optional = true }
+rusqlite = { version = "0.40.0", features = ["bundled"], optional = true }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -66,7 +66,7 @@ sha2 = "0.11"
 hex = "0.4"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-indicatif = "0.17"
+indicatif = "0.18"
 
 [features]
 default = ["sqlite"]
