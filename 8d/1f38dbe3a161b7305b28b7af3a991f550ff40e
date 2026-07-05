@@ -1,0 +1,21 @@
+Cargo.toml
+  s_88bb7817573371::t_a8c3a01cd8657a 69
+  s_88bb7817573371::t_11a58593c3f8ef 24
+  s_88bb7817573371::t_b4d299ec623265 50
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "8d1f38dbe3a161b7305b28b7af3a991f550ff40e",
+  "prompts": {},
+  "sessions": {
+    "s_88bb7817573371": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d6e3f2e2-d51a-4a71-a009-ac34cf016acd",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}
