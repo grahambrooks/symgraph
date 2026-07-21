@@ -1,6 +1,5 @@
 //! Request and response types for MCP tools
 
-use rmcp::schemars;
 use serde::Deserialize;
 
 /// Request for context tool

@@ -20,15 +20,20 @@ exclude = [
 ]
 
 [dependencies]
-# MCP protocol
-rmcp = { version = "2.1.0", features = ["server", "macros", "transport-io", "transport-streamable-http-server"] }
+# MCP protocol (server-only; gated behind the `server` feature)
+rmcp = { version = "2.1.0", features = ["server", "macros", "transport-io", "transport-streamable-http-server"], optional = true }
 
-# HTTP server
-axum = "0.8"
-tokio-util = "0.7"
+# HTTP server (server-only)
+axum = { version = "0.8", optional = true }
+tokio-util = { version = "0.7", optional = true }
 
-# Async runtime
-tokio = { version = "1", features = ["full"] }
+# Async runtime (server-only)
+tokio = { version = "1", features = ["full"], optional = true }
+
+# JSON Schema derive for MCP request types. Depended on directly (rather than
+# via rmcp's re-export) so the request structs compile in CLI-only builds that
+# exclude the server stack.
+schemars = "1.2"
 
 # Tree-sitter for code parsing
 tree-sitter = "0.26"
@@ -69,12 +74,27 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 indicatif = "0.18"
 
 [features]
-default = ["sqlite"]
+default = ["sqlite", "server"]
 sqlite = ["rusqlite"]
+# The MCP server (stdio + HTTP transports). Pulls in the async/HTTP stack.
+# Disable it (`--no-default-features --features sqlite`) to build the lean,
+# CLI-only `symgraph-cli` binary without rmcp/axum/tokio.
+server = ["sqlite", "dep:rmcp", "dep:axum", "dep:tokio", "dep:tokio-util"]
 
 [dev-dependencies]
 tempfile = "3"
 
+# Full binary: CLI query commands + the MCP server (`serve`). Requires the
+# `server` feature, so it is skipped in CLI-only builds.
 [[bin]]
 name = "symgraph"
 path = "src/main.rs"
+required-features = ["server"]
+
+# CLI-only binary: every query/analysis command minus `serve`, plus
+# CLI-oriented extras (watch, reindex, completions, man). Builds without the
+# server stack when compiled with `--no-default-features --features sqlite`.
+[[bin]]
+name = "symgraph-cli"
+path = "src/bin/symgraph-cli.rs"
+required-features = ["sqlite"]

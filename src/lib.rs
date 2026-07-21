@@ -40,6 +40,7 @@ pub mod ops;
 pub mod security;
 pub mod types;
 
+use std::collections::BTreeMap;
 use std::path::Path;
 use std::time::SystemTime;
 
@@ -50,6 +51,64 @@ use indicatif::{ProgressBar, ProgressStyle};
 /// Commit and checkpoint the WAL after this many files during bulk indexing.
 /// Keeps WAL size bounded without requiring a single massive transaction.
 const CHECKPOINT_INTERVAL: usize = 200;
+
+/// Extensions that denote program source code. Used only to report *unsupported*
+/// source files encountered during indexing (those whose extension is not in the
+/// active `IndexConfig::extensions`) without treating data/markup/config files
+/// like `.json`, `.md`, or `.png` as source. Membership here does not imply
+/// symgraph can parse the language — support is decided by `IndexConfig`.
+#[cfg(feature = "sqlite")]
+#[rustfmt::skip]
+const SOURCE_CODE_EXTENSIONS: &[&str] = &[
+    // C family / systems
+    "c", "h", "cpp", "cc", "cxx", "c++", "hpp", "hxx", "hh", "cs", "rs", "go", "zig", "d", "nim",
+    "v", "cu", "cuh",
+    // JVM / .NET
+    "java", "kt", "kts", "scala", "sc", "groovy", "clj", "cljs", "cljc", "vb", "fs", "fsx",
+    // scripting / dynamic
+    "py", "pyi", "pyw", "rb", "rake", "php", "phtml", "pl", "pm", "lua", "tcl", "r", "jl", "dart",
+    "ex", "exs", "erl", "hrl", "cr",
+    // JS / TS
+    "js", "jsx", "mjs", "cjs", "ts", "tsx", "mts", "cts", "coffee",
+    // functional / lisp
+    "hs", "lhs", "ml", "mli", "elm", "rkt", "scm", "lisp", "el", "clj",
+    // apple
+    "swift", "m", "mm",
+    // shells
+    "sh", "bash", "zsh", "fish", "ps1",
+    // db / other
+    "sql", "pas", "f90", "f95", "f03", "for",
+];
+
+/// Whether `ext` (assumed lowercase) names a program-source-code file type.
+#[cfg(feature = "sqlite")]
+fn is_source_code_extension(ext: &str) -> bool {
+    SOURCE_CODE_EXTENSIONS.contains(&ext)
+}
+
+/// Record a file that was skipped because its extension is not indexed, but only
+/// when the extension is a recognized source-code type (and not merely a cased
+/// variant of an already-supported extension). Feeds the "unsupported source
+/// types" report emitted by `index`/`reindex`.
+#[cfg(feature = "sqlite")]
+fn record_unsupported_source(config: &IndexConfig, counts: &mut BTreeMap<String, u64>, ext: &str) {
+    if ext.is_empty() {
+        return;
+    }
+    let ext_lc = ext.to_ascii_lowercase();
+    // `.CPP` is not "unsupported" — it's a cased spelling of a supported ext.
+    if config
+        .extensions
+        .iter()
+        .any(|allowed| allowed.eq_ignore_ascii_case(&ext_lc))
+    {
+        return;
+    }
+    if is_source_code_extension(&ext_lc) {
+        *counts.entry(ext_lc).or_insert(0) += 1;
+    }
+}
+
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use tracing::{debug, info, warn};
@@ -224,32 +283,40 @@ fn collect_entries(
             continue;
         }
 
-        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        let is_manifest = extraction::manifest::is_manifest_file(filename);
-
-        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        if !is_manifest
-            && !config.extensions.is_empty()
-            && !config.extensions.iter().any(|allowed| allowed == ext)
-        {
-            continue;
-        }
-
-        let language = if is_manifest {
-            extraction::manifest::manifest_language(filename)
-        } else {
-            Language::from_extension(ext)
-        };
-        if language == Language::Unknown {
-            continue;
-        }
-
         if path.components().any(|component| {
             config
                 .exclude_dirs
                 .iter()
                 .any(|dir| component.as_os_str() == dir.as_str())
         }) {
+            continue;
+        }
+
+        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let is_manifest = extraction::manifest::is_manifest_file(filename);
+
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let language = if is_manifest {
+            extraction::manifest::manifest_language(filename)
+        } else {
+            Language::from_extension(ext)
+        };
+        // Files with no parser get skipped. Track the extension (when it's a
+        // recognized source type) so the CLI can report which source file types
+        // were left out of the index.
+        if language == Language::Unknown {
+            record_unsupported_source(config, &mut stats.unsupported_types, ext);
+            continue;
+        }
+
+        // A language symgraph can parse, but its extension isn't in the active
+        // allow-list — skip it, and report it as an unsupported source type if
+        // it names source code the caller might have wanted indexed.
+        if !is_manifest
+            && !config.extensions.is_empty()
+            && !config.extensions.iter().any(|allowed| allowed == ext)
+        {
+            record_unsupported_source(config, &mut stats.unsupported_types, ext);
             continue;
         }
 
@@ -491,4 +558,8 @@ pub struct IndexingStats {
     pub skipped: u64,
     pub errors: u64,
     pub resolved_refs: u64,
+    /// Extensions of files that were walked but not indexed because symgraph has
+    /// no parser for them, keyed by lowercased extension with an occurrence count.
+    /// Files in excluded directories and recognized manifests are not counted.
+    pub unsupported_types: BTreeMap<String, u64>,
 }

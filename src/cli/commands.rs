@@ -103,8 +103,31 @@ pub fn index_command(path: &str, fmt: OutputFormat) -> Result<()> {
     if stats.errors > 0 {
         println!("  Errors: {}", stats.errors);
     }
+    print_unsupported_types(&stats.unsupported_types);
 
     Ok(())
+}
+
+/// Print the source file types that were found during indexing but left out of
+/// the index because symgraph does not index them (no parser for the language,
+/// or the extension isn't in the active set). Non-source files (docs, config,
+/// images) are not counted. No-op when every source file found was indexed.
+pub fn print_unsupported_types(unsupported: &std::collections::BTreeMap<String, u64>) {
+    if unsupported.is_empty() {
+        return;
+    }
+    let total: u64 = unsupported.values().sum();
+    println!(
+        "  Unsupported source file types skipped: {} file(s) across {} type(s)",
+        total,
+        unsupported.len()
+    );
+    // Show the most common types first.
+    let mut types: Vec<(&String, &u64)> = unsupported.iter().collect();
+    types.sort_by(|a, b| b.1.cmp(a.1).then_with(|| a.0.cmp(b.0)));
+    for (ext, count) in types {
+        println!("    .{}: {}", ext, count);
+    }
 }
 
 /// Show index statistics for a project

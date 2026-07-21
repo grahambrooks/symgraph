@@ -28,18 +28,25 @@
 pub mod handlers;
 mod types;
 
+pub use types::*;
+
+// Everything below is the MCP server itself (the `rmcp`-driven handler and its
+// `Sync` database wrapper). It is gated behind the `server` feature so CLI-only
+// builds — which use `handlers`/`types` directly — need not link rmcp/tokio.
+#[cfg(feature = "server")]
 use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(feature = "server")]
 use std::sync::{Arc, RwLock};
 
+#[cfg(feature = "server")]
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{ServerCapabilities, ServerInfo},
     tool, tool_handler, tool_router, ServerHandler,
 };
 
+#[cfg(feature = "server")]
 use crate::db::Database;
-
-pub use types::*;
 
 /// Wrapper around `Database` that opts in to `Sync`.
 ///
@@ -51,12 +58,15 @@ pub use types::*;
 /// (serialized mode) by default, which serializes all access at the C level.
 /// If true concurrent reader parallelism is needed in the future, switch to a
 /// connection pool (e.g., `r2d2_sqlite`).
+#[cfg(feature = "server")]
 pub struct SyncDatabase(pub Database);
 
 // SAFETY: All `Database` access is mediated by an `RwLock`. The underlying
 // SQLite library provides its own thread-safety guarantees in serialized mode.
+#[cfg(feature = "server")]
 unsafe impl Sync for SyncDatabase {}
 
+#[cfg(feature = "server")]
 impl std::ops::Deref for SyncDatabase {
     type Target = Database;
     fn deref(&self) -> &Database {
@@ -64,6 +74,7 @@ impl std::ops::Deref for SyncDatabase {
     }
 }
 
+#[cfg(feature = "server")]
 impl std::ops::DerefMut for SyncDatabase {
     fn deref_mut(&mut self) -> &mut Database {
         &mut self.0
@@ -71,6 +82,7 @@ impl std::ops::DerefMut for SyncDatabase {
 }
 
 /// MCP server handler for symgraph
+#[cfg(feature = "server")]
 #[derive(Clone)]
 pub struct SymgraphHandler {
     #[allow(dead_code)]
@@ -81,6 +93,7 @@ pub struct SymgraphHandler {
     is_reindexing: Arc<AtomicBool>,
 }
 
+#[cfg(feature = "server")]
 #[tool_router]
 impl SymgraphHandler {
     pub fn new(db: Database, project_root: String) -> Self {
@@ -387,6 +400,7 @@ impl SymgraphHandler {
     }
 }
 
+#[cfg(feature = "server")]
 #[tool_handler]
 impl ServerHandler for SymgraphHandler {
     fn get_info(&self) -> ServerInfo {

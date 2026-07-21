@@ -304,6 +304,47 @@ fn test_build_full_index_populates_empty_target_db() {
 }
 
 #[test]
+fn test_index_reports_unsupported_source_types() {
+    let dir = tempdir().unwrap();
+    let src = dir.path().join("src");
+    fs::create_dir(&src).unwrap();
+    // Supported source that gets indexed.
+    fs::write(src.join("main.rs"), "fn main() {}\n").unwrap();
+    // Source code symgraph has no parser for -> reported.
+    fs::write(src.join("app.zig"), "pub fn main() void {}\n").unwrap();
+    // Source whose language is known but not in the default allow-list -> reported.
+    fs::write(src.join("C.php"), "<?php class C {}\n").unwrap();
+    // Non-source files -> never reported as unsupported source types.
+    fs::write(src.join("README.md"), "# hi\n").unwrap();
+    fs::write(src.join("data.json"), "{\"a\":1}\n").unwrap();
+
+    let db_path = dir.path().join("unsupported.db");
+    let mut db = Database::open(&db_path).unwrap();
+    let config = IndexConfig {
+        root: dir.path().display().to_string(),
+        ..Default::default()
+    };
+
+    let stats = build_full_index(&mut db, &config).unwrap();
+
+    assert_eq!(stats.files, 1, "only the .rs file is indexed");
+    assert_eq!(stats.unsupported_types.get("zig"), Some(&1));
+    assert_eq!(stats.unsupported_types.get("php"), Some(&1));
+    assert!(
+        !stats.unsupported_types.contains_key("md"),
+        "docs are not source"
+    );
+    assert!(
+        !stats.unsupported_types.contains_key("json"),
+        "data files are not source"
+    );
+    assert!(
+        !stats.unsupported_types.contains_key("rs"),
+        "indexed types are not reported"
+    );
+}
+
+#[test]
 fn test_rebuild_project_database_replaces_stale_rows() {
     let dir = tempdir().unwrap();
     let src = dir.path().join("src");

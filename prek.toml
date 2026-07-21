@@ -14,6 +14,16 @@ hooks = [
 ]
 
 [[repos]]
+repo = "https://github.com/rhysd/actionlint"
+rev = "v1.7.12"
+hooks = [
+  # Uses the system-installed actionlint (Homebrew) rather than building the Go
+  # source or pulling a Docker image. Swap to id = "actionlint" if you'd rather
+  # prek build a pinned binary for contributors without actionlint installed.
+  { id = "actionlint-system" }
+]
+
+[[repos]]
 repo = "https://github.com/gitleaks/gitleaks"
 rev = "v8.30.1"
 hooks = [

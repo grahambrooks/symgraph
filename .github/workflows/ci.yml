@@ -49,6 +49,23 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --all-features -- -D warnings
 
+  cli-only:
+    name: CLI-only build
+    # Exercises the lean `symgraph-cli` feature combo (no rmcp/axum/tokio).
+    # `--all-features` builds above never hit this path, so a missing
+    # `#[cfg(feature = "server")]` gate would otherwise slip through.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Clippy (CLI-only)
+        run: cargo clippy --bin symgraph-cli --no-default-features --features sqlite -- -D warnings
+      - name: Test (CLI-only)
+        run: cargo test --no-default-features --features sqlite
+
   test:
     name: Test
     runs-on: ${{ matrix.os }}

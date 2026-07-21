@@ -55,8 +55,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
 
-      - name: Build
-        run: cargo build --release --target ${{ matrix.target }}
+      - name: Build symgraph (CLI + MCP server)
+        run: cargo build --release --target ${{ matrix.target }} --bin symgraph
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+      - name: Build symgraph-cli (lean, no server stack)
+        # Built with the server feature off so the standalone CLI ships without
+        # the rmcp/axum/tokio stack it never uses.
+        run: cargo build --release --target ${{ matrix.target }} --bin symgraph-cli --no-default-features --features sqlite
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
@@ -65,13 +72,19 @@ jobs:
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/symgraph dist/
-          chmod +x dist/symgraph
+          cp target/${{ matrix.target }}/release/symgraph-cli dist/
+          chmod +x dist/symgraph dist/symgraph-cli
 
       - name: Prepare artifact (Windows)
         if: runner.os == 'Windows'
+        # Pin the shell that Actions already defaults to on Windows (pwsh). This
+        # keeps the proven runtime behavior while telling actionlint not to run
+        # shellcheck (which mis-lints these `copy`/backslash paths as bash).
+        shell: pwsh
         run: |
           mkdir dist
           copy target\${{ matrix.target }}\release\symgraph.exe dist\
+          copy target\${{ matrix.target }}\release\symgraph-cli.exe dist\
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -120,34 +133,34 @@ jobs:
           cp bundle/manifest.json bundle-darwin-x64/
           cp artifacts/symgraph-darwin-x64/symgraph bundle-darwin-x64/bin/
           chmod +x bundle-darwin-x64/bin/symgraph
-          cd bundle-darwin-x64 && zip -r ../symgraph-${VERSION}-darwin-x64.mcpb . && cd ..
+          cd bundle-darwin-x64 && zip -r "../symgraph-${VERSION}-darwin-x64.mcpb" . && cd ..
 
           # macOS arm64
           mkdir -p bundle-darwin-arm64/bin
           cp bundle/manifest.json bundle-darwin-arm64/
           cp artifacts/symgraph-darwin-arm64/symgraph bundle-darwin-arm64/bin/
           chmod +x bundle-darwin-arm64/bin/symgraph
-          cd bundle-darwin-arm64 && zip -r ../symgraph-${VERSION}-darwin-arm64.mcpb . && cd ..
+          cd bundle-darwin-arm64 && zip -r "../symgraph-${VERSION}-darwin-arm64.mcpb" . && cd ..
 
           # Linux x64
           mkdir -p bundle-linux-x64/bin
           cp bundle/manifest.json bundle-linux-x64/
           cp artifacts/symgraph-linux-x64/symgraph bundle-linux-x64/bin/
           chmod +x bundle-linux-x64/bin/symgraph
-          cd bundle-linux-x64 && zip -r ../symgraph-${VERSION}-linux-x64.mcpb . && cd ..
+          cd bundle-linux-x64 && zip -r "../symgraph-${VERSION}-linux-x64.mcpb" . && cd ..
 
           # Linux arm64
           mkdir -p bundle-linux-arm64/bin
           cp bundle/manifest.json bundle-linux-arm64/
           cp artifacts/symgraph-linux-arm64/symgraph bundle-linux-arm64/bin/
           chmod +x bundle-linux-arm64/bin/symgraph
-          cd bundle-linux-arm64 && zip -r ../symgraph-${VERSION}-linux-arm64.mcpb . && cd ..
+          cd bundle-linux-arm64 && zip -r "../symgraph-${VERSION}-linux-arm64.mcpb" . && cd ..
 
           # Windows x64
           mkdir -p bundle-windows-x64/bin
           cp bundle/manifest.json bundle-windows-x64/
           cp artifacts/symgraph-windows-x64/symgraph.exe bundle-windows-x64/bin/
-          cd bundle-windows-x64 && zip -r ../symgraph-${VERSION}-windows-x64.mcpb . && cd ..
+          cd bundle-windows-x64 && zip -r "../symgraph-${VERSION}-windows-x64.mcpb" . && cd ..
 
       - name: Create universal macOS bundle
         run: |
@@ -163,7 +176,7 @@ jobs:
             cp artifacts/symgraph-darwin-arm64/symgraph bundle-darwin-universal/bin/
           fi
           chmod +x bundle-darwin-universal/bin/symgraph
-          cd bundle-darwin-universal && zip -r ../symgraph-${VERSION}-darwin-universal.mcpb . && cd ..
+          cd bundle-darwin-universal && zip -r "../symgraph-${VERSION}-darwin-universal.mcpb" . && cd ..
 
       - name: Upload MCPB bundles
         uses: actions/upload-artifact@v7
@@ -193,30 +206,32 @@ jobs:
           VERSION=${GITHUB_REF#refs/tags/v}
           mkdir -p release
 
-          # Create tarballs for standalone binaries (include manifest.json)
+          # Create tarballs for standalone binaries. Each bundles both the
+          # full `symgraph` (CLI + MCP server) and the lean `symgraph-cli`,
+          # alongside manifest.json.
           cp manifest-versioned.json artifacts/symgraph-linux-x64/manifest.json
           cd artifacts/symgraph-linux-x64
-          tar -czf ../../release/symgraph-${VERSION}-linux-x64.tar.gz symgraph manifest.json
+          tar -czf "../../release/symgraph-${VERSION}-linux-x64.tar.gz" symgraph symgraph-cli manifest.json
           cd ../..
 
           cp manifest-versioned.json artifacts/symgraph-linux-arm64/manifest.json
           cd artifacts/symgraph-linux-arm64
-          tar -czf ../../release/symgraph-${VERSION}-linux-arm64.tar.gz symgraph manifest.json
+          tar -czf "../../release/symgraph-${VERSION}-linux-arm64.tar.gz" symgraph symgraph-cli manifest.json
           cd ../..
 
           cp manifest-versioned.json artifacts/symgraph-darwin-x64/manifest.json
           cd artifacts/symgraph-darwin-x64
-          tar -czf ../../release/symgraph-${VERSION}-darwin-x64.tar.gz symgraph manifest.json
+          tar -czf "../../release/symgraph-${VERSION}-darwin-x64.tar.gz" symgraph symgraph-cli manifest.json
           cd ../..
 
           cp manifest-versioned.json artifacts/symgraph-darwin-arm64/manifest.json
           cd artifacts/symgraph-darwin-arm64
-          tar -czf ../../release/symgraph-${VERSION}-darwin-arm64.tar.gz symgraph manifest.json
+          tar -czf "../../release/symgraph-${VERSION}-darwin-arm64.tar.gz" symgraph symgraph-cli manifest.json
           cd ../..
 
           cp manifest-versioned.json artifacts/symgraph-windows-x64/manifest.json
           cd artifacts/symgraph-windows-x64
-          zip ../../release/symgraph-${VERSION}-windows-x64.zip symgraph.exe manifest.json
+          zip "../../release/symgraph-${VERSION}-windows-x64.zip" symgraph.exe symgraph-cli.exe manifest.json
           cd ../..
 
           # Copy MCPB bundles
