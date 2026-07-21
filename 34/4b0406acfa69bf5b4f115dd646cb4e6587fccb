@@ -1,0 +1,85 @@
+src/bin/symgraph-cli.rs
+  s_3edd4897ac030b::t_d01796bff9af9f 1-17,19,21-22,26-48,50-196,200-407,409-631,635-660,664-675
+  s_8851c7aad0df7a::t_2ee54b25e9da90 23-25
+  s_3edd4897ac030b::t_99ed3bf3ab41b4 18,20
+  s_f855ed379385af::t_0c2bf79585b49a 197-199,632-634,661-663
+  s_8851c7aad0df7a::t_068945c1701cab 408
+  s_f855ed379385af::t_d9caf7da917672 49
+.github/workflows/release.yml
+  s_3edd4897ac030b::t_57de3f35409656 214
+  s_3edd4897ac030b::t_b788e55a25fdd5 219
+  s_3edd4897ac030b::t_e7a1ba37727ae6 224
+  s_3edd4897ac030b::t_54f0c6fca10dcb 143
+  s_3edd4897ac030b::t_22bf0f754cf5ce 163
+  s_3edd4897ac030b::t_0924f0f959b96f 234
+  s_3edd4897ac030b::t_36183f2f9292da 150
+  s_3edd4897ac030b::t_1343e0cb7e2a6d 179
+  s_3edd4897ac030b::t_3b7cabd14cf0ed 209-211
+  s_3edd4897ac030b::t_77c5d21b520756 80-83
+  s_3edd4897ac030b::t_e66455d4eba267 136
+  s_3edd4897ac030b::t_01bb9186c400b4 58-66,75-76,87
+  s_3edd4897ac030b::t_389a1000803152 157
+  s_3edd4897ac030b::t_09650775b443f0 229
+prek.toml
+  s_3edd4897ac030b::t_46ccf94f1936a1 17-25
+  s_3edd4897ac030b::t_f44551c119dc2c 16
+src/mcp/mod.rs
+  s_3edd4897ac030b::t_2ad118af222022 61,66,69,77,85
+  s_3edd4897ac030b::t_75b8b6f21e9064 96
+  s_3edd4897ac030b::t_d31c176db332be 31-36,38,41,48
+  s_3edd4897ac030b::t_96ab452f5d70ef 403
+Cargo.toml
+  s_3edd4897ac030b::t_e89ea6fc154a01 23-24,26-28,30-36
+  s_3edd4897ac030b::t_bb6936bd79c335 77,79-82,87-88,92-100
+src/cli/commands.rs
+  s_f855ed379385af::t_ce3ec04bc8314c 111-114,121
+  s_8851c7aad0df7a::t_e0df5317e15f1b 115
+  s_8851c7aad0df7a::t_fb1710d5b9f1b7 106,116-120,122-130
+  s_8851c7aad0df7a::t_a8092b777754ed 131-132
+tests/integration_test.rs
+  s_8851c7aad0df7a::t_831969adf021da 307-346
+  s_8851c7aad0df7a::t_82dc14186cf1f6 306
+.github/workflows/ci.yml
+  s_3edd4897ac030b::t_0110fc6469b6ee 52-68
+src/lib.rs
+  s_f855ed379385af::t_4bb6dc73096fd3 54-59,62-83,85-111
+  s_8851c7aad0df7a::t_40972caced4047 561-564
+  s_f855ed379385af::t_6fe79c88b60ba6 61
+  s_f855ed379385af::t_4621dd35045bd3 60
+  s_8851c7aad0df7a::t_444ff22ce47556 43
+  s_8851c7aad0df7a::t_33d88c2ab4e1e8 304-306,308,312-314,319
+  s_f855ed379385af::t_77608bec3f4386 84
+  s_8851c7aad0df7a::t_8c98adca94e280 286-294,315-318
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "344b0406acfa69bf5b4f115dd646cb4e6587fccb",
+  "prompts": {},
+  "sessions": {
+    "s_3edd4897ac030b": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "89b1f255-6c0a-49b7-a3f0-39453a19e621",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    },
+    "s_8851c7aad0df7a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "767d51d4-05ce-4819-a35a-bc9e9d5ddec1",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    },
+    "s_f855ed379385af": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c77d2393-ff71-407b-b9e4-7064ac72f753",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}
