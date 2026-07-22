@@ -13,22 +13,22 @@ class Symgraph < Formula
   on_macos do
     on_arm do
       url "https://github.com/grahambrooks/symgraph/releases/download/v#{version}/symgraph-#{version}-darwin-arm64.tar.gz"
-      sha256 "3e51a04e7bbe352736fec658b5c0426bc3d7c937747928c3a62ab188d025099d"
+      sha256 "d786e5e2dcce35a7e23550108df5aab9465a443226e299dc9bb9b6b59006338f"
     end
     on_intel do
       url "https://github.com/grahambrooks/symgraph/releases/download/v#{version}/symgraph-#{version}-darwin-x64.tar.gz"
-      sha256 "66dcf561f9f2791d5c6dfaa4a857f664d3065190881045be38f20f0f971d90b0"
+      sha256 "df1a379aef2bfcd3785978375c9f7bf64d11d20de9336441734ddcb51393c08d"
     end
   end
 
   on_linux do
     on_arm do
       url "https://github.com/grahambrooks/symgraph/releases/download/v#{version}/symgraph-#{version}-linux-arm64.tar.gz"
-      sha256 "da8aed0258f1e06f782987ac54c41984d7e3dbb15b85fa94c0a1242fd3a2e651"
+      sha256 "42b64f9f9ffd9aeef64445ebe50fd17552e0a06ce40ead989d915da0de1987f9"
     end
     on_intel do
       url "https://github.com/grahambrooks/symgraph/releases/download/v#{version}/symgraph-#{version}-linux-x64.tar.gz"
-      sha256 "f07f68d13ff9865c1aed20ac6f1b492042297ce0f02b78a1953c32da109e7603"
+      sha256 "5ba55a1612ee1d8f22d75985f5146b09edba0a64180c8bd8588a1bc4b41161fd"
     end
   end
 
