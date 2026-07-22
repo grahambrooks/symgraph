@@ -247,6 +247,72 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  homebrew:
+    name: Update Homebrew formula
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download release tarballs
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          mkdir -p hb
+          for arch in darwin-arm64 darwin-x64 linux-arm64 linux-x64; do
+            gh release download "v${VERSION}" -R "${GITHUB_REPOSITORY}" \
+              -p "symgraph-${VERSION}-${arch}.tar.gz" -O "hb/${arch}.tar.gz"
+          done
+
+      - name: Rewrite Formula/symgraph.rb version + sha256s
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          python3 - "$VERSION" <<'PY'
+          import hashlib, pathlib, re, sys
+
+          version = sys.argv[1]
+          archs = ["darwin-arm64", "darwin-x64", "linux-arm64", "linux-x64"]
+          shas = {
+              a: hashlib.sha256(pathlib.Path(f"hb/{a}.tar.gz").read_bytes()).hexdigest()
+              for a in archs
+          }
+
+          formula = pathlib.Path("Formula/symgraph.rb")
+          text = formula.read_text()
+          text = re.sub(r'(?m)^(  version ")[^"]*(")', rf'\g<1>{version}\g<2>', text)
+
+          # Each url line names the arch via the tarball filename; the sha256 sits
+          # on the following line inside the same on_arm/on_intel block.
+          lines = text.splitlines(keepends=True)
+          for i, line in enumerate(lines):
+              m = re.search(r'symgraph-#\{version\}-([a-z0-9-]+)\.tar\.gz', line)
+              if not m or m.group(1) not in shas:
+                  continue
+              for j in range(i + 1, len(lines)):
+                  if "sha256" in lines[j]:
+                      lines[j] = re.sub(r'sha256 "[0-9a-f]*"',
+                                        f'sha256 "{shas[m.group(1)]}"', lines[j])
+                      break
+          formula.write_text("".join(lines))
+          PY
+
+      - name: Commit and push formula
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          if git diff --quiet Formula/symgraph.rb; then
+            echo "Formula already up to date for ${VERSION}."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Formula/symgraph.rb
+          git commit -m "chore: update Homebrew formula to ${VERSION}"
+          git push origin HEAD:main
+
   devcontainer-feature:
     name: Publish Devcontainer Feature
     needs: release

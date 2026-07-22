@@ -28,7 +28,18 @@ binary deployment of MCP Servers.
 
 ## Installation
 
-### macOS & Linux
+### Homebrew (macOS & Linux)
+
+```sh
+brew tap grahambrooks/symgraph https://github.com/grahambrooks/symgraph
+brew install symgraph
+```
+
+This installs the `symgraph` binary (CLI + MCP server) and the lean `symgraph-cli`
+from the latest GitHub release. Upgrade with `brew upgrade symgraph`. The tap points
+at this repository directly, so no separate `homebrew-*` repo is required.
+
+### macOS & Linux (install script)
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/grahambrooks/symgraph/main/install.sh | bash

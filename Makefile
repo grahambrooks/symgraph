@@ -93,8 +93,13 @@ release-dry-run:
 	@echo "Tag:     $(TAG)"
 	@echo ""
 	@echo "Files to update:"
-	@echo "  Cargo.toml      (version = \"$(VERSION)\")"
-	@echo "  manifest.json    (version: \"$(VERSION)\")"
+	@echo "  Cargo.toml         (version = \"$(VERSION)\")"
+	@echo "  manifest.json       (version: \"$(VERSION)\")"
+	@if grep -q '^  version "$(VERSION)"' Formula/symgraph.rb; then \
+		echo "  Formula/symgraph.rb (already at $(VERSION) — no change)"; \
+	else \
+		echo "  Formula/symgraph.rb (version \"$(VERSION)\"; sha256s filled by CI post-build)"; \
+	fi
 	@echo ""
 	@echo "Git operations:"
 	@echo "  git commit -am 'release $(TAG)'"
@@ -111,7 +116,13 @@ release: check
 	sed -i '' 's/^version = ".*"/version = "$(VERSION)"/' Cargo.toml
 	cargo check --quiet 2>/dev/null || (echo "Cargo.toml version update failed"; exit 1)
 	jq --arg v "$(VERSION)" '.version = $$v' manifest.json > manifest.json.tmp && mv manifest.json.tmp manifest.json
-	git add Cargo.toml manifest.json
+	@if grep -q '^  version "$(VERSION)"' Formula/symgraph.rb; then \
+		echo "Homebrew formula already at $(VERSION)."; \
+	else \
+		sed -i '' 's/^  version ".*"/  version "$(VERSION)"/' Formula/symgraph.rb; \
+		echo "Updated Homebrew formula version to $(VERSION) (sha256s updated by CI after the build)."; \
+	fi
+	git add Cargo.toml manifest.json Formula/symgraph.rb
 	git commit -m "release $(TAG)"
 	git tag "$(TAG)"
 	git push origin main --tags
