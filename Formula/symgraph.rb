@@ -7,7 +7,7 @@
 class Symgraph < Formula
   desc "Semantic code intelligence: symbol graph + MCP server for codebases"
   homepage "https://github.com/grahambrooks/symgraph"
-  version "2026.7.5"
+  version "2026.7.21"
   license "MIT"
 
   on_macos do
