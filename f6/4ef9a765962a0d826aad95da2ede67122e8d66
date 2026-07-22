@@ -1,0 +1,29 @@
+README.md
+  s_8851c7aad0df7a::t_03edc34a0c3ee6 31-42
+Makefile
+  s_8851c7aad0df7a::t_6a85e0dca0171f 96-102
+  s_8851c7aad0df7a::t_8a19fdb6d04cfc 119-125
+.github/workflows/release.yml
+  s_8851c7aad0df7a::t_46769a82785d2f 250-315
+Formula/symgraph.rb
+  s_8851c7aad0df7a::t_258c0461a50dad 3-6
+  s_8851c7aad0df7a::t_9d633b00d39f9a 36-38,40,45
+  s_8851c7aad0df7a::t_3d4d4716df4d4c 1-2,7-9,11-35,39,41-44,46-47
+  s_8851c7aad0df7a::t_72d5a5e2507bba 10
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.15",
+  "base_commit_sha": "f64ef9a765962a0d826aad95da2ede67122e8d66",
+  "prompts": {},
+  "sessions": {
+    "s_8851c7aad0df7a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "767d51d4-05ce-4819-a35a-bc9e9d5ddec1",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}
