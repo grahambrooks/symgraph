@@ -40,7 +40,10 @@ TAG_RE = re.compile(r"^v(\d{4})\.(\d{1,2})\.(\d+)$")
 # Every tool ships these four; bx and the formula both rely on it.
 BASE_TARGETS = [
     ("aarch64-apple-darwin", "macos-14"),
-    ("x86_64-apple-darwin", "macos-14"),          # cross-compiled on Apple Silicon
+    # Native Intel runner: cross-compiling from Apple Silicon fails for any tool
+    # that links a -sys crate (openssl-sys via git2/libssh2), since the runner
+    # only has arm64 libraries.
+    ("x86_64-apple-darwin", "macos-15-intel"),
     ("x86_64-unknown-linux-gnu", "ubuntu-latest"),
     ("aarch64-unknown-linux-gnu", None),          # native arm runner, or cross (see plan)
 ]
