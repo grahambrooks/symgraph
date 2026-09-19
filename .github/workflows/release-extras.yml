@@ -1,0 +1,138 @@
+# Release extras for symgraph: everything the release publishes beyond the
+# platform archives, Homebrew formula and crates.io package that the standard
+# release workflow (release.yml, release-kit v2) owns.
+#
+#   * mcpb     — Claude Desktop MCP bundles (.mcpb), one per platform, built
+#                from the `symgraph` binary in the published release archives
+#                and attached to the same GitHub Release.
+#   * devcontainer-feature — publishes devcontainer-feature/src/symgraph to
+#                ghcr.io with its version set from the tag.
+#
+# Runs after `release` finishes successfully for a tag push. A release re-run
+# via workflow_dispatch reports a branch rather than the tag, so re-run these
+# by hand in that case: Actions → release-extras → Run workflow, with the tag.
+name: release-extras
+
+on:
+  workflow_run:
+    workflows: [release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing released tag (e.g. v2026.9.3)
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-extras-${{ inputs.tag || github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ inputs.tag || github.event.workflow_run.head_branch }}
+
+jobs:
+  mcpb:
+    name: Package MCPB bundles
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Download release archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p archives
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -D archives \
+            -p "symgraph-${TAG}-*.tar.gz" -p "symgraph-${TAG}-*.zip"
+          ls -la archives
+
+      - name: Prepare versioned manifest
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          mkdir -p bundle
+          jq --arg v "$VERSION" '.version = $v' manifest.json > bundle/manifest.json
+
+      - name: Create platform-specific bundles
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+
+          # bundle <mcpb platform name> <rust target> <archive ext> <binary name>
+          bundle() {
+            local name="$1" target="$2" ext="$3" bin="$4"
+            local dir="bundle-${name}" extract="extract-${name}"
+            mkdir -p "${dir}/bin" "${extract}"
+            case "${ext}" in
+              tar.gz) tar -xzf "archives/symgraph-${TAG}-${target}.tar.gz" -C "${extract}" ;;
+              zip) unzip -q "archives/symgraph-${TAG}-${target}.zip" -d "${extract}" ;;
+            esac
+            cp bundle/manifest.json "${dir}/"
+            cp "${extract}/${bin}" "${dir}/bin/"
+            chmod +x "${dir}/bin/${bin}"
+            (cd "${dir}" && zip -r "../symgraph-${VERSION}-${name}.mcpb" .)
+          }
+
+          bundle darwin-x64    x86_64-apple-darwin       tar.gz symgraph
+          bundle darwin-arm64  aarch64-apple-darwin      tar.gz symgraph
+          bundle linux-x64     x86_64-unknown-linux-gnu  tar.gz symgraph
+          bundle linux-arm64   aarch64-unknown-linux-gnu tar.gz symgraph
+          bundle windows-x64   x86_64-pc-windows-msvc    zip    symgraph.exe
+
+          # "Universal" macOS bundle. lipo only runs on macOS, so as before this
+          # carries the arm64 binary.
+          mkdir -p bundle-darwin-universal/bin
+          cp bundle/manifest.json bundle-darwin-universal/
+          cp bundle-darwin-arm64/bin/symgraph bundle-darwin-universal/bin/
+          chmod +x bundle-darwin-universal/bin/symgraph
+          (cd bundle-darwin-universal && zip -r "../symgraph-${VERSION}-darwin-universal.mcpb" .)
+
+          ls -la ./*.mcpb
+
+      - name: Attach bundles to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$TAG" -R "$GITHUB_REPOSITORY" ./*.mcpb --clobber
+
+  devcontainer-feature:
+    name: Publish Devcontainer Feature
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.TAG }}
+
+      - name: Update feature version from tag
+        run: |
+          set -euo pipefail
+          VERSION="${TAG#v}"
+          jq --arg v "$VERSION" '.version = $v' \
+            devcontainer-feature/src/symgraph/devcontainer-feature.json > tmp.json
+          mv tmp.json devcontainer-feature/src/symgraph/devcontainer-feature.json
+
+      - name: Publish devcontainer feature
+        uses: devcontainers/action@v1
+        with:
+          publish-features: true
+          base-path-to-features: devcontainer-feature/src
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

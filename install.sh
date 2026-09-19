@@ -63,15 +63,29 @@ fi
 # Strip leading 'v' if present
 VERSION="${VERSION#v}"
 
-TARBALL="symgraph-${VERSION}-${OS}-${ARCH}.tar.gz"
-DOWNLOAD_URL="https://github.com/${REPO}/releases/download/v${VERSION}/${TARBALL}"
+# Release archives are named symgraph-v<version>-<rust target triple>.tar.gz
+# (release-kit v2). Releases cut before that used symgraph-<version>-<os>-<arch>,
+# which is tried as a fallback so pinned older versions still install.
+case "${ARCH}" in
+    x64) CPU="x86_64" ;;
+    arm64) CPU="aarch64" ;;
+esac
+case "${OS}" in
+    linux) TARGET="${CPU}-unknown-linux-gnu" ;;
+    darwin) TARGET="${CPU}-apple-darwin" ;;
+esac
+TARBALL="symgraph-v${VERSION}-${TARGET}.tar.gz"
+LEGACY_TARBALL="symgraph-${VERSION}-${OS}-${ARCH}.tar.gz"
+BASE_URL="https://github.com/${REPO}/releases/download/v${VERSION}"
 
 echo "Installing symgraph ${VERSION} for ${OS}/${ARCH}..."
 
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
-curl -fsSL "${DOWNLOAD_URL}" -o "${TMP_DIR}/${TARBALL}"
+if ! curl -fsSL "${BASE_URL}/${TARBALL}" -o "${TMP_DIR}/${TARBALL}" 2>/dev/null; then
+    curl -fsSL "${BASE_URL}/${LEGACY_TARBALL}" -o "${TMP_DIR}/${TARBALL}"
+fi
 tar -xzf "${TMP_DIR}/${TARBALL}" -C "${TMP_DIR}"
 
 # Install binary and manifest

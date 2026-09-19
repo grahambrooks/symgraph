@@ -41,8 +41,12 @@ if ($Version -eq "latest") {
 # Strip leading 'v' if present
 $Version = $Version -replace "^v", ""
 
-$ZipName = "symgraph-$Version-windows-x64.zip"
-$DownloadUrl = "https://github.com/$Repo/releases/download/v$Version/$ZipName"
+# Release archives are named symgraph-v<version>-<rust target triple>.zip
+# (release-kit v2). Releases cut before that used symgraph-<version>-windows-x64.zip,
+# which is tried as a fallback so pinned older versions still install.
+$ZipName = "symgraph-v$Version-x86_64-pc-windows-msvc.zip"
+$LegacyZipName = "symgraph-$Version-windows-x64.zip"
+$BaseUrl = "https://github.com/$Repo/releases/download/v$Version"
 
 Write-Host "Installing symgraph $Version for windows/$Arch..."
 
@@ -51,7 +55,11 @@ New-Item -ItemType Directory -Path $TmpDir -Force | Out-Null
 
 try {
     $ZipPath = Join-Path $TmpDir $ZipName
-    Invoke-WebRequest -Uri $DownloadUrl -OutFile $ZipPath -UseBasicParsing
+    try {
+        Invoke-WebRequest -Uri "$BaseUrl/$ZipName" -OutFile $ZipPath -UseBasicParsing
+    } catch {
+        Invoke-WebRequest -Uri "$BaseUrl/$LegacyZipName" -OutFile $ZipPath -UseBasicParsing
+    }
 
     Expand-Archive -Path $ZipPath -DestinationPath $TmpDir -Force
 
