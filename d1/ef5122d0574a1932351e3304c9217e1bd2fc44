@@ -1,0 +1,19 @@
+scripts/release.py
+  s_98467c33333117::t_7308c31f38c10c 43-46
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d1ef5122d0574a1932351e3304c9217e1bd2fc44",
+  "prompts": {},
+  "sessions": {
+    "s_98467c33333117": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_98467c33333117",
+        "model": "unknown"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}
