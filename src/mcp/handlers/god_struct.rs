@@ -33,7 +33,11 @@ pub fn handle_god_struct(
     req: &GodStructRequest,
 ) -> Result<String, String> {
     let churn = if req.churn.unwrap_or(false) {
-        file_churn(project_root, req.days.unwrap_or(DEFAULT_DAYS), None).ok()
+        file_churn(project_root, req.days.unwrap_or(DEFAULT_DAYS), None)
+            .inspect_err(
+                |e| tracing::warn!(error = %e, "churn unavailable; debt score omits volatility"),
+            )
+            .ok()
     } else {
         None
     };

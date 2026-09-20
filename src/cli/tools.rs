@@ -30,6 +30,10 @@ fn query_context(path: &str) -> Result<(String, Database)> {
         );
     }
     let db = Database::open(&resolved.path)?;
+    // Warn on stderr so `--format json` on stdout stays machine-readable.
+    if let Some(stale) = db.staleness()? {
+        eprintln!("warning: index is out of date ({stale}); run `symgraph reindex`.");
+    }
     Ok((project_root, db))
 }
 

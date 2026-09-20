@@ -125,32 +125,31 @@ impl SymgraphHandler {
         }
     }
 
-    /// Helper to acquire a read lock on the database and run a closure.
-    fn with_db<F>(&self, f: F) -> String
+    /// Acquire a read lock on the database and run a closure.
+    ///
+    /// Returns `Result` so a failure reaches the client as an MCP error with
+    /// `isError` set. Returning `format!("Error: {e}")` as a *successful* tool
+    /// result, as this used to, leaves a caller no way to tell a failed call
+    /// from a tool that legitimately produced that text.
+    fn with_db<F>(&self, f: F) -> Result<String, String>
     where
         F: FnOnce(&Database) -> Result<String, String>,
     {
         match self.db.read() {
-            Ok(guard) => match f(&guard) {
-                Ok(output) => output,
-                Err(e) => format!("Error: {}", e),
-            },
-            Err(e) => format!("Error: {}", e),
+            Ok(guard) => f(&guard),
+            Err(e) => Err(format!("database lock poisoned: {}", e)),
         }
     }
 
-    /// Helper to acquire a mutable lock on the database and run a closure.
+    /// Acquire a write lock on the database and run a closure.
     #[allow(dead_code)]
-    fn with_db_mut<F>(&self, f: F) -> String
+    fn with_db_mut<F>(&self, f: F) -> Result<String, String>
     where
         F: FnOnce(&mut Database) -> Result<String, String>,
     {
         match self.db.write() {
-            Ok(mut guard) => match f(&mut guard) {
-                Ok(output) => output,
-                Err(e) => format!("Error: {}", e),
-            },
-            Err(e) => format!("Error: {}", e),
+            Ok(mut guard) => f(&mut guard),
+            Err(e) => Err(format!("database lock poisoned: {}", e)),
         }
     }
 
@@ -159,7 +158,10 @@ impl SymgraphHandler {
         name = "symgraph-context",
         description = "Build focused code context for a specific task. Returns entry points, related symbols, and code snippets."
     )]
-    fn symgraph_context(&self, Parameters(req): Parameters<ContextRequest>) -> String {
+    fn symgraph_context(
+        &self,
+        Parameters(req): Parameters<ContextRequest>,
+    ) -> Result<String, String> {
         let project_root = &self.project_root;
         self.with_db(|db| handlers::context::handle_context(db, project_root, &req))
     }
@@ -169,7 +171,10 @@ impl SymgraphHandler {
         name = "symgraph-search",
         description = "Quick symbol search by name. Returns locations only (no code)."
     )]
-    fn symgraph_search(&self, Parameters(req): Parameters<SearchRequest>) -> String {
+    fn symgraph_search(
+        &self,
+        Parameters(req): Parameters<SearchRequest>,
+    ) -> Result<String, String> {
         self.with_db(|db| handlers::search::handle_search(db, &req))
     }
 
@@ -178,7 +183,10 @@ impl SymgraphHandler {
         name = "symgraph-callers",
         description = "Find all functions/methods that call a specific symbol."
     )]
-    fn symgraph_callers(&self, Parameters(req): Parameters<SymbolRequest>) -> String {
+    fn symgraph_callers(
+        &self,
+        Parameters(req): Parameters<SymbolRequest>,
+    ) -> Result<String, String> {
         self.with_db(|db| handlers::graph::handle_callers(db, &req))
     }
 
@@ -187,7 +195,10 @@ impl SymgraphHandler {
         name = "symgraph-callees",
         description = "Find all functions/methods that a specific symbol calls."
     )]
-    fn symgraph_callees(&self, Parameters(req): Parameters<SymbolRequest>) -> String {
+    fn symgraph_callees(
+        &self,
+        Parameters(req): Parameters<SymbolRequest>,
+    ) -> Result<String, String> {
         self.with_db(|db| handlers::graph::handle_callees(db, &req))
     }
 
@@ -196,7 +207,10 @@ impl SymgraphHandler {
         name = "symgraph-impact",
         description = "Analyze the impact of changing a symbol. Breaks inbound coupling down by edge kind (method-call/contract, field-read/model, field-write/intrusive), counts inbound modules, and (with churn=true) annotates volatility. Supports format='json'."
     )]
-    fn symgraph_impact(&self, Parameters(req): Parameters<ImpactRequest>) -> String {
+    fn symgraph_impact(
+        &self,
+        Parameters(req): Parameters<ImpactRequest>,
+    ) -> Result<String, String> {
         let project_root = self.project_root.clone();
         self.with_db(|db| handlers::graph::handle_impact(db, &project_root, &req))
     }
@@ -206,7 +220,10 @@ impl SymgraphHandler {
         name = "symgraph-definition",
         description = "Get the full source code of a symbol. Returns the complete definition with surrounding context lines."
     )]
-    fn symgraph_definition(&self, Parameters(req): Parameters<DefinitionRequest>) -> String {
+    fn symgraph_definition(
+        &self,
+        Parameters(req): Parameters<DefinitionRequest>,
+    ) -> Result<String, String> {
         let project_root = &self.project_root;
         self.with_db(|db| handlers::symbol::handle_definition(db, project_root, &req))
     }
@@ -216,7 +233,7 @@ impl SymgraphHandler {
         name = "symgraph-file",
         description = "List all symbols defined in a specific file. Returns functions, classes, methods, etc."
     )]
-    fn symgraph_file(&self, Parameters(req): Parameters<FileRequest>) -> String {
+    fn symgraph_file(&self, Parameters(req): Parameters<FileRequest>) -> Result<String, String> {
         self.with_db(|db| handlers::file::handle_file(db, &req))
     }
 
@@ -225,7 +242,10 @@ impl SymgraphHandler {
         name = "symgraph-references",
         description = "Find all references to a symbol including calls, imports, type usages, and other relationships."
     )]
-    fn symgraph_references(&self, Parameters(req): Parameters<SymbolRequest>) -> String {
+    fn symgraph_references(
+        &self,
+        Parameters(req): Parameters<SymbolRequest>,
+    ) -> Result<String, String> {
         self.with_db(|db| handlers::symbol::handle_references(db, &req))
     }
 
@@ -234,14 +254,17 @@ impl SymgraphHandler {
         name = "symgraph-reindex",
         description = "Trigger reindexing of the codebase. When files are provided, only those files are updated in place; otherwise a full shadow rebuild runs in the background."
     )]
-    fn symgraph_reindex(&self, Parameters(req): Parameters<ReindexRequest>) -> String {
+    fn symgraph_reindex(
+        &self,
+        Parameters(req): Parameters<ReindexRequest>,
+    ) -> Result<String, String> {
         // If a reindex is already running, refuse to start another one.
         if self
             .is_reindexing
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_err()
         {
-            return "Reindex already in progress. Use symgraph-status to check.".to_string();
+            return Ok("Reindex already in progress. Use symgraph-status to check.".to_string());
         }
 
         let db = Arc::clone(&self.db);
@@ -264,7 +287,7 @@ impl SymgraphHandler {
             tracing::info!("Background reindex finished: {}", result);
         });
 
-        match file_count_hint {
+        Ok(match file_count_hint {
             Some(n) => format!(
                 "Reindexing {} file(s) in background. Use symgraph-status to check progress.",
                 n
@@ -273,7 +296,7 @@ impl SymgraphHandler {
                 "Rebuilding the full index in background. Use symgraph-status to check progress."
                     .to_string()
             }
-        }
+        })
     }
 
     /// Get detailed information about a symbol
@@ -281,7 +304,7 @@ impl SymgraphHandler {
         name = "symgraph-node",
         description = "Get detailed information about a specific code symbol."
     )]
-    fn symgraph_node(&self, Parameters(req): Parameters<SymbolRequest>) -> String {
+    fn symgraph_node(&self, Parameters(req): Parameters<SymbolRequest>) -> Result<String, String> {
         self.with_db(|db| handlers::symbol::handle_node(db, &req))
     }
 
@@ -290,7 +313,7 @@ impl SymgraphHandler {
         name = "symgraph-status",
         description = "Get the status of the symgraph index. Shows statistics about indexed files, symbols, and relationships."
     )]
-    fn symgraph_status(&self) -> String {
+    fn symgraph_status(&self) -> Result<String, String> {
         let reindexing = self.is_reindexing.load(Ordering::SeqCst);
         self.with_db(|db| {
             let mut output = handlers::status::handle_status(db)?;
@@ -306,7 +329,10 @@ impl SymgraphHandler {
         name = "symgraph-hierarchy",
         description = "Get the hierarchy of a symbol showing parent/child contains relationships (e.g., class contains methods)."
     )]
-    fn symgraph_hierarchy(&self, Parameters(req): Parameters<SymbolRequest>) -> String {
+    fn symgraph_hierarchy(
+        &self,
+        Parameters(req): Parameters<SymbolRequest>,
+    ) -> Result<String, String> {
         self.with_db(|db| handlers::hierarchy::handle_hierarchy(db, &req))
     }
 
@@ -315,7 +341,7 @@ impl SymgraphHandler {
         name = "symgraph-path",
         description = "Find call paths from one symbol to another. Shows how function A reaches function B through intermediate calls."
     )]
-    fn symgraph_path(&self, Parameters(req): Parameters<PathRequest>) -> String {
+    fn symgraph_path(&self, Parameters(req): Parameters<PathRequest>) -> Result<String, String> {
         self.with_db(|db| handlers::path::handle_path(db, &req))
     }
 
@@ -324,7 +350,10 @@ impl SymgraphHandler {
         name = "symgraph-unused",
         description = "Find unused symbols (functions, methods, classes) with no incoming references. Helps identify dead code."
     )]
-    fn symgraph_unused(&self, Parameters(req): Parameters<FormatRequest>) -> String {
+    fn symgraph_unused(
+        &self,
+        Parameters(req): Parameters<FormatRequest>,
+    ) -> Result<String, String> {
         self.with_db(|db| handlers::unused::handle_unused(db, &req))
     }
 
@@ -333,7 +362,10 @@ impl SymgraphHandler {
         name = "symgraph-implementations",
         description = "Find all classes/structs that implement an interface or extend a trait/class."
     )]
-    fn symgraph_implementations(&self, Parameters(req): Parameters<SymbolRequest>) -> String {
+    fn symgraph_implementations(
+        &self,
+        Parameters(req): Parameters<SymbolRequest>,
+    ) -> Result<String, String> {
         self.with_db(|db| handlers::implementations::handle_implementations(db, &req))
     }
 
@@ -342,7 +374,10 @@ impl SymgraphHandler {
         name = "symgraph-diff-impact",
         description = "Analyze the impact of changing a specific region of code. Shows directly modified symbols and their callers."
     )]
-    fn symgraph_diff_impact(&self, Parameters(req): Parameters<DiffImpactRequest>) -> String {
+    fn symgraph_diff_impact(
+        &self,
+        Parameters(req): Parameters<DiffImpactRequest>,
+    ) -> Result<String, String> {
         let project_root = &self.project_root;
         self.with_db(|db| handlers::diff_impact::handle_diff_impact(db, project_root, &req))
     }
@@ -352,7 +387,7 @@ impl SymgraphHandler {
         name = "symgraph-blame",
         description = "Run git blame over the lines of a symbol's definition. Shows who last changed each line and when."
     )]
-    fn symgraph_blame(&self, Parameters(req): Parameters<BlameRequest>) -> String {
+    fn symgraph_blame(&self, Parameters(req): Parameters<BlameRequest>) -> Result<String, String> {
         let project_root = &self.project_root;
         self.with_db(|db| handlers::blame::handle_blame(db, project_root, &req))
     }
@@ -362,12 +397,9 @@ impl SymgraphHandler {
         name = "symgraph-churn",
         description = "Show file change frequency (churn) over a recent window. Highlights hotspots most likely to harbor bugs."
     )]
-    fn symgraph_churn(&self, Parameters(req): Parameters<ChurnRequest>) -> String {
+    fn symgraph_churn(&self, Parameters(req): Parameters<ChurnRequest>) -> Result<String, String> {
         let project_root = self.project_root.clone();
-        match handlers::churn::handle_churn(&project_root, &req) {
-            Ok(s) => s,
-            Err(e) => format!("Error: {}", e),
-        }
+        handlers::churn::handle_churn(&project_root, &req)
     }
 
     /// Module dependency graph: fan-in/out and cycles at a chosen boundary
@@ -375,7 +407,10 @@ impl SymgraphHandler {
         name = "symgraph-module-graph",
         description = "Aggregate the resolved graph to a file/dir/module boundary. Returns the dependency adjacency list with edge counts, fan-in/fan-out per node, and detected cycles (SCCs). Supports format='json'. Reindex after edits."
     )]
-    fn symgraph_module_graph(&self, Parameters(req): Parameters<ModuleGraphRequest>) -> String {
+    fn symgraph_module_graph(
+        &self,
+        Parameters(req): Parameters<ModuleGraphRequest>,
+    ) -> Result<String, String> {
         let project_root = self.project_root.clone();
         self.with_db(|db| handlers::module_graph::handle_module_graph(db, &project_root, &req))
     }
@@ -385,7 +420,10 @@ impl SymgraphHandler {
         name = "symgraph-coupling-score",
         description = "Rank module-pair coupling on strength (contract/model/intrusive) × distance × volatility (churn). Produces the hotspots table directly. Supports format='json'. Reindex after edits."
     )]
-    fn symgraph_coupling_score(&self, Parameters(req): Parameters<ModuleGraphRequest>) -> String {
+    fn symgraph_coupling_score(
+        &self,
+        Parameters(req): Parameters<ModuleGraphRequest>,
+    ) -> Result<String, String> {
         let project_root = self.project_root.clone();
         self.with_db(|db| handlers::module_graph::handle_coupling_score(db, &project_root, &req))
     }
@@ -395,7 +433,10 @@ impl SymgraphHandler {
         name = "symgraph-god-struct",
         description = "Rank structs/classes by pub-field count × inbound-reference count × churn — the 'where is the architectural debt' entry point. Supports format='json'."
     )]
-    fn symgraph_god_struct(&self, Parameters(req): Parameters<GodStructRequest>) -> String {
+    fn symgraph_god_struct(
+        &self,
+        Parameters(req): Parameters<GodStructRequest>,
+    ) -> Result<String, String> {
         let project_root = self.project_root.clone();
         self.with_db(|db| handlers::god_struct::handle_god_struct(db, &project_root, &req))
     }
@@ -405,7 +446,10 @@ impl SymgraphHandler {
         name = "symgraph-dispatch-sites",
         description = "Find every file that dispatches on a member of the given enum (control coupling). Verifies completeness before a trait/strategy refactor. Supports format='json'."
     )]
-    fn symgraph_dispatch_sites(&self, Parameters(req): Parameters<DispatchSitesRequest>) -> String {
+    fn symgraph_dispatch_sites(
+        &self,
+        Parameters(req): Parameters<DispatchSitesRequest>,
+    ) -> Result<String, String> {
         self.with_db(|db| handlers::dispatch_sites::handle_dispatch_sites(db, &req))
     }
 }
@@ -470,5 +514,36 @@ mod tests {
     fn owned_handler_gets_its_own_guard() {
         let handler = SymgraphHandler::new(Database::in_memory().unwrap(), ".".to_string());
         assert!(!handler.is_reindexing.load(Ordering::SeqCst));
+    }
+
+    /// A failing tool must reach the client as an MCP error, not as a
+    /// successful result whose text happens to begin "Error:". rmcp turns the
+    /// `Err` arm into a result with `is_error` set; the `Ok` arm must not.
+    #[test]
+    fn tool_failure_becomes_an_mcp_error_result() {
+        use rmcp::handler::server::tool::IntoCallToolResult;
+
+        let ok = Ok::<String, String>("fine".to_string())
+            .into_call_tool_result()
+            .unwrap();
+        assert_ne!(ok.is_error, Some(true));
+
+        let err = Err::<String, String>("boom".to_string())
+            .into_call_tool_result()
+            .unwrap();
+        assert_eq!(
+            err.is_error,
+            Some(true),
+            "a failed tool call must be flagged so clients can tell it apart from output"
+        );
+    }
+
+    /// The definition tool rejects a traversal path from the database, and
+    /// that rejection has to surface as a failure rather than as text.
+    #[test]
+    fn handler_errors_propagate_rather_than_stringify() {
+        let handler = SymgraphHandler::new(Database::in_memory().unwrap(), ".".to_string());
+        let result = handler.with_db(|_db| Err("something broke".to_string()));
+        assert_eq!(result, Err("something broke".to_string()));
     }
 }

@@ -527,6 +527,9 @@ pub struct ExtractionResult {
     pub edges: Vec<Edge>,
     pub unresolved_refs: Vec<UnresolvedReference>,
     pub errors: Vec<ExtractionError>,
+    /// The parser recovered from syntax errors, so the symbols below are a
+    /// partial view of the file rather than a complete one.
+    pub parse_failed: bool,
 }
 
 /// Error during extraction

@@ -49,6 +49,11 @@ use anyhow::Result;
 use ignore::WalkBuilder;
 use indicatif::{ProgressBar, ProgressStyle};
 
+/// Default ceiling on the size of a file symgraph will parse (2 MiB). Hand-
+/// written source almost never approaches this; generated and minified files
+/// routinely exceed it.
+pub const DEFAULT_MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
+
 /// Commit and checkpoint the WAL after this many files during bulk indexing.
 /// Keeps WAL size bounded without requiring a single massive transaction.
 const CHECKPOINT_INTERVAL: usize = 200;
@@ -134,6 +139,13 @@ pub struct IndexConfig {
     pub skip_resolve: bool,
     /// Render progress bars to stderr during indexing (disable for library/server use)
     pub show_progress: bool,
+    /// Skip files larger than this many bytes.
+    ///
+    /// One generated or minified file — a bundled `.js`, a vendored amalgamation —
+    /// can be tens of megabytes on a single line. tree-sitter will parse it, at a
+    /// cost in time and memory out of all proportion to the symbols it yields,
+    /// and nothing else in the pipeline bounds it.
+    pub max_file_bytes: u64,
 }
 
 impl Default for IndexConfig {
@@ -175,6 +187,7 @@ impl Default for IndexConfig {
             respect_gitignore: true,
             skip_resolve: false,
             show_progress: false,
+            max_file_bytes: DEFAULT_MAX_FILE_BYTES,
         }
     }
 }
@@ -227,6 +240,19 @@ fn run_index_codebase(
         anyhow::bail!("index root is not a directory: {}", root.display());
     }
     info!("Indexing codebase at {}", root.display());
+
+    // An incremental pass only touches changed files, so running one over a
+    // stale index leaves the untouched rows in their old semantics and mixes
+    // the two. Refuse rather than silently produce a half-migrated index.
+    if matches!(mode, IndexMode::Incremental) {
+        if let Some(stale) = db.staleness()? {
+            anyhow::bail!(
+                "cannot incrementally index a stale index ({}). Run a full rebuild: \
+                 `symgraph reindex`.",
+                stale
+            );
+        }
+    }
 
     let mut stats = IndexingStats::default();
     let entries_to_extract = collect_entries(db, config, &root, mode, &mut stats)?;
@@ -319,6 +345,22 @@ fn collect_entries(
         {
             record_unsupported_source(config, &mut stats.unsupported_types, ext);
             continue;
+        }
+
+        // Check size from the directory entry, before reading: the point is
+        // to not pull a 40 MB bundle into memory in the first place.
+        if config.max_file_bytes > 0 {
+            let size = entry.metadata().ok().map(|m| m.len()).unwrap_or(0);
+            if size > config.max_file_bytes {
+                debug!(
+                    "Skipping {} ({} bytes exceeds max_file_bytes {})",
+                    path.display(),
+                    size,
+                    config.max_file_bytes
+                );
+                stats.skipped_too_large += 1;
+                continue;
+            }
         }
 
         let content = match std::fs::read_to_string(path) {
@@ -424,6 +466,7 @@ fn store_incremental_index(
 
     db.optimize_fts()?;
     resolve_references_if_needed(db, config, stats)?;
+    db.record_index_version()?;
     db.commit()?;
     Ok(())
 }
@@ -447,6 +490,9 @@ fn store_full_index(
     resolve_references_if_needed(db, config, stats)?;
     db.disable_fts_automerge()?;
     db.rebuild_fts_indexes()?;
+    // Stamp provenance last: a build that fails before this point leaves an
+    // index that correctly reads as stale rather than as current-but-partial.
+    db.record_index_version()?;
     db.commit_transaction()?;
     Ok(())
 }
@@ -488,6 +534,7 @@ fn store_extracted_file(
     let file_record = build_file_record(&entry, result.nodes.len());
     let node_count = file_record.node_count;
     let error_count = result.errors.len() as u64;
+    let parse_failed = result.parse_failed;
     db.insert_or_update_file(&file_record)?;
 
     let mut nodes = result.nodes;
@@ -505,6 +552,9 @@ fn store_extracted_file(
     stats.files += 1;
     stats.nodes += node_count as u64;
     stats.errors += error_count;
+    if parse_failed {
+        stats.parse_failures += 1;
+    }
     Ok(())
 }
 
@@ -563,4 +613,9 @@ pub struct IndexingStats {
     /// no parser for them, keyed by lowercased extension with an occurrence count.
     /// Files in excluded directories and recognized manifests are not counted.
     pub unsupported_types: BTreeMap<String, u64>,
+    /// Files that parsed only partially because they contain syntax errors.
+    /// Their symbols are in the index but incomplete.
+    pub parse_failures: u64,
+    /// Files skipped for exceeding `IndexConfig::max_file_bytes`.
+    pub skipped_too_large: u64,
 }

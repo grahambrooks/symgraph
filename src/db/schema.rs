@@ -84,7 +84,29 @@ CREATE VIRTUAL TABLE IF NOT EXISTS nodes_semantic_fts USING fts5(tokens);
 
 CREATE INDEX IF NOT EXISTS idx_nodes_is_test ON nodes(is_test);
 CREATE INDEX IF NOT EXISTS idx_nodes_is_generated ON nodes(is_generated);
+
+-- Provenance of the index itself: which schema and which extraction semantics
+-- produced these rows. Without it an index built by an older symgraph keeps
+-- answering confidently after an upgrade that changed what the rows mean.
+CREATE TABLE IF NOT EXISTS index_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 "#;
+
+/// Version of the SQL schema above. Bump when a table, column or index changes
+/// in a way that makes rows written by an older symgraph unusable.
+pub const SCHEMA_VERSION: u32 = 1;
+
+/// Version of the extraction semantics. Bump when the extractor starts
+/// producing different nodes or edges for the same source — a new edge kind, a
+/// changed `is_test` heuristic, a new language — so that indexes built before
+/// the change are recognised as stale even though the schema still fits.
+///
+/// Schema compatibility and extraction compatibility are tracked separately
+/// because they fail differently: a schema mismatch cannot be read at all, an
+/// extractor mismatch reads fine and quietly answers with the old semantics.
+pub const EXTRACTOR_VERSION: u32 = 1;
 
 /// Additive schema migrations applied after CREATE TABLE IF NOT EXISTS.
 ///

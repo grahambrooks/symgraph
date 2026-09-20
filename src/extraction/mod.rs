@@ -90,6 +90,24 @@ impl Extractor {
             };
         };
 
+        // tree-sitter recovers from syntax errors rather than failing, so a
+        // file it could not fully parse still yields a tree — just a partial
+        // one, with symbols missing or mis-nested. Nothing used to notice, so
+        // the index silently under-reported those files and `stats.errors`
+        // stayed at zero. Record it and carry on with what was recovered:
+        // partial symbols are better than none, as long as the gap is visible.
+        let root = tree.root_node();
+        let parse_error = if root.has_error() {
+            Some(ExtractionError {
+                message: "file contains syntax errors; symbols may be incomplete".to_string(),
+                file_path: path.display().to_string(),
+                line: Some(root.start_position().row as u32 + 1),
+                column: None,
+            })
+        } else {
+            None
+        };
+
         let config = languages::get_config(language);
         let file_path = path.display().to_string();
 
@@ -131,8 +149,12 @@ impl Extractor {
         ctx.node_stack.push(1); // file node ID
 
         // Traverse the tree
-        ctx.traverse_node(tree.root_node());
+        ctx.traverse_node(root);
 
+        if let Some(err) = parse_error {
+            ctx.result.parse_failed = true;
+            ctx.result.errors.push(err);
+        }
         ctx.result
     }
 }
@@ -1381,7 +1403,18 @@ class Calculator {
 }
 "#;
         let result = extractor.extract_file("test.groovy", code);
-        assert!(result.errors.is_empty());
+
+        // tree-sitter-groovy 0.1.2 wants a `;` after the statement-position
+        // `println new Calculator().add(1, 2)`, which Groovy itself does not
+        // require, so it reports a MISSING ";" and the parse is partial. This
+        // went unnoticed until extraction started tracking `parse_failed`.
+        // Recovery is good enough that the class and method still come out,
+        // which is the behaviour worth pinning; the flag records that Groovy
+        // support is approximate rather than exact.
+        assert!(
+            result.parse_failed,
+            "expected the Groovy grammar to flag this idiomatic snippet"
+        );
         assert!(result
             .nodes
             .iter()
