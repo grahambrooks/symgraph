@@ -984,3 +984,43 @@ fn test_clean_sources_report_no_parse_failures() {
     let stats = build_full_index(&mut db, &config).unwrap();
     assert_eq!(stats.parse_failures, 0);
 }
+
+/// Indexed paths are keyed on forward slashes on every platform, so a caller
+/// can pass the `src/foo.rs` form regardless of where the index was built.
+/// On Windows these used to be stored as `src\foo.rs`, and every lookup by
+/// path silently returned nothing.
+#[test]
+fn test_indexed_paths_use_forward_slashes() {
+    let dir = tempdir().unwrap();
+    write(
+        &dir.path().join("src/nested/deep.rs"),
+        "pub fn buried() {}\n",
+    );
+
+    let mut db = Database::in_memory().unwrap();
+    let config = IndexConfig {
+        root: dir.path().display().to_string(),
+        ..Default::default()
+    };
+    build_full_index(&mut db, &config).unwrap();
+
+    let node = db
+        .find_node_by_name("buried")
+        .unwrap()
+        .expect("symbol indexed");
+    assert_eq!(node.file_path, "src/nested/deep.rs");
+    assert!(
+        !node.file_path.contains('\\'),
+        "indexed path must not carry a native separator: {}",
+        node.file_path
+    );
+
+    // And the path works as a lookup key in the form a caller would type it,
+    // which is the thing that was broken.
+    assert!(
+        !db.get_nodes_by_file("src/nested/deep.rs")
+            .unwrap()
+            .is_empty(),
+        "a forward-slash path must find the file's symbols"
+    );
+}

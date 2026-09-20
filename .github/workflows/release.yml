@@ -5,9 +5,10 @@ on:
     tags:
       - 'v*'
 
+# No blanket grant: each job asks for exactly what it needs. Only the two
+# jobs that publish get write access.
 permissions:
-  contents: write
-  packages: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
@@ -19,8 +20,28 @@ env:
   CARGO_NET_GIT_FETCH_WITH_CLI: "true"
 
 jobs:
+  preflight:
+    name: Verify tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Verify Cargo.toml version matches the tag
+        # Runs before anything is built. This check used to live in the
+        # crates.io job, which runs *after* the GitHub release is published —
+        # so a mismatched tag produced a release that then failed to publish,
+        # leaving the two out of step.
+        run: |
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          CARGO_VERSION=$(grep -m1 '^version = ' Cargo.toml | sed -E 's/version = "(.*)"/\1/')
+          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
+            echo "::error::Tag version ($TAG_VERSION) does not match Cargo.toml version ($CARGO_VERSION)"
+            exit 1
+          fi
+          echo "Tag and Cargo.toml agree on $TAG_VERSION."
+
   build:
     name: Build ${{ matrix.target }}
+    needs: preflight
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -225,6 +246,8 @@ jobs:
     name: Create Release
     needs: [build, package]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v6
 
@@ -274,6 +297,20 @@ jobs:
           # Copy MCPB bundles
           cp artifacts/mcpb-bundles/*.mcpb release/
 
+      - name: Generate checksums
+        # One manifest covering every published asset, so an installer can
+        # verify what it downloaded instead of trusting the transport.
+        # Written outside the directory first so the manifest can never list
+        # itself, whatever the shell's expansion order.
+        working-directory: release
+        run: |
+          find . -maxdepth 1 -type f -printf '%P\0' \
+            | sort -z \
+            | xargs -0 sha256sum -- > ../SHA256SUMS
+          mv ../SHA256SUMS SHA256SUMS
+          echo "Published assets:"
+          cat SHA256SUMS
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3
         with:
@@ -288,6 +325,8 @@ jobs:
     name: Update Homebrew formula
     needs: release
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v6
         with:
@@ -354,6 +393,9 @@ jobs:
     name: Publish Devcontainer Feature
     needs: release
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v6
 
@@ -383,15 +425,8 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Verify Cargo.toml version matches tag
-        run: |
-          TAG_VERSION=${GITHUB_REF#refs/tags/v}
-          CARGO_VERSION=$(grep '^version = ' Cargo.toml | head -n1 | sed -E 's/version = "(.*)"/\1/')
-          if [ "$TAG_VERSION" != "$CARGO_VERSION" ]; then
-            echo "Tag version ($TAG_VERSION) does not match Cargo.toml version ($CARGO_VERSION)" >&2
-            exit 1
-          fi
-
+      # The tag/Cargo.toml check lives in the `preflight` job, which gates
+      # every other job in this workflow.
       - name: Publish to crates.io
         run: cargo publish --token "${CARGO_REGISTRY_TOKEN}"
         env:

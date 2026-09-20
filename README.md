@@ -3,7 +3,7 @@
 [![CI](https://github.com/grahambrooks/symgraph/actions/workflows/ci.yml/badge.svg)](https://github.com/grahambrooks/symgraph/actions/workflows/ci.yml)
 [![Release](https://github.com/grahambrooks/symgraph/actions/workflows/release.yml/badge.svg)](https://github.com/grahambrooks/symgraph/actions/workflows/release.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Rust](https://img.shields.io/badge/rust-1.70%2B-blue.svg)](https://www.rust-lang.org)
+[![Rust](https://img.shields.io/badge/rust-1.90%2B-blue.svg)](https://www.rust-lang.org)
 [![MCP](https://img.shields.io/badge/MCP-compatible-green.svg)](https://modelcontextprotocol.io)
 
 Semantic code intelligence MCP server - build knowledge graphs of codebases to enhance AI-assisted code exploration.
@@ -13,16 +13,27 @@ binary deployment of MCP Servers.
 
 ## Features
 
-- **Multi-language support**: Rust, TypeScript, JavaScript, Python, Go, Java, C, C++
+- **Multi-language support**: Rust, TypeScript, JavaScript, Python, Go, Java, C,
+  C++, C#, Kotlin, Scala, Groovy, Ruby — plus package manifests
 - **Symbol extraction**: functions, classes, methods, structs, interfaces, traits, enums, constants
-- **Relationship tracking**: calls, contains, imports, exports, extends, implements
+- **Relationship tracking**: calls, contains, imports, exports, extends, implements,
+  field reads/writes, enum dispatch
 - **Impact analysis**: trace the effect of changes through the codebase
+- **Coupling analysis**: module dependency graph with fan-in/out and cycles,
+  coupling scored on strength × distance × volatility, god-struct ranking, and
+  enum dispatch-site discovery
+- **Search**: prefix search over symbol names, plus semantic (bm25) search over
+  identifier tokens and docstrings
+- **Git-aware**: per-symbol blame and per-file churn feed the volatility dimension
 - **Advanced code intelligence**:
     - Find call paths between functions
     - Detect unused/dead code
     - Explore class hierarchies
     - Locate all interface implementations
-    - Analyze change impact by line range
+    - Analyze change impact by line range or git ref
+- **Honest results**: every list says how much it truncated, every symbol lookup
+  says how many definitions shared the name, and `status` reports whether the
+  index is current enough to trust
 - **Incremental indexing**: only re-indexes changed files using content hashing
 - **Dual transport**: stdio (default) and HTTP server modes
 

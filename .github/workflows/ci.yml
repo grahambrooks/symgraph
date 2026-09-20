@@ -9,6 +9,11 @@ on:
 permissions:
   contents: read
 
+# Supersede in-flight runs for a branch, but never cancel a run on main.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 env:
   CARGO_TERM_COLOR: always
   # Harden against transient crates.io download failures on GitHub runners.
@@ -65,6 +70,49 @@ jobs:
         run: cargo clippy --bin symgraph-cli --no-default-features --features sqlite -- -D warnings
       - name: Test (CLI-only)
         run: cargo test --no-default-features --features sqlite
+
+  msrv:
+    name: MSRV (${{ needs.msrv-version.outputs.version }})
+    needs: msrv-version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ needs.msrv-version.outputs.version }}
+      - uses: Swatinem/rust-cache@v2
+      # Builds against exactly the toolchain Cargo.toml claims, so the declared
+      # MSRV is verified rather than asserted.
+      - run: cargo check --all-features --all-targets
+
+  msrv-version:
+    name: Read MSRV
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.read.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: read
+        # Single source of truth: the number lives in Cargo.toml.
+        run: |
+          version=$(grep -m1 '^rust-version' Cargo.toml | sed 's/.*= *"//;s/".*//')
+          if [ -z "$version" ]; then
+            echo "::error::rust-version missing from Cargo.toml"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+  deny:
+    name: Supply chain
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      # Advisories, licenses, sources and bans — see deny.toml.
+      - run: cargo deny check
 
   test:
     name: Test

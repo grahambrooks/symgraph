@@ -1,0 +1,42 @@
+# cargo-deny configuration.
+#
+# Checked in CI by the `deny` job. Four independent checks:
+#   advisories — known vulnerabilities and unmaintained crates
+#   bans       — duplicate versions and crates we do not want pulled in
+#   licenses   — what we are allowed to ship
+#   sources    — where crates may come from
+
+[advisories]
+# Fail on anything with a filed advisory. Add an `ignore = ["RUSTSEC-..."]`
+# entry with a comment when a finding is genuinely not exploitable here.
+yanked = "deny"
+ignore = []
+
+[licenses]
+# symgraph ships MIT. These are the permissive licenses compatible with
+# distributing a binary built from them.
+# Exactly the licenses the current tree uses. Kept tight on purpose: a new
+# dependency arriving under something not listed here should be a decision,
+# not a silent inheritance. Add the license (with a note) when that decision
+# is made.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-3-Clause",
+    "Unicode-3.0",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+[bans]
+# Duplicate major versions of one crate bloat the binary and usually mean a
+# dependency is lagging. Warn rather than deny: a transitive duplicate is not
+# always in our power to fix.
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
