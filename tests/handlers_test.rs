@@ -336,7 +336,7 @@ fn dispatch_sites_finds_where_an_enum_is_matched() {
 #[test]
 fn status_reports_size_and_trust() {
     let (_dir, db) = fixture();
-    let out = handlers::status::handle_status(&db).unwrap();
+    let out = handlers::status::handle_status(&db, None).unwrap();
     assert!(out.contains("Total Files"), "output was:\n{out}");
     assert!(out.contains("Index health"), "output was:\n{out}");
     assert!(out.contains("Ambiguous names"), "output was:\n{out}");

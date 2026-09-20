@@ -72,10 +72,30 @@ fn render_health(health: &IndexHealth) -> String {
     out
 }
 
-pub fn handle_status(db: &Database) -> Result<String, String> {
+/// Index size and trust, as one serialisable result.
+#[derive(serde::Serialize)]
+pub struct StatusResult {
+    #[serde(flatten)]
+    pub stats: crate::types::IndexStats,
+    pub health: IndexHealth,
+}
+
+impl crate::ops::Render for StatusResult {
+    fn to_markdown(&self) -> String {
+        render_status(&self.stats, &self.health)
+    }
+}
+
+pub fn handle_status(db: &Database, format: Option<String>) -> Result<String, String> {
     let stats = db.get_stats().map_err(|e| e.to_string())?;
     let health = db.health().map_err(|e| e.to_string())?;
+    crate::ops::present(
+        &StatusResult { stats, health },
+        crate::ops::Format::from_request(&format),
+    )
+}
 
+fn render_status(stats: &crate::types::IndexStats, health: &IndexHealth) -> String {
     let mut output = String::from("## symgraph Index Status\n\n");
 
     output.push_str(&format!("**Total Files:** {}\n", stats.total_files));
@@ -86,7 +106,7 @@ pub fn handle_status(db: &Database) -> Result<String, String> {
         stats.db_size_bytes as f64 / 1024.0
     ));
 
-    output.push_str(&render_health(&health));
+    output.push_str(&render_health(health));
 
     if !stats.languages.is_empty() {
         output.push_str("\n**Languages:**\n");
@@ -102,7 +122,7 @@ pub fn handle_status(db: &Database) -> Result<String, String> {
         }
     }
 
-    Ok(output)
+    output
 }
 
 #[cfg(test)]
@@ -171,7 +191,7 @@ mod tests {
     /// has to say so rather than presenting it as current.
     #[test]
     fn status_flags_an_unversioned_index() {
-        let out = handle_status(&seeded()).unwrap();
+        let out = handle_status(&seeded(), None).unwrap();
         assert!(out.contains("Out of date"), "status was:\n{out}");
         assert!(out.contains("before symgraph recorded index provenance"));
     }
@@ -180,7 +200,7 @@ mod tests {
     fn status_of_a_stamped_index_is_not_flagged() {
         let db = seeded();
         db.record_index_version().unwrap();
-        let out = handle_status(&db).unwrap();
+        let out = handle_status(&db, None).unwrap();
         assert!(!out.contains("Out of date"), "status was:\n{out}");
         assert!(out.contains("schema v"));
     }
@@ -189,7 +209,7 @@ mod tests {
     #[test]
     fn status_of_an_empty_index_is_not_stale() {
         let db = Database::in_memory().unwrap();
-        let out = handle_status(&db).unwrap();
+        let out = handle_status(&db, None).unwrap();
         assert!(!out.contains("Out of date"), "status was:\n{out}");
     }
 
@@ -204,5 +224,24 @@ mod tests {
         assert_eq!(age(now - 600), "10 minutes ago");
         assert_eq!(age(now - 7200), "2 hours ago");
         assert_eq!(age(now - 3 * 86_400), "3 days ago");
+    }
+}
+
+#[cfg(test)]
+mod format_tests {
+    use super::*;
+
+    /// `status` is a tool like any other, so it answers in JSON when asked —
+    /// the last of the 22 to gain a `format` field (F4).
+    #[test]
+    fn status_renders_as_json() {
+        let db = Database::in_memory().unwrap();
+        let out = handle_status(&db, Some("json".to_string())).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert!(v["total_files"].is_number(), "json was:\n{v:#}");
+        assert!(
+            v["health"]["ambiguous_names"].is_number(),
+            "json was:\n{v:#}"
+        );
     }
 }

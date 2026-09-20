@@ -20,9 +20,8 @@ use std::time::{Duration, UNIX_EPOCH};
 use anyhow::Result;
 
 use symgraph::cli::{
-    canonicalize_path, context_command, index_command, open_project_database,
-    print_unsupported_types, prune_command, search_command, status_command, tools, where_command,
-    OutputFormat,
+    canonicalize_path, index_command, open_project_database, print_unsupported_types,
+    prune_command, tools, where_command, OutputFormat,
 };
 use symgraph::{index_codebase, IndexConfig};
 
@@ -52,11 +51,11 @@ const GROUPS: &[Group] = &[
         title: "CORE COMMANDS",
         commands: &[
             Command { name: "index", args: "[PATH]", help: "Incrementally update the index (only changed files)" },
-            Command { name: "reindex", args: "[PATH]", help: "Full clean rebuild of the index from scratch" },
+            Command { name: "reindex", args: "[PATH] [--files F...]", help: "Full rebuild, or re-index just the named files" },
             Command { name: "watch", args: "[PATH] [--interval SECS]", help: "Re-index on file changes until interrupted" },
             Command { name: "status", args: "[PATH]", help: "Show index statistics (files, symbols, languages)" },
-            Command { name: "search", args: "<QUERY>", help: "Find symbols whose name matches QUERY" },
-            Command { name: "context", args: "<TASK...>", help: "Build focused context for a coding task" },
+            Command { name: "search", args: "<QUERY> [--semantic] [--limit N]", help: "Find symbols whose name matches QUERY" },
+            Command { name: "context", args: "<TASK...> [--limit N]", help: "Build focused context for a coding task" },
             Command { name: "where", args: "[PATH]", help: "Show where this project's index is stored" },
             Command { name: "prune", args: "[--max-age-days N]", help: "Delete stale cached indexes" },
         ],
@@ -82,7 +81,7 @@ const GROUPS: &[Group] = &[
             Command { name: "impact", args: "<SYMBOL> [--churn] [--days N]", help: "Change impact + coupling breakdown" },
             Command { name: "diff-impact", args: "[--file F --start N --end N --git-ref REF]", help: "Impact of a region/diff" },
             Command { name: "blame", args: "<SYMBOL>", help: "git blame over a symbol's definition lines" },
-            Command { name: "churn", args: "[PATH] [--days N]", help: "File change frequency (volatility)" },
+            Command { name: "churn", args: "[PATH] [--days N] [--limit N]", help: "File change frequency (volatility)" },
             Command { name: "module-graph", args: "[--granularity file|dir|module] [--churn] [--limit N]", help: "Module dependency graph: fan-in/out + cycles" },
             Command { name: "coupling-score", args: "[--granularity ...] [--churn] [--limit N]", help: "Rank coupling by strength × distance × volatility" },
             Command { name: "god-struct", args: "[--churn] [--limit N]", help: "Structs ranked by architectural debt" },
@@ -188,9 +187,25 @@ fn main() -> Result<()> {
             index_incremental(path, format)?;
         }
         "reindex" => {
-            // Full clean rebuild via the shared shadow-swap path.
-            let path = positional(&args, 2).unwrap_or(".");
-            index_command(path, format)?;
+            // `--files a.rs b.rs` is the targeted mode of the symgraph-reindex
+            // tool; with no files it is a full clean rebuild of PATH.
+            let files: Vec<String> = args
+                .iter()
+                .position(|a| a == "--files")
+                .map(|i| {
+                    args[i + 1..]
+                        .iter()
+                        .take_while(|a| !a.starts_with("--"))
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default();
+            if files.is_empty() {
+                let path = positional(&args, 2).unwrap_or(".");
+                index_command(path, format)?;
+            } else {
+                tools::reindex_files(".", files, format)?;
+            }
         }
         "watch" => {
             let path = positional(&args, 2).unwrap_or(".").to_string();
@@ -201,7 +216,7 @@ fn main() -> Result<()> {
         }
         "status" => {
             let path = positional(&args, 2).unwrap_or(".");
-            status_command(path, format)?;
+            tools::status(path, format)?;
         }
         "where" => {
             let path = positional(&args, 2).unwrap_or(".");
@@ -216,7 +231,13 @@ fn main() -> Result<()> {
                 eprintln!("  <query> is a symbol name or partial name; quote it if it has spaces.");
                 return Ok(());
             }
-            search_command(".", &args[2], flag_u32(&args, "--limit"), format)?;
+            tools::search(
+                ".",
+                &args[2],
+                has_flag(&args, "--semantic"),
+                flag_u32(&args, "--limit"),
+                format,
+            )?;
         }
         "context" => {
             if args.len() < 3 {
@@ -225,7 +246,7 @@ fn main() -> Result<()> {
                 return Ok(());
             }
             let task = args[2..].join(" ");
-            context_command(".", &task, format)?;
+            tools::context(".", &task, flag_u32(&args, "--limit"), format)?;
         }
 
         // ---- symbol relationships ----
@@ -306,13 +327,14 @@ fn main() -> Result<()> {
                 flag_u32(&args, "--start"),
                 flag_u32(&args, "--end"),
                 flag_value(&args, "--git-ref"),
+                format,
             )?;
         }
 
         // ---- git history ----
         "blame" => {
             if let Some(s) = need(&args, 2, "blame <symbol>") {
-                tools::blame(".", &tools::SymbolQuery::from_args(&s, &args))?;
+                tools::blame(".", &tools::SymbolQuery::from_args(&s, &args), format)?;
             }
         }
         "churn" => {
@@ -320,6 +342,8 @@ fn main() -> Result<()> {
                 ".",
                 positional(&args, 2).map(|s| s.to_string()),
                 flag_u32(&args, "--days"),
+                flag_u32(&args, "--limit"),
+                format,
             )?;
         }
 
@@ -540,7 +564,7 @@ fn print_usage() {
     }
     println!(
         "\nGLOBAL OPTIONS:\n\
-         \x20   --format <text|json>    Output format (default: text)\n\
+         \x20   --format <text|json>    Output format (default: text) — supported by every command\n\
          \x20   --db <PATH>             Use an explicit index database file\n\n\
          SYMBOL OPTIONS (symbol commands):\n\
          \x20   --file <PATH>           Disambiguate: use the definition in this file\n\

@@ -10,9 +10,9 @@ use anyhow::{bail, Result};
 use crate::db::Database;
 use crate::mcp::handlers;
 use crate::mcp::{
-    BlameRequest, ChurnRequest, DefinitionRequest, DiffImpactRequest, DispatchSitesRequest,
-    FileRequest, FormatRequest, GodStructRequest, ImpactRequest, ModuleGraphRequest, PathRequest,
-    SymbolRequest,
+    BlameRequest, ChurnRequest, ContextRequest, DefinitionRequest, DiffImpactRequest,
+    DispatchSitesRequest, FileRequest, FormatRequest, GodStructRequest, ImpactRequest,
+    ModuleGraphRequest, PathRequest, ReindexRequest, SearchRequest, SymbolRequest,
 };
 
 use super::commands::OutputFormat;
@@ -109,6 +109,51 @@ fn churn_opt(flag: bool) -> Option<bool> {
     } else {
         None
     }
+}
+
+// `search`, `context` and `status` had their own CLI implementations, which
+// drifted from the MCP handlers three separate times during the review work:
+// a fix applied to a handler did not reach the command a user actually runs.
+// They now call the same functions as the server, which is the guarantee
+// `docs/cli-mcp-parity.md` claims and did not have.
+
+/// Find symbols whose name (or, with `semantic`, whose identifier tokens and
+/// docstring) matches the query.
+pub fn search(
+    path: &str,
+    query: &str,
+    semantic: bool,
+    limit: Option<u32>,
+    fmt: OutputFormat,
+) -> Result<()> {
+    let (_root, db) = query_context(path)?;
+    emit(handlers::search::handle_search(
+        &db,
+        &SearchRequest {
+            query: query.to_string(),
+            semantic: if semantic { Some(true) } else { None },
+            limit,
+            format: fmt.request_format(),
+        },
+    ))
+}
+
+pub fn context(path: &str, task: &str, limit: Option<u32>, fmt: OutputFormat) -> Result<()> {
+    let (root, db) = query_context(path)?;
+    emit(handlers::context::handle_context(
+        &db,
+        &root,
+        &ContextRequest {
+            task: task.to_string(),
+            limit,
+            format: fmt.request_format(),
+        },
+    ))
+}
+
+pub fn status(path: &str, fmt: OutputFormat) -> Result<()> {
+    let (_root, db) = query_context(path)?;
+    emit(handlers::status::handle_status(&db, fmt.request_format()))
 }
 
 // --- symbol relationships ---
@@ -239,6 +284,7 @@ pub fn diff_impact(
     start_line: Option<u32>,
     end_line: Option<u32>,
     git_ref: Option<String>,
+    fmt: OutputFormat,
 ) -> Result<()> {
     let (root, db) = query_context(path)?;
     emit(handlers::diff_impact::handle_diff_impact(
@@ -249,13 +295,30 @@ pub fn diff_impact(
             start_line,
             end_line,
             git_ref,
+            format: fmt.request_format(),
+        },
+    ))
+}
+
+/// Re-index specific files, the targeted mode of the `symgraph-reindex` tool.
+/// A full rebuild is `symgraph reindex [PATH]`, which runs in the foreground
+/// with a progress bar rather than in the background.
+pub fn reindex_files(path: &str, files: Vec<String>, fmt: OutputFormat) -> Result<()> {
+    let project_root = canonicalize_path(path)?;
+    let mut db = crate::cli::open_project_database(&project_root)?;
+    emit(handlers::reindex::handle_reindex(
+        &mut db,
+        &project_root,
+        &ReindexRequest {
+            files: Some(files),
+            format: fmt.request_format(),
         },
     ))
 }
 
 // --- git history ---
 
-pub fn blame(path: &str, q: &SymbolQuery) -> Result<()> {
+pub fn blame(path: &str, q: &SymbolQuery, fmt: OutputFormat) -> Result<()> {
     let (root, db) = query_context(path)?;
     emit(handlers::blame::handle_blame(
         &db,
@@ -264,11 +327,18 @@ pub fn blame(path: &str, q: &SymbolQuery) -> Result<()> {
             symbol: q.symbol.clone(),
             file: q.file.clone(),
             qualified_name: q.qualified_name.clone(),
+            format: fmt.request_format(),
         },
     ))
 }
 
-pub fn churn(path: &str, path_filter: Option<String>, days: Option<u32>) -> Result<()> {
+pub fn churn(
+    path: &str,
+    path_filter: Option<String>,
+    days: Option<u32>,
+    limit: Option<u32>,
+    fmt: OutputFormat,
+) -> Result<()> {
     // Churn reads git history, not the index, so no index is required.
     let project_root = canonicalize_path(path)?;
     emit(handlers::churn::handle_churn(
@@ -276,6 +346,8 @@ pub fn churn(path: &str, path_filter: Option<String>, days: Option<u32>) -> Resu
         &ChurnRequest {
             path: path_filter,
             days,
+            limit,
+            format: fmt.request_format(),
         },
     ))
 }

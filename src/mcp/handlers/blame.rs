@@ -3,6 +3,7 @@
 use crate::db::Database;
 use crate::git::run_git;
 use crate::mcp::types::BlameRequest;
+use crate::ops::{self, present, Format, NotFound};
 use crate::security::safe_join;
 
 pub fn handle_blame(
@@ -10,11 +11,14 @@ pub fn handle_blame(
     project_root: &str,
     req: &BlameRequest,
 ) -> Result<String, String> {
-    let node = match db.find_node_by_name(&req.symbol) {
-        Ok(Some(n)) => n,
-        Ok(None) => return Ok(format!("Symbol '{}' not found", req.symbol)),
+    let fmt = Format::from_request(&req.format);
+    let matched = match db.resolve_symbol(&req.symbol, &req.hint()) {
+        Ok(Some(m)) => m,
+        Ok(None) => return present(&NotFound::new(&req.symbol), fmt),
         Err(e) => return Err(e.to_string()),
     };
+    let resolution = ops::Resolution::of(&matched);
+    let node = matched.node;
 
     // Validate the file path before passing it to `git blame`, even though
     // it came from the DB — a malicious indexer input could seed attacker
@@ -31,9 +35,7 @@ pub fn handle_blame(
         return Err(format!("git blame failed: {}", output.stderr_message()));
     }
 
-    let body = String::from_utf8_lossy(&output.stdout);
-    Ok(format!(
-        "## blame: `{}` ({}:{}-{})\n\n```\n{}```\n",
-        node.name, node.file_path, node.start_line, node.end_line, body
-    ))
+    let raw = String::from_utf8_lossy(&output.stdout).to_string();
+    let result = ops::blame_result(&node, resolution, raw);
+    present(&result, fmt)
 }

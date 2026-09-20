@@ -1,6 +1,25 @@
 # Design: CLI ⇄ MCP feature parity
 
-Status: proposed · Issue: [#2](https://github.com/grahambrooks/symgraph/issues/2)
+Status: **delivered** (2026-09-20) · Issue: [#2](https://github.com/grahambrooks/symgraph/issues/2)
+
+> **What shipped, and what did not.** The `ops` layer, the per-tool CLI
+> subcommands and `--format json` on every tool are all in place. Two decisions
+> below were *not* carried out, deliberately:
+>
+> - **`clap` was not adopted.** The parser is still the hand-rolled table in
+>   `src/bin/symgraph-cli.rs`, now driving 30 commands and duplicated in
+>   `src/main.rs`. That duplication is real — several changes had to be made
+>   twice — but the command catalog doubles as the source for `--help`,
+>   completions and the man page, which clap would need re-plumbing. Open.
+> - **The equivalence guarantee was not free.** The claim below that CLI output
+>   matches MCP output "by construction" held only where it was true: `search`,
+>   `context` and `status` had their own CLI implementations and drifted from
+>   the handlers three separate times before being collapsed onto them.
+>   `tests/cli_parity_test.rs` now runs the real binary against the handler and
+>   compares, so the claim is checked rather than assumed.
+>
+> Sections below are the original design; read them as the plan, not the
+> current state.
 
 ## Context
 
@@ -222,18 +241,21 @@ and `definition` are distinct, mirroring the tools.
 - Stable stdout = tool output, stderr = diagnostics → safe to pipe.
 - `--format json` on every tool (once handlers support it) makes the CLI a
   drop-in for agents that prefer shelling out over MCP.
-- Ship a **skill doc** (`.claude/skills/symgraph-cli/SKILL.md`) describing the
-  subcommands, mirroring the existing `explore-code` MCP skill — this is exactly
-  the "give agents a CLI skill" pattern the issue calls out.
+- **Shipped:** `.claude/skills/symgraph-cli/SKILL.md` describes the subcommands
+  and, importantly, how to read the truncation and ambiguity signals — an agent
+  that treats `shown` as a total, or a common name as unambiguous, will draw
+  confident wrong conclusions.
 
-## Testing
+## Testing *(delivered)*
 
-- A table-driven integration test indexes a small fixture, then runs each
-  subcommand and asserts non-empty / well-formed output (and valid JSON for
-  `--format json`). This doubles as the "even just for testing" ask — the CLI
-  becomes the harness for exercising every tool without an MCP client.
-- Snapshot one CLI command against the corresponding MCP handler output to lock
-  in equivalence.
+- `tests/cli_parity_test.rs` indexes a fixture (a real git repository, so the
+  git-backed tools work), then runs every subcommand with `--format json` and
+  asserts the output parses. This doubles as the "even just for testing" ask —
+  the CLI is the harness for exercising every tool without an MCP client.
+- The same file compares CLI output against the MCP handler byte-for-byte for
+  `search`, `context`, `status` and `unused` — the commands that had diverged.
+- `tests/handlers_test.rs` covers the handler surface directly, in markdown and
+  JSON. Since both front-ends call those functions, it covers both at once.
 
 ## Rollout
 
@@ -255,11 +277,14 @@ checked against the pre-refactor markdown as we go.
 
 ## Decisions (confirmed)
 
-1. **Parser:** adopt `clap` (derive).
-2. **Reuse:** extract a shared, provider-neutral `ops` layer (not just exposing
-   the existing handlers) — MCP and CLI both front-end it.
-3. **JSON:** add structured JSON to **all** tools via the typed-result +
-   `present()` design, benefiting the MCP server as well as the CLI.
+1. ~~**Parser:** adopt `clap` (derive).~~ **Not done.** Still hand-rolled, and
+   now duplicated across two binaries. Revisit or strike.
+2. **Reuse:** extract a shared, provider-neutral `ops` layer — **done**. MCP
+   and CLI both front-end it, and as of the parity collapse no command has a
+   second implementation.
+3. **JSON:** structured JSON on **all** tools via typed results + `present()` —
+   **done**. All 14 request types carry `format`; `context`, `search`, `blame`,
+   `churn`, `diff-impact`, `status` and `reindex` were the last to gain it.
 
 ## Risks / notes
 
