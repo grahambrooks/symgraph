@@ -1,0 +1,57 @@
+Cargo.toml
+  s_23236ed069bd33::t_3d765f25df322f 5-8
+CHANGELOG.md
+  s_23236ed069bd33::t_a808faf0959dbb 1-91
+.github/workflows/ci.yml
+  s_23236ed069bd33::t_d931ace908dac4 12-16,74-115
+  s_23236ed069bd33::t_95f6df9c60efc0 116
+Makefile
+  s_23236ed069bd33::t_d06139f6365fc0 1,7-10,24-25,66-77,132,138
+README.md
+  s_23236ed069bd33::t_35ffa8f31e67ea 6,16-17,19-20,22-27,33-36
+src/mcp/handlers/reindex.rs
+  s_23236ed069bd33::t_533ea31dc6b864 29-30
+src/ops/mod.rs
+  s_23236ed069bd33::t_533ea31dc6b864 677
+tests/integration_test.rs
+  s_23236ed069bd33::t_d7e3a1874fea89 987-994,999-1017,1025-1026
+  s_23236ed069bd33::t_237eaac6e4b016 995-998,1021-1023
+  s_23236ed069bd33::t_ec6ed53335b6dc 1018-1020,1024
+docs/review-2026-09-20.md
+  s_23236ed069bd33::t_7cb51e09f7ffe5 309-341,352-357
+  s_23236ed069bd33::t_9d1fd46687713c 342-351
+deny.toml
+  s_23236ed069bd33::t_d931ace908dac4 1-17,22-42
+  s_23236ed069bd33::t_001797502409ca 18-21
+install.ps1
+  s_23236ed069bd33::t_fd8629d3ee9936 45-47,58-90,93-94,100-104,168-183
+src/ops/format.rs
+  s_23236ed069bd33::t_ef8ddfaf65a3bd 3-4,40-49,55,57,76-91,94-101
+  s_23236ed069bd33::t_533ea31dc6b864 50-54,56,92-93
+  s_23236ed069bd33::t_627b580fdb5d8b 102
+install.sh
+  s_23236ed069bd33::t_b6b35df5e647f3 67-69,77-114,117-119,122-124
+  s_23236ed069bd33::t_8d87c129dc049b 161-164,174-195,202-214,216
+src/lib.rs
+  s_23236ed069bd33::t_ef8ddfaf65a3bd 89-99,390-401
+.github/workflows/release.yml
+  s_23236ed069bd33::t_c59dda3edc7446 303-304,307-310
+  s_23236ed069bd33::t_728d75933bf581 23-41,44,428-429
+  s_23236ed069bd33::t_e09e1333261831 8-9,11,249-250,300-302,305-306,311-313,328-329,396-398
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "ab3e92feb4442981ce01e2516b10e8cb7d65d647",
+  "prompts": {},
+  "sessions": {
+    "s_23236ed069bd33": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b20a211f-f1f4-4830-b7b2-f1fc7b2e7699",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}
