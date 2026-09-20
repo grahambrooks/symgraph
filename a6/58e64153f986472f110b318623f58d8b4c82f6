@@ -1,0 +1,19 @@
+docs/review-2026-09-20.md
+  s_23236ed069bd33::t_17430a7826c148 72-94
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "a658e64153f986472f110b318623f58d8b4c82f6",
+  "prompts": {},
+  "sessions": {
+    "s_23236ed069bd33": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b20a211f-f1f4-4830-b7b2-f1fc7b2e7699",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}

@@ -1,0 +1,19 @@
+.claude/skills/symgraph-cli/SKILL.md
+  s_23236ed069bd33::t_97441bda901337 142-144
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "cd2eb540bcedd58fa0e2069a8b97c3a55192cae4",
+  "prompts": {},
+  "sessions": {
+    "s_23236ed069bd33": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b20a211f-f1f4-4830-b7b2-f1fc7b2e7699",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}

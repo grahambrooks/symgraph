@@ -1,0 +1,45 @@
+src/main.rs
+  s_23236ed069bd33::t_ceb0167aef074a 644,651-655,785
+  s_23236ed069bd33::t_678090040e1394 729,755,781,793,827
+  s_23236ed069bd33::t_84eec2cb365d88 1,3-16,18,22-23,29-134,143,148,173-196,205-206,230-231,266-278,280,282-311,314,318,326,331-332,340,345,348,350,355,360,365,370,380,385,398,404,409,432,477,482-493,497,504-640,645-650,656-692,696-711,714-728,730-739,741-754,756-780,782-784,786-792,794-806,809-826,828-830
+  s_23236ed069bd33::t_05fc5ded8f2fa6 641
+CHANGELOG.md
+  s_23236ed069bd33::t_2c0b8ffba17dfd 97-110
+docs/review-2026-09-20.md
+  s_23236ed069bd33::t_2c0b8ffba17dfd 483-520
+README.md
+  s_23236ed069bd33::t_1d64f603ae7520 49-50
+tests/cli_parity_test.rs
+  s_23236ed069bd33::t_3833654ef0912f 85
+Cargo.toml
+  s_23236ed069bd33::t_cff1a0f66036b3 84-85,99-102
+install.ps1
+  s_23236ed069bd33::t_1f0041b95c32db 105-106,112-116
+install.sh
+  s_23236ed069bd33::t_1f0041b95c32db 135-136,139-142
+.claude/skills/symgraph/SKILL.md
+  s_23236ed069bd33::t_10119db0e2aee9 13-14
+  s_23236ed069bd33::t_a9aaed1f63af1a 1-12,15-147
+Formula/symgraph.rb
+  s_23236ed069bd33::t_f88ce2152a7298 32-33
+.github/workflows/ci.yml
+  s_23236ed069bd33::t_1f0041b95c32db 59-62,71
+docs/cli-mcp-parity.md
+  s_23236ed069bd33::t_1d64f603ae7520 9-20,251
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "48764845a1341ab776f585b3f94ce1b9891426ae",
+  "prompts": {},
+  "sessions": {
+    "s_23236ed069bd33": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b20a211f-f1f4-4830-b7b2-f1fc7b2e7699",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}

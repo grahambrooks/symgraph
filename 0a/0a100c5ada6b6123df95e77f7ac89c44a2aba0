@@ -1,0 +1,70 @@
+tests/integration_test.rs
+  s_23236ed069bd33::t_228d96cf612f29 829-871,874,887-893,898-973,978-986
+  s_23236ed069bd33::t_6d955910b4bddb 872-873,875-886
+  s_23236ed069bd33::t_37af3c730d8c52 894-897,974-977
+src/cli/commands.rs
+  s_23236ed069bd33::t_ea7c544590bddb 5,448-452
+  s_23236ed069bd33::t_fbd1e8188f44ef 234-236,453
+  s_23236ed069bd33::t_6cb94bd5ec50ea 8,76-78,175,189,197,209-210,228-233,237-263,454
+  s_23236ed069bd33::t_8ceea661af5831 15,116,122-137
+  s_23236ed069bd33::t_2253f2fa867f43 138-139,264-265
+src/mcp/handlers/status.rs
+  s_23236ed069bd33::t_8d75db1b3e549d 2-5,7-73,77,89-90,107-208
+src/mcp/mod.rs
+  s_23236ed069bd33::t_90b39d53bfcdf1 128-134,139-140,144,146,151-152,236,307,316,344,390,400
+  s_23236ed069bd33::t_7188560a63e1ca 267,290,299,402
+  s_23236ed069bd33::t_37af3c730d8c52 161-164,174-177,186-189,198-201,210-213,223-226,245-248,257-260,332-335,353-356,365-368,377-380,410-413,423-426,436-439,449-452
+  s_23236ed069bd33::t_8638e6d76cc563 518-548
+src/bin/symgraph-cli.rs
+  s_23236ed069bd33::t_ea7c544590bddb 396-406
+  s_23236ed069bd33::t_8ceea661af5831 429
+src/lib.rs
+  s_23236ed069bd33::t_b57d61b49904a9 244-256,364,469,493-495
+  s_23236ed069bd33::t_b61dc1458eb210 52-56,142-148,190,350-363,537,555-557,616-620
+  s_23236ed069bd33::t_fa5a05a7bd4583 365
+src/mcp/handlers/module_graph.rs
+  s_23236ed069bd33::t_15601e2a2dae49 25-37
+src/types.rs
+  s_23236ed069bd33::t_b61dc1458eb210 530-532
+src/mcp/handlers/graph.rs
+  s_23236ed069bd33::t_15601e2a2dae49 32,36
+  s_23236ed069bd33::t_37af3c730d8c52 33-35
+src/db/mod.rs
+  s_23236ed069bd33::t_6f77b9385c9d64 17,43-86,202-259,308-336
+  s_23236ed069bd33::t_15601e2a2dae49 584-595,1247,1269-1270,1273-1282,1300,1313-1314,1317-1323
+  s_23236ed069bd33::t_cd1293b4894a34 1887,2162-2163
+  s_23236ed069bd33::t_46953ce62b6334 87-115,260-307
+  s_23236ed069bd33::t_0920a9670c1ba9 337,1888-1970
+  s_23236ed069bd33::t_596aa0df75f36f 338
+src/mcp/handlers/reindex.rs
+  s_23236ed069bd33::t_8ceea661af5831 88-106
+docs/review-2026-09-20.md
+  s_23236ed069bd33::t_78436afa94e353 280,284-307
+src/cli/tools.rs
+  s_23236ed069bd33::t_ea7c544590bddb 33-36
+src/extraction/mod.rs
+  s_23236ed069bd33::t_cc054b7c005fc5 1406-1417
+  s_23236ed069bd33::t_acb0aa55bdf6b7 93-110,152,154-157
+src/db/schema.rs
+  s_23236ed069bd33::t_93b776148b1b13 87-94,97-109
+  s_23236ed069bd33::t_72027a5875ac44 110
+src/mcp/handlers/god_struct.rs
+  s_23236ed069bd33::t_15601e2a2dae49 36,40
+  s_23236ed069bd33::t_37af3c730d8c52 37-39
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "0a0a100c5ada6b6123df95e77f7ac89c44a2aba0",
+  "prompts": {},
+  "sessions": {
+    "s_23236ed069bd33": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b20a211f-f1f4-4830-b7b2-f1fc7b2e7699",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}
