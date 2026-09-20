@@ -6,7 +6,7 @@ use crate::ops::{self, present, Format};
 
 pub fn handle_hierarchy(db: &Database, req: &SymbolRequest) -> Result<String, String> {
     present(
-        &ops::hierarchy(db, &req.symbol)?,
+        &ops::hierarchy(db, &req.symbol, &req.hint())?,
         Format::from_request(&req.format),
     )
 }

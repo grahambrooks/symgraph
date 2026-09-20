@@ -64,16 +64,16 @@ const GROUPS: &[Group] = &[
     Group {
         title: "SYMBOL COMMANDS",
         commands: &[
-            Command { name: "callers", args: "<SYMBOL>", help: "Functions/methods that call SYMBOL" },
-            Command { name: "callees", args: "<SYMBOL>", help: "Functions/methods that SYMBOL calls" },
-            Command { name: "references", args: "<SYMBOL>", help: "All references to SYMBOL" },
+            Command { name: "callers", args: "<SYMBOL> [--file F] [--limit N] [--offset N]", help: "Functions/methods that call SYMBOL" },
+            Command { name: "callees", args: "<SYMBOL> [--file F] [--limit N] [--offset N]", help: "Functions/methods that SYMBOL calls" },
+            Command { name: "references", args: "<SYMBOL> [--file F] [--limit N]", help: "All references to SYMBOL" },
             Command { name: "node", args: "<SYMBOL>", help: "Detailed info about a symbol" },
             Command { name: "definition", args: "<SYMBOL> [--context-lines N]", help: "Source of SYMBOL" },
             Command { name: "hierarchy", args: "<SYMBOL>", help: "Parent/child (contains) hierarchy" },
             Command { name: "implementations", args: "<SYMBOL>", help: "Implementations of an interface/trait" },
             Command { name: "file", args: "<PATH>", help: "List symbols defined in a file" },
             Command { name: "path", args: "<FROM> <TO>", help: "Call path(s) from FROM to TO" },
-            Command { name: "unused", args: "", help: "Symbols with no incoming references (dead code)" },
+            Command { name: "unused", args: "[--limit N] [--offset N]", help: "Symbols with no incoming references (dead code)" },
         ],
     },
     Group {
@@ -212,11 +212,11 @@ fn main() -> Result<()> {
         }
         "search" => {
             if args.len() < 3 {
-                eprintln!("Usage: {BIN} search <query>");
+                eprintln!("Usage: {BIN} search <query> [--limit N]");
                 eprintln!("  <query> is a symbol name or partial name; quote it if it has spaces.");
                 return Ok(());
             }
-            search_command(".", &args[2], format)?;
+            search_command(".", &args[2], flag_u32(&args, "--limit"), format)?;
         }
         "context" => {
             if args.len() < 3 {
@@ -231,41 +231,51 @@ fn main() -> Result<()> {
         // ---- symbol relationships ----
         "callers" => {
             if let Some(s) = need(&args, 2, "callers <symbol>") {
-                tools::callers(".", &s, format)?;
+                tools::callers(".", &tools::SymbolQuery::from_args(&s, &args), format)?;
             }
         }
         "callees" => {
             if let Some(s) = need(&args, 2, "callees <symbol>") {
-                tools::callees(".", &s, format)?;
+                tools::callees(".", &tools::SymbolQuery::from_args(&s, &args), format)?;
             }
         }
         "node" => {
             if let Some(s) = need(&args, 2, "node <symbol>") {
-                tools::node(".", &s, format)?;
+                tools::node(".", &tools::SymbolQuery::from_args(&s, &args), format)?;
             }
         }
         "references" => {
             if let Some(s) = need(&args, 2, "references <symbol>") {
-                tools::references(".", &s, format)?;
+                tools::references(".", &tools::SymbolQuery::from_args(&s, &args), format)?;
             }
         }
         "definition" => {
             if let Some(s) = need(&args, 2, "definition <symbol> [--context-lines N]") {
-                tools::definition(".", &s, flag_u32(&args, "--context-lines"), format)?;
+                tools::definition(
+                    ".",
+                    &tools::SymbolQuery::from_args(&s, &args),
+                    flag_u32(&args, "--context-lines"),
+                    format,
+                )?;
             }
         }
         "hierarchy" => {
             if let Some(s) = need(&args, 2, "hierarchy <symbol>") {
-                tools::hierarchy(".", &s, format)?;
+                tools::hierarchy(".", &tools::SymbolQuery::from_args(&s, &args), format)?;
             }
         }
         "implementations" => {
             if let Some(s) = need(&args, 2, "implementations <symbol>") {
-                tools::implementations(".", &s, format)?;
+                tools::implementations(".", &tools::SymbolQuery::from_args(&s, &args), format)?;
             }
         }
         "unused" => {
-            tools::unused(".", format)?;
+            tools::unused(
+                ".",
+                flag_u32(&args, "--limit"),
+                flag_u32(&args, "--offset"),
+                format,
+            )?;
         }
         "file" => {
             if let Some(f) = need(&args, 2, "file <path>") {
@@ -282,7 +292,7 @@ fn main() -> Result<()> {
             if let Some(s) = need(&args, 2, "impact <symbol> [--churn] [--days N]") {
                 tools::impact(
                     ".",
-                    &s,
+                    &tools::SymbolQuery::from_args(&s, &args),
                     format,
                     has_flag(&args, "--churn"),
                     flag_u32(&args, "--days"),
@@ -302,7 +312,7 @@ fn main() -> Result<()> {
         // ---- git history ----
         "blame" => {
             if let Some(s) = need(&args, 2, "blame <symbol>") {
-                tools::blame(".", &s)?;
+                tools::blame(".", &tools::SymbolQuery::from_args(&s, &args))?;
             }
         }
         "churn" => {
@@ -520,6 +530,11 @@ fn print_usage() {
         "\nGLOBAL OPTIONS:\n\
          \x20   --format <text|json>    Output format (default: text)\n\
          \x20   --db <PATH>             Use an explicit index database file\n\n\
+         SYMBOL OPTIONS (symbol commands):\n\
+         \x20   --file <PATH>           Disambiguate: use the definition in this file\n\
+         \x20   --qualified-name <QN>   Disambiguate: use the definition with this qualified name\n\
+         \x20   --limit <N>             Max results to return (max 1000)\n\
+         \x20   --offset <N>            Skip N results — page through a truncated list\n\n\
          ENVIRONMENT:\n\
          \x20   SYMGRAPH_ROOT           Project root directory (default: cwd)\n\
          \x20   SYMGRAPH_DB             Explicit index database path\n\
@@ -530,10 +545,14 @@ fn print_usage() {
          \x20   {BIN} watch --interval 5          # re-index on change every 5s\n\
          \x20   {BIN} search authenticate         # find symbols named like \"authenticate\"\n\
          \x20   {BIN} context \"fix the login bug\" # gather context for a task\n\
-         \x20   {BIN} coupling-score --limit 20   # architectural coupling hotspots\n\n\
+         \x20   {BIN} coupling-score --limit 20   # architectural coupling hotspots\n\
+         \x20   {BIN} callers new --file src/db/mod.rs  # pick one of several `new`s\n\
+         \x20   {BIN} callers handle --limit 50 --offset 50  # second page of callers\n\n\
          NOTE:\n\
          \x20   Query commands need an existing index — run `{BIN} index` first,\n\
-         \x20   and re-run it (or use `watch`) after code changes to refresh.\n"
+         \x20   and re-run it (or use `watch`) after code changes to refresh.\n\
+         \x20   Results say when they are truncated or when a name was ambiguous —\n\
+         \x20   narrow with --file/--qualified-name, or page with --limit/--offset.\n"
     );
 }
 

@@ -11,7 +11,8 @@ use crate::db::Database;
 use crate::mcp::handlers;
 use crate::mcp::{
     BlameRequest, ChurnRequest, DefinitionRequest, DiffImpactRequest, DispatchSitesRequest,
-    FileRequest, GodStructRequest, ImpactRequest, ModuleGraphRequest, PathRequest, SymbolRequest,
+    FileRequest, FormatRequest, GodStructRequest, ImpactRequest, ModuleGraphRequest, PathRequest,
+    SymbolRequest,
 };
 
 use super::commands::OutputFormat;
@@ -43,9 +44,55 @@ fn emit(result: Result<String, String>) -> Result<()> {
     }
 }
 
-fn symbol_req(symbol: &str, fmt: OutputFormat) -> SymbolRequest {
+/// A symbol argument plus the shared disambiguation and paging flags.
+///
+/// Both binaries hand-roll their argument parsing, so this lives here rather
+/// than in either of them: one definition of what `--file`, `--qualified-name`,
+/// `--limit` and `--offset` mean, and no way for the two front-ends to drift.
+#[derive(Debug, Default, Clone)]
+pub struct SymbolQuery {
+    pub symbol: String,
+    pub file: Option<String>,
+    pub qualified_name: Option<String>,
+    pub limit: Option<u32>,
+    pub offset: Option<u32>,
+}
+
+impl SymbolQuery {
+    /// Read the shared flags out of a raw argument list.
+    pub fn from_args(symbol: &str, args: &[String]) -> Self {
+        fn value(args: &[String], name: &str) -> Option<String> {
+            args.iter()
+                .position(|a| a == name)
+                .and_then(|i| args.get(i + 1))
+                .cloned()
+        }
+        SymbolQuery {
+            symbol: symbol.to_string(),
+            file: value(args, "--file"),
+            qualified_name: value(args, "--qualified-name"),
+            limit: value(args, "--limit").and_then(|s| s.parse().ok()),
+            offset: value(args, "--offset").and_then(|s| s.parse().ok()),
+        }
+    }
+
+    /// A bare symbol with no narrowing or paging — for callers that have
+    /// nothing else to pass.
+    pub fn plain(symbol: &str) -> Self {
+        SymbolQuery {
+            symbol: symbol.to_string(),
+            ..Default::default()
+        }
+    }
+}
+
+fn symbol_req(q: &SymbolQuery, fmt: OutputFormat) -> SymbolRequest {
     SymbolRequest {
-        symbol: symbol.to_string(),
+        symbol: q.symbol.clone(),
+        file: q.file.clone(),
+        qualified_name: q.qualified_name.clone(),
+        limit: q.limit,
+        offset: q.offset,
         format: fmt.request_format(),
     }
 }
@@ -62,54 +109,60 @@ fn churn_opt(flag: bool) -> Option<bool> {
 
 // --- symbol relationships ---
 
-pub fn callers(path: &str, symbol: &str, fmt: OutputFormat) -> Result<()> {
+pub fn callers(path: &str, q: &SymbolQuery, fmt: OutputFormat) -> Result<()> {
     let (_root, db) = query_context(path)?;
-    emit(handlers::graph::handle_callers(
-        &db,
-        &symbol_req(symbol, fmt),
-    ))
+    emit(handlers::graph::handle_callers(&db, &symbol_req(q, fmt)))
 }
 
-pub fn callees(path: &str, symbol: &str, fmt: OutputFormat) -> Result<()> {
+pub fn callees(path: &str, q: &SymbolQuery, fmt: OutputFormat) -> Result<()> {
     let (_root, db) = query_context(path)?;
-    emit(handlers::graph::handle_callees(
-        &db,
-        &symbol_req(symbol, fmt),
-    ))
+    emit(handlers::graph::handle_callees(&db, &symbol_req(q, fmt)))
 }
 
-pub fn node(path: &str, symbol: &str, fmt: OutputFormat) -> Result<()> {
+pub fn node(path: &str, q: &SymbolQuery, fmt: OutputFormat) -> Result<()> {
     let (_root, db) = query_context(path)?;
-    emit(handlers::symbol::handle_node(&db, &symbol_req(symbol, fmt)))
+    emit(handlers::symbol::handle_node(&db, &symbol_req(q, fmt)))
 }
 
-pub fn references(path: &str, symbol: &str, fmt: OutputFormat) -> Result<()> {
+pub fn references(path: &str, q: &SymbolQuery, fmt: OutputFormat) -> Result<()> {
     let (_root, db) = query_context(path)?;
     emit(handlers::symbol::handle_references(
         &db,
-        &symbol_req(symbol, fmt),
+        &symbol_req(q, fmt),
     ))
 }
 
-pub fn hierarchy(path: &str, symbol: &str, fmt: OutputFormat) -> Result<()> {
+pub fn hierarchy(path: &str, q: &SymbolQuery, fmt: OutputFormat) -> Result<()> {
     let (_root, db) = query_context(path)?;
     emit(handlers::hierarchy::handle_hierarchy(
         &db,
-        &symbol_req(symbol, fmt),
+        &symbol_req(q, fmt),
     ))
 }
 
-pub fn implementations(path: &str, symbol: &str, fmt: OutputFormat) -> Result<()> {
+pub fn implementations(path: &str, q: &SymbolQuery, fmt: OutputFormat) -> Result<()> {
     let (_root, db) = query_context(path)?;
     emit(handlers::implementations::handle_implementations(
         &db,
-        &symbol_req(symbol, fmt),
+        &symbol_req(q, fmt),
     ))
 }
 
-pub fn unused(path: &str, fmt: OutputFormat) -> Result<()> {
+pub fn unused(
+    path: &str,
+    limit: Option<u32>,
+    offset: Option<u32>,
+    fmt: OutputFormat,
+) -> Result<()> {
     let (_root, db) = query_context(path)?;
-    emit(handlers::unused::handle_unused(&db, &fmt.request_format()))
+    emit(handlers::unused::handle_unused(
+        &db,
+        &FormatRequest {
+            limit,
+            offset,
+            format: fmt.request_format(),
+        },
+    ))
 }
 
 pub fn file(path: &str, file_path: &str, fmt: OutputFormat) -> Result<()> {
@@ -137,7 +190,7 @@ pub fn path_between(path: &str, from: &str, to: &str, fmt: OutputFormat) -> Resu
 
 pub fn definition(
     path: &str,
-    symbol: &str,
+    q: &SymbolQuery,
     context_lines: Option<u32>,
     fmt: OutputFormat,
 ) -> Result<()> {
@@ -146,7 +199,9 @@ pub fn definition(
         &db,
         &root,
         &DefinitionRequest {
-            symbol: symbol.to_string(),
+            symbol: q.symbol.clone(),
+            file: q.file.clone(),
+            qualified_name: q.qualified_name.clone(),
             context_lines,
             format: fmt.request_format(),
         },
@@ -157,14 +212,16 @@ pub fn definition(
 
 pub fn impact(
     path: &str,
-    symbol: &str,
+    q: &SymbolQuery,
     fmt: OutputFormat,
     churn: bool,
     days: Option<u32>,
 ) -> Result<()> {
     let (root, db) = query_context(path)?;
     let req = ImpactRequest {
-        symbol: symbol.to_string(),
+        symbol: q.symbol.clone(),
+        file: q.file.clone(),
+        qualified_name: q.qualified_name.clone(),
         churn: churn_opt(churn),
         days,
         format: fmt.request_format(),
@@ -194,13 +251,15 @@ pub fn diff_impact(
 
 // --- git history ---
 
-pub fn blame(path: &str, symbol: &str) -> Result<()> {
+pub fn blame(path: &str, q: &SymbolQuery) -> Result<()> {
     let (root, db) = query_context(path)?;
     emit(handlers::blame::handle_blame(
         &db,
         &root,
         &BlameRequest {
-            symbol: symbol.to_string(),
+            symbol: q.symbol.clone(),
+            file: q.file.clone(),
+            qualified_name: q.qualified_name.clone(),
         },
     ))
 }

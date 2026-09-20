@@ -9,7 +9,7 @@ use crate::ops::{self, present, Format, NotFound};
 
 pub fn handle_node(db: &Database, req: &SymbolRequest) -> Result<String, String> {
     let fmt = Format::from_request(&req.format);
-    match ops::node_info(db, &req.symbol)? {
+    match ops::node_info(db, &req.symbol, &req.hint())? {
         Some(r) => present(&r, fmt),
         None => present(&NotFound::new(&req.symbol), fmt),
     }
@@ -21,7 +21,13 @@ pub fn handle_definition(
     req: &DefinitionRequest,
 ) -> Result<String, String> {
     let fmt = Format::from_request(&req.format);
-    match ops::definition(db, project_root, &req.symbol, req.context_lines)? {
+    match ops::definition(
+        db,
+        project_root,
+        &req.symbol,
+        req.context_lines,
+        &req.hint(),
+    )? {
         Some(r) => present(&r, fmt),
         None => present(&NotFound::new(&req.symbol), fmt),
     }
@@ -29,7 +35,7 @@ pub fn handle_definition(
 
 pub fn handle_references(db: &Database, req: &SymbolRequest) -> Result<String, String> {
     let fmt = Format::from_request(&req.format);
-    match ops::references(db, &req.symbol)? {
+    match ops::references(db, &req.symbol, &req.hint(), req.limit)? {
         Some(r) => present(&r, fmt),
         None => present(&NotFound::new(&req.symbol), fmt),
     }
@@ -83,6 +89,8 @@ mod security_tests {
 
         let req = DefinitionRequest {
             symbol: "victim".into(),
+            file: None,
+            qualified_name: None,
             context_lines: None,
             format: None,
         };

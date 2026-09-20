@@ -141,7 +141,7 @@ fn main() -> Result<()> {
         }
         "search" => {
             if args.len() < 3 {
-                eprintln!("Usage: symgraph search <query>");
+                eprintln!("Usage: symgraph search <query> [--limit N]");
                 eprintln!("  <query> is a symbol name or partial name; quote it if it has spaces.");
                 eprintln!(
                     "  e.g. symgraph search authenticate   |   symgraph search \"User Service\""
@@ -150,7 +150,7 @@ fn main() -> Result<()> {
             }
             let path = ".";
             let query = &args[2];
-            search_command(path, query, format)?;
+            search_command(path, query, flag_u32(&args, "--limit"), format)?;
         }
         "context" => {
             if args.len() < 3 {
@@ -167,41 +167,51 @@ fn main() -> Result<()> {
         // ---- MCP-tool parity: symbol relationships ----
         "callers" => {
             if let Some(s) = need(&args, 2, "symgraph callers <symbol>") {
-                tools::callers(".", &s, format)?;
+                tools::callers(".", &tools::SymbolQuery::from_args(&s, &args), format)?;
             }
         }
         "callees" => {
             if let Some(s) = need(&args, 2, "symgraph callees <symbol>") {
-                tools::callees(".", &s, format)?;
+                tools::callees(".", &tools::SymbolQuery::from_args(&s, &args), format)?;
             }
         }
         "node" => {
             if let Some(s) = need(&args, 2, "symgraph node <symbol>") {
-                tools::node(".", &s, format)?;
+                tools::node(".", &tools::SymbolQuery::from_args(&s, &args), format)?;
             }
         }
         "references" => {
             if let Some(s) = need(&args, 2, "symgraph references <symbol>") {
-                tools::references(".", &s, format)?;
+                tools::references(".", &tools::SymbolQuery::from_args(&s, &args), format)?;
             }
         }
         "definition" => {
             if let Some(s) = need(&args, 2, "symgraph definition <symbol> [--context-lines N]") {
-                tools::definition(".", &s, flag_u32(&args, "--context-lines"), format)?;
+                tools::definition(
+                    ".",
+                    &tools::SymbolQuery::from_args(&s, &args),
+                    flag_u32(&args, "--context-lines"),
+                    format,
+                )?;
             }
         }
         "hierarchy" => {
             if let Some(s) = need(&args, 2, "symgraph hierarchy <symbol>") {
-                tools::hierarchy(".", &s, format)?;
+                tools::hierarchy(".", &tools::SymbolQuery::from_args(&s, &args), format)?;
             }
         }
         "implementations" => {
             if let Some(s) = need(&args, 2, "symgraph implementations <symbol>") {
-                tools::implementations(".", &s, format)?;
+                tools::implementations(".", &tools::SymbolQuery::from_args(&s, &args), format)?;
             }
         }
         "unused" => {
-            tools::unused(".", format)?;
+            tools::unused(
+                ".",
+                flag_u32(&args, "--limit"),
+                flag_u32(&args, "--offset"),
+                format,
+            )?;
         }
         "file" => {
             if let Some(f) = need(&args, 2, "symgraph file <path>") {
@@ -218,7 +228,7 @@ fn main() -> Result<()> {
             if let Some(s) = need(&args, 2, "symgraph impact <symbol> [--churn] [--days N]") {
                 tools::impact(
                     ".",
-                    &s,
+                    &tools::SymbolQuery::from_args(&s, &args),
                     format,
                     has_flag(&args, "--churn"),
                     flag_u32(&args, "--days"),
@@ -238,7 +248,7 @@ fn main() -> Result<()> {
         // ---- git history ----
         "blame" => {
             if let Some(s) = need(&args, 2, "symgraph blame <symbol>") {
-                tools::blame(".", &s)?;
+                tools::blame(".", &tools::SymbolQuery::from_args(&s, &args))?;
             }
         }
         "churn" => {

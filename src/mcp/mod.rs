@@ -325,7 +325,7 @@ impl SymgraphHandler {
         description = "Find unused symbols (functions, methods, classes) with no incoming references. Helps identify dead code."
     )]
     fn symgraph_unused(&self, Parameters(req): Parameters<FormatRequest>) -> String {
-        self.with_db(|db| handlers::unused::handle_unused(db, &req.format))
+        self.with_db(|db| handlers::unused::handle_unused(db, &req))
     }
 
     /// Find implementations of an interface/trait

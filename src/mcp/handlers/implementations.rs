@@ -6,7 +6,7 @@ use crate::ops::{self, present, Format};
 
 pub fn handle_implementations(db: &Database, req: &SymbolRequest) -> Result<String, String> {
     present(
-        &ops::implementations(db, &req.symbol)?,
+        &ops::implementations(db, &req.symbol, &req.hint())?,
         Format::from_request(&req.format),
     )
 }
