@@ -1,0 +1,22 @@
+Makefile
+  s_23236ed069bd33::t_b67fb772fc1f16 24,32,66-70,72,82,86-88,93
+  s_23236ed069bd33::t_aa0b8a774ccae2 28
+AGENTS.md
+  s_23236ed069bd33::t_304c99594eab78 7,25-26,61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "9f522d426c635517915b9f58c61a93f3ae86ea6b",
+  "prompts": {},
+  "sessions": {
+    "s_23236ed069bd33": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b20a211f-f1f4-4830-b7b2-f1fc7b2e7699",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}
