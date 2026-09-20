@@ -1,9 +1,10 @@
 //! Git churn analysis: file change frequency over a recent window.
 
 use std::collections::HashMap;
-use std::process::Command;
 
+use crate::git::run_git;
 use crate::mcp::types::ChurnRequest;
+use crate::ops::constants::MAX_CHURN_DAYS;
 use crate::security::safe_join;
 
 const DEFAULT_DAYS: u32 = 90;
@@ -18,6 +19,9 @@ pub fn file_churn(
     days: u32,
     path: Option<&str>,
 ) -> Result<HashMap<String, u32>, String> {
+    // An unbounded window makes git walk the entire history and buffer the
+    // whole name-only listing in memory, so cap what a caller can ask for.
+    let days = days.clamp(1, MAX_CHURN_DAYS);
     let since = format!("--since={}.days.ago", days);
     let mut args: Vec<String> = vec![
         "log".into(),
@@ -29,21 +33,17 @@ pub fn file_churn(
         // Validate before passing to git so callers can't pathspec-escape
         // into absolute paths or parent directories.
         safe_join(project_root, path).map_err(|e| e.to_string())?;
+        // `:(literal)` disables pathspec magic, which would otherwise let a
+        // leading `:/` re-anchor the spec at the top of the worktree — above
+        // `project_root` when the project is a subdirectory of a larger repo.
         args.push("--".into());
-        args.push(path.into());
+        args.push(format!(":(literal){}", path));
     }
 
-    let output = Command::new("git")
-        .args(&args)
-        .current_dir(project_root)
-        .output()
-        .map_err(|e| format!("running git log: {}", e))?;
+    let output = run_git(std::path::Path::new(project_root), &args)?;
 
     if !output.status.success() {
-        return Err(format!(
-            "git log failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
+        return Err(format!("git log failed: {}", output.stderr_message()));
     }
 
     let text = String::from_utf8_lossy(&output.stdout);
@@ -59,7 +59,8 @@ pub fn file_churn(
 }
 
 pub fn handle_churn(project_root: &str, req: &ChurnRequest) -> Result<String, String> {
-    let days = req.days.unwrap_or(DEFAULT_DAYS);
+    // Clamp here too, so the window the output names is the one git was asked for.
+    let days = req.days.unwrap_or(DEFAULT_DAYS).clamp(1, MAX_CHURN_DAYS);
     let counts = file_churn(project_root, days, req.path.as_deref())?;
 
     if counts.is_empty() {

@@ -31,6 +31,7 @@ pub mod coupling;
 #[cfg(feature = "sqlite")]
 pub mod db;
 pub mod extraction;
+pub mod git;
 #[cfg(feature = "sqlite")]
 pub mod graph;
 #[cfg(feature = "sqlite")]

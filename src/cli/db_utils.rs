@@ -15,11 +15,12 @@
 use anyhow::{Context, Result};
 use std::{
     path::{Path, PathBuf},
-    process::{self, Command},
+    process,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use crate::db::Database;
+use crate::git::run_git;
 use crate::{build_full_index, IndexConfig, IndexingStats};
 
 const DB_DIR: &str = ".symgraph";
@@ -117,11 +118,11 @@ fn local_db_path(project_root: &str) -> PathBuf {
 /// handling the case where `.git` is a file (worktrees/submodules). Returns
 /// `None` when `project_root` is not inside a git repository.
 fn git_common_dir(project_root: &str) -> Option<PathBuf> {
-    let out = Command::new("git")
-        .args(["rev-parse", "--git-common-dir"])
-        .current_dir(project_root)
-        .output()
-        .ok()?;
+    let out = run_git(
+        std::path::Path::new(project_root),
+        ["rev-parse", "--git-common-dir"],
+    )
+    .ok()?;
     if !out.status.success() {
         return None;
     }

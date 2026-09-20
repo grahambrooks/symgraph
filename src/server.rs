@@ -88,11 +88,20 @@ pub async fn start_http(cfg: HttpConfig) -> Result<()> {
 
     // Wrap database in Arc for sharing across HTTP sessions
     let db = Arc::new(std::sync::RwLock::new(SyncDatabase(db)));
+    // One reindex guard for the whole server, not one per session — sessions
+    // share the database, so they must share the flag that protects it.
+    let is_reindexing = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let cancellation_token = tokio_util::sync::CancellationToken::new();
 
     // Create HTTP service - each session gets a handler with shared database
     let service = StreamableHttpService::new(
-        move || Ok(SymgraphHandler::new_shared(db.clone(), project_root.clone())),
+        move || {
+            Ok(SymgraphHandler::new_shared(
+                db.clone(),
+                project_root.clone(),
+                is_reindexing.clone(),
+            ))
+        },
         LocalSessionManager::default().into(),
         {
             let mut config = StreamableHttpServerConfig::default();

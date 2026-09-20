@@ -26,10 +26,17 @@ use crate::types::{
 // would require a full VACUUM). It keeps freed pages on a freelist that
 // `compact()` / `PRAGMA incremental_vacuum` can return to the OS, so the index
 // file does not bloat as files are deleted and reindexed over time.
+//
+// `busy_timeout` matters because one index is routinely open in several
+// processes at once — the MCP server, a CLI query, and `symgraph-cli watch`
+// all resolve to the same file. Without it SQLite returns `SQLITE_BUSY` the
+// instant a writer holds the lock, so a query fails rather than waiting out a
+// reindex that would have finished in milliseconds.
 const CONNECTION_PRAGMAS: &str = "PRAGMA auto_vacuum = INCREMENTAL; \
              PRAGMA foreign_keys = ON; \
              PRAGMA journal_mode = WAL; \
              PRAGMA synchronous = NORMAL; \
+             PRAGMA busy_timeout = 5000; \
              PRAGMA cache_size = -64000;";
 
 /// Database handle for the code graph
@@ -1476,6 +1483,18 @@ mod tests {
     }
 
     // Database initialization tests
+    /// Several processes share one index file, so a query must wait out a
+    /// concurrent writer instead of failing with SQLITE_BUSY straight away.
+    #[test]
+    fn test_busy_timeout_is_configured() {
+        let db = Database::in_memory().unwrap();
+        let timeout: i64 = db
+            .conn
+            .query_row("PRAGMA busy_timeout", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(timeout, 5000);
+    }
+
     #[test]
     fn test_in_memory_database_creation() {
         let db = Database::in_memory();

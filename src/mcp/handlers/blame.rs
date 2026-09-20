@@ -1,8 +1,7 @@
 //! Git blame for a symbol's definition.
 
-use std::process::Command;
-
 use crate::db::Database;
+use crate::git::run_git;
 use crate::mcp::types::BlameRequest;
 use crate::security::safe_join;
 
@@ -23,17 +22,13 @@ pub fn handle_blame(
     safe_join(project_root, &node.file_path).map_err(|e| e.to_string())?;
 
     let range = format!("{},{}", node.start_line, node.end_line);
-    let output = Command::new("git")
-        .args(["blame", "-L", &range, "--date=short", "--", &node.file_path])
-        .current_dir(project_root)
-        .output()
-        .map_err(|e| format!("running git blame: {}", e))?;
+    let output = run_git(
+        std::path::Path::new(project_root),
+        ["blame", "-L", &range, "--date=short", "--", &node.file_path],
+    )?;
 
     if !output.status.success() {
-        return Err(format!(
-            "git blame failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
+        return Err(format!("git blame failed: {}", output.stderr_message()));
     }
 
     let body = String::from_utf8_lossy(&output.stdout);
