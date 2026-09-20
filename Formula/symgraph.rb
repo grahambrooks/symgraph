@@ -33,15 +33,21 @@ class Symgraph < Formula
   end
 
   def install
-    # The release tarball ships the full binary (CLI + MCP server) and, for
-    # releases built after v2026.7.5, the lean CLI-only `symgraph-cli` as well,
-    # plus manifest.json (not installed).
+    # The release tarball ships one binary — CLI and MCP server in the same
+    # executable — plus manifest.json (not installed).
     bin.install "symgraph"
-    bin.install "symgraph-cli" if File.exist?("symgraph-cli")
+  end
+
+  def caveats
+    <<~EOS
+      symgraph is now a single binary: `symgraph serve` runs the MCP server.
+      Releases up to 2026.9.20 also installed a separate `symgraph-cli`;
+      if one is still on your PATH from an older install, remove it.
+    EOS
   end
 
   test do
     assert_match version.to_s, shell_output("#{bin}/symgraph --version")
-    assert_match version.to_s, shell_output("#{bin}/symgraph-cli version") if (bin/"symgraph-cli").exist?
+    assert_match "serve", shell_output("#{bin}/symgraph help")
   end
 end

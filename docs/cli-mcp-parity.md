@@ -6,11 +6,18 @@ Status: **delivered** (2026-09-20) · Issue: [#2](https://github.com/grahambrook
 > subcommands and `--format json` on every tool are all in place. Two decisions
 > below were *not* carried out, deliberately:
 >
-> - **`clap` was not adopted.** The parser is still the hand-rolled table in
->   `src/bin/symgraph-cli.rs`, now driving 30 commands and duplicated in
->   `src/main.rs`. That duplication is real — several changes had to be made
->   twice — but the command catalog doubles as the source for `--help`,
->   completions and the man page, which clap would need re-plumbing. Open.
+> - **`clap` was not adopted.** The parser is still a hand-rolled table, now in
+>   `src/main.rs`, driving 29 commands. It used to be duplicated across two
+>   binaries; that duplication is gone (see below), but the command catalog
+>   still doubles as the source for `--help`, completions and the man page,
+>   which clap would need re-plumbing. Open, and less pressing now.
+>
+> **Superseded:** the two-binary split this document assumed is gone.
+> `symgraph` and `symgraph-cli` shared ~270 lines verbatim and had drifted —
+> `serve` in one, `reindex`/`watch`/`completions`/`man` in the other, and
+> `index` meaning a full rebuild in one and an incremental pass in the other.
+> There is one binary now; a CLI-only build is the same binary compiled
+> without the `server` feature.
 > - **The equivalence guarantee was not free.** The claim below that CLI output
 >   matches MCP output "by construction" held only where it was true: `search`,
 >   `context` and `status` had their own CLI implementations and drifted from
@@ -241,7 +248,7 @@ and `definition` are distinct, mirroring the tools.
 - Stable stdout = tool output, stderr = diagnostics → safe to pipe.
 - `--format json` on every tool (once handlers support it) makes the CLI a
   drop-in for agents that prefer shelling out over MCP.
-- **Shipped:** `.claude/skills/symgraph-cli/SKILL.md` describes the subcommands
+- **Shipped:** `.claude/skills/symgraph/SKILL.md` describes the subcommands
   and, importantly, how to read the truncation and ambiguity signals — an agent
   that treats `shown` as a total, or a common name as unambiguous, will draw
   confident wrong conclusions.

@@ -94,6 +94,20 @@ was neither; they now say what they know and what they do not.
 
 ### Changed
 
+- **Breaking: one binary instead of two.** `symgraph-cli` is gone; everything
+  it did is in `symgraph`, and `symgraph serve` runs the MCP server. The two
+  had drifted — `serve` existed only in `symgraph`, while `reindex`, `watch`,
+  `completions` and `man` existed only in `symgraph-cli`, and `index` meant a
+  full rebuild in one and an incremental pass in the other. A CLI-only build
+  is now the same binary without the `server` feature, which is what the split
+  was supposed to provide and did not: the two binaries were the same size
+  either way, and every release shipped both.
+  - `symgraph reindex`, `watch`, `completions` and `man` now exist — they were
+    missing from the binary the MCP bundle and installers actually deliver.
+  - `symgraph index` is now incremental (it was a full rebuild); `symgraph
+    reindex` is the full rebuild. On a fresh checkout both do the same work.
+  - Update any script calling `symgraph-cli` to call `symgraph`. The
+    installers remove a stale `symgraph-cli` from their install directory.
 - **Breaking (JSON output):** `count` on `callers`, `callees` and `unused` is
   replaced by `total`, `shown` and `truncated`. `count` meant "how many we
   returned" but read as "how many exist".

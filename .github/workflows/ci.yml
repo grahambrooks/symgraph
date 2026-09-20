@@ -56,9 +56,10 @@ jobs:
 
   cli-only:
     name: CLI-only build
-    # Exercises the lean `symgraph-cli` feature combo (no rmcp/axum/tokio).
-    # `--all-features` builds above never hit this path, so a missing
-    # `#[cfg(feature = "server")]` gate would otherwise slip through.
+    # Exercises the lean feature combo (no rmcp/axum/tokio): the same
+    # `symgraph` binary minus `serve`. `--all-features` builds above never hit
+    # this path, so a missing `#[cfg(feature = "server")]` gate would slip
+    # through — which is exactly what keeps one binary serving both builds.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -67,7 +68,7 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - name: Clippy (CLI-only)
-        run: cargo clippy --bin symgraph-cli --no-default-features --features sqlite -- -D warnings
+        run: cargo clippy --bin symgraph --no-default-features --features sqlite -- -D warnings
       - name: Test (CLI-only)
         run: cargo test --no-default-features --features sqlite
 

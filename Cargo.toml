@@ -81,8 +81,8 @@ indicatif = "0.18"
 default = ["sqlite", "server"]
 sqlite = ["rusqlite"]
 # The MCP server (stdio + HTTP transports). Pulls in the async/HTTP stack.
-# Disable it (`--no-default-features --features sqlite`) to build the lean,
-# CLI-only `symgraph-cli` binary without rmcp/axum/tokio.
+# Disable it (`--no-default-features --features sqlite`) for a lean CLI-only
+# `symgraph` without rmcp/axum/tokio — every command except `serve`.
 server = ["sqlite", "dep:rmcp", "dep:axum", "dep:tokio", "dep:tokio-util"]
 
 [dev-dependencies]
@@ -96,17 +96,11 @@ name = "indexing"
 harness = false
 required-features = ["sqlite"]
 
-# Full binary: CLI query commands + the MCP server (`serve`). Requires the
-# `server` feature, so it is skipped in CLI-only builds.
+# One binary: every CLI command, plus `serve` for the MCP server when the
+# `server` feature is on. A CLI-only build is the same binary minus that one
+# command (`--no-default-features --features sqlite`); it does not need a
+# separate target, and having one produced two dispatch tables that drifted.
 [[bin]]
 name = "symgraph"
 path = "src/main.rs"
-required-features = ["server"]
-
-# CLI-only binary: every query/analysis command minus `serve`, plus
-# CLI-oriented extras (watch, reindex, completions, man). Builds without the
-# server stack when compiled with `--no-default-features --features sqlite`.
-[[bin]]
-name = "symgraph-cli"
-path = "src/bin/symgraph-cli.rs"
 required-features = ["sqlite"]

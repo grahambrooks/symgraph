@@ -81,20 +81,12 @@ jobs:
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
-      - name: Build symgraph-cli (lean, no server stack)
-        # Built with the server feature off so the standalone CLI ships without
-        # the rmcp/axum/tokio stack it never uses.
-        run: cargo build --release --target ${{ matrix.target }} --bin symgraph-cli --no-default-features --features sqlite
-        env:
-          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
-
       - name: Prepare artifact (Unix)
         if: runner.os != 'Windows'
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/symgraph dist/
-          cp target/${{ matrix.target }}/release/symgraph-cli dist/
-          chmod +x dist/symgraph dist/symgraph-cli
+          chmod +x dist/symgraph
 
       - name: Prepare artifact (Windows)
         if: runner.os == 'Windows'
@@ -105,7 +97,6 @@ jobs:
         run: |
           mkdir dist
           copy target\${{ matrix.target }}\release\symgraph.exe dist\
-          copy target\${{ matrix.target }}\release\symgraph-cli.exe dist\
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -131,22 +122,18 @@ jobs:
       - name: Fuse x64 + arm64 slices
         run: |
           mkdir -p dist
-          for bin in symgraph symgraph-cli; do
-            lipo -create \
-              -output "dist/${bin}" \
-              "artifacts/symgraph-darwin-x64/${bin}" \
-              "artifacts/symgraph-darwin-arm64/${bin}"
-            chmod +x "dist/${bin}"
-            lipo -info "dist/${bin}"
-          done
+          lipo -create \
+            -output dist/symgraph \
+            artifacts/symgraph-darwin-x64/symgraph \
+            artifacts/symgraph-darwin-arm64/symgraph
+          chmod +x dist/symgraph
+          lipo -info dist/symgraph
 
       - name: Verify both architectures are present
         run: |
-          for bin in symgraph symgraph-cli; do
-            info="$(lipo -info "dist/${bin}")"
-            echo "${info}" | grep -q x86_64 || { echo "::error::${bin} is missing the x86_64 slice"; exit 1; }
-            echo "${info}" | grep -q arm64  || { echo "::error::${bin} is missing the arm64 slice";  exit 1; }
-          done
+          info="$(lipo -info dist/symgraph)"
+          echo "${info}" | grep -q x86_64 || { echo "::error::symgraph is missing the x86_64 slice"; exit 1; }
+          echo "${info}" | grep -q arm64  || { echo "::error::symgraph is missing the arm64 slice";  exit 1; }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
@@ -266,32 +253,31 @@ jobs:
           VERSION=${GITHUB_REF#refs/tags/v}
           mkdir -p release
 
-          # Create tarballs for standalone binaries. Each bundles both the
-          # full `symgraph` (CLI + MCP server) and the lean `symgraph-cli`,
-          # alongside manifest.json.
+          # One tarball per platform, carrying the single `symgraph` binary
+          # (CLI + MCP server) and manifest.json.
           cp manifest-versioned.json artifacts/symgraph-linux-x64/manifest.json
           cd artifacts/symgraph-linux-x64
-          tar -czf "../../release/symgraph-${VERSION}-linux-x64.tar.gz" symgraph symgraph-cli manifest.json
+          tar -czf "../../release/symgraph-${VERSION}-linux-x64.tar.gz" symgraph manifest.json
           cd ../..
 
           cp manifest-versioned.json artifacts/symgraph-linux-arm64/manifest.json
           cd artifacts/symgraph-linux-arm64
-          tar -czf "../../release/symgraph-${VERSION}-linux-arm64.tar.gz" symgraph symgraph-cli manifest.json
+          tar -czf "../../release/symgraph-${VERSION}-linux-arm64.tar.gz" symgraph manifest.json
           cd ../..
 
           cp manifest-versioned.json artifacts/symgraph-darwin-x64/manifest.json
           cd artifacts/symgraph-darwin-x64
-          tar -czf "../../release/symgraph-${VERSION}-darwin-x64.tar.gz" symgraph symgraph-cli manifest.json
+          tar -czf "../../release/symgraph-${VERSION}-darwin-x64.tar.gz" symgraph manifest.json
           cd ../..
 
           cp manifest-versioned.json artifacts/symgraph-darwin-arm64/manifest.json
           cd artifacts/symgraph-darwin-arm64
-          tar -czf "../../release/symgraph-${VERSION}-darwin-arm64.tar.gz" symgraph symgraph-cli manifest.json
+          tar -czf "../../release/symgraph-${VERSION}-darwin-arm64.tar.gz" symgraph manifest.json
           cd ../..
 
           cp manifest-versioned.json artifacts/symgraph-windows-x64/manifest.json
           cd artifacts/symgraph-windows-x64
-          zip "../../release/symgraph-${VERSION}-windows-x64.zip" symgraph.exe symgraph-cli.exe manifest.json
+          zip "../../release/symgraph-${VERSION}-windows-x64.zip" symgraph.exe manifest.json
           cd ../..
 
           # Copy MCPB bundles
