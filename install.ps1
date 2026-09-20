@@ -47,6 +47,7 @@ $Version = $Version -replace "^v", ""
 $ZipName = "symgraph-v$Version-x86_64-pc-windows-msvc.zip"
 $LegacyZipName = "symgraph-$Version-windows-x64.zip"
 $BaseUrl = "https://github.com/$Repo/releases/download/v$Version"
+$ChecksumUrl = "$BaseUrl/SHA256SUMS"
 
 Write-Host "Installing symgraph $Version for windows/$Arch..."
 
@@ -54,20 +55,64 @@ $TmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "symgraph-install-$([Syste
 New-Item -ItemType Directory -Path $TmpDir -Force | Out-Null
 
 try {
+    # $Asset is the name the release actually carries, which is also how
+    # SHA256SUMS lists it. The two naming schemes must not be confused at
+    # verification time, or a legitimate download looks unlisted.
     $ZipPath = Join-Path $TmpDir $ZipName
+    $Asset = $ZipName
     try {
         Invoke-WebRequest -Uri "$BaseUrl/$ZipName" -OutFile $ZipPath -UseBasicParsing
     } catch {
+        $Asset = $LegacyZipName
         Invoke-WebRequest -Uri "$BaseUrl/$LegacyZipName" -OutFile $ZipPath -UseBasicParsing
+    }
+
+    # Verify the archive against the release's published checksums before
+    # unpacking anything that is about to be run on this machine.
+    $SumsPath = Join-Path $TmpDir "SHA256SUMS"
+    $HaveSums = $true
+    try {
+        Invoke-WebRequest -Uri $ChecksumUrl -OutFile $SumsPath -UseBasicParsing
+    } catch {
+        # Releases published before checksums existed have nothing to check.
+        Write-Warning "No SHA256SUMS published for v$Version; skipping verification."
+        $HaveSums = $false
+    }
+
+    if ($HaveSums) {
+        $Expected = $null
+        foreach ($Line in Get-Content $SumsPath) {
+            $Fields = $Line -split '\s+', 2
+            if ($Fields.Count -eq 2 -and $Fields[1].TrimStart('*') -eq $Asset) {
+                $Expected = $Fields[0]
+                break
+            }
+        }
+        if (-not $Expected) {
+            throw "$Asset is not listed in SHA256SUMS."
+        }
+
+        $Actual = (Get-FileHash -Path $ZipPath -Algorithm SHA256).Hash
+        if ($Actual -ne $Expected.ToUpperInvariant()) {
+            throw ("Checksum mismatch for {0}.`n  expected: {1}`n  actual:   {2}`n" -f `
+                   $Asset, $Expected.ToUpperInvariant(), $Actual)
+        }
+        Write-Host "Checksum verified."
     }
 
     Expand-Archive -Path $ZipPath -DestinationPath $TmpDir -Force
 
-    # Install binary and manifest
+    # Install binaries and manifest. The archive ships both the full
+    # `symgraph` (CLI + MCP server) and the lean `symgraph-cli`.
     $BinDir = Join-Path $InstallDir "bin"
     New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
 
     Copy-Item -Path (Join-Path $TmpDir "symgraph.exe") -Destination (Join-Path $BinDir "symgraph.exe") -Force
+
+    $CliPath = Join-Path $TmpDir "symgraph-cli.exe"
+    if (Test-Path $CliPath) {
+        Copy-Item -Path $CliPath -Destination (Join-Path $BinDir "symgraph-cli.exe") -Force
+    }
 
     $ManifestPath = Join-Path $TmpDir "manifest.json"
     if (Test-Path $ManifestPath) {
@@ -132,9 +177,22 @@ if ($Mcp) {
     Write-Host ""
     Write-Host "Configuring MCP server..."
 
-    # Claude Code: ~/.claude/settings.json
-    $ClaudeCodeConfig = Join-Path $env:USERPROFILE ".claude\settings.json"
-    Configure-McpJson -FilePath $ClaudeCodeConfig -Label "Claude Code"
+    # Claude Code: prefer its own CLI, which owns the user-scope config and
+    # keeps owning it if the file layout changes. Fall back to editing the
+    # config only when the CLI is not installed.
+    $ClaudeCli = Get-Command claude -ErrorAction SilentlyContinue
+    if ($ClaudeCli) {
+        & claude mcp add symgraph --scope user -- $SymgraphBin serve 2>&1 | Out-Null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Host "  Configured Claude Code (via 'claude mcp add --scope user')"
+        } else {
+            Write-Host "  Claude Code: 'claude mcp add' failed - it may already be configured."
+            Write-Host "               Check with: claude mcp list"
+        }
+    } else {
+        $ClaudeCodeConfig = Join-Path $env:USERPROFILE ".claude.json"
+        Configure-McpJson -FilePath $ClaudeCodeConfig -Label "Claude Code"
+    }
 
     # Claude Desktop: %APPDATA%\Claude\claude_desktop_config.json
     $DesktopConfig = Join-Path $env:APPDATA "Claude\claude_desktop_config.json"

@@ -1,8 +1,12 @@
-.PHONY: build test lint fmt check clean install uninstall release release-dry-run update outdated doc help
+.PHONY: build test lint fmt check cli-only deny clean install uninstall release release-dry-run update outdated doc help
 
 # Date-based version: YYYY.M.D (semver-compatible)
 VERSION := $(shell date +%Y.%-m.%-d)
 TAG := v$(VERSION)
+
+# In-place sed differs between BSD (macOS, needs an explicit empty suffix) and
+# GNU (Linux, rejects one). Detect once so `make release` works on either.
+SED_INPLACE := $(shell sed --version >/dev/null 2>&1 && echo "sed -i" || echo "sed -i ''")
 
 # Default target
 all: help
@@ -17,6 +21,8 @@ help:
 	@echo "  build            Build release binary"
 	@echo "  test             Run all tests"
 	@echo "  lint             Run clippy lints"
+	@echo "  cli-only         Lint + test the lean CLI-only feature combo"
+	@echo "  deny             Supply-chain check (advisories, licenses, sources)"
 	@echo "  fmt              Format code"
 	@echo "  fmt-check        Check formatting without modifying"
 	@echo "  check            Run all checks (format, lint, test)"
@@ -57,8 +63,18 @@ fmt:
 fmt-check:
 	cargo fmt --all -- --check
 
-# Run all checks (format, lint, test)
-check: fmt-check lint test
+# Lint and test the lean CLI-only feature combo. CI gates on this, so `check`
+# has to cover it or a green local run can still push a tag that CI rejects.
+cli-only:
+	cargo clippy --bin symgraph-cli --no-default-features --features sqlite -- -D warnings
+	cargo test --no-default-features --features sqlite
+
+# Supply-chain gate: advisories, licenses, sources, bans (see deny.toml).
+deny:
+	cargo deny check
+
+# Run all checks (format, lint, test, lean build, supply chain)
+check: fmt-check lint test cli-only deny
 
 # Install to /usr/local/bin
 install: build
@@ -109,7 +125,7 @@ release: check
 		exit 1; \
 	fi
 	@echo "Releasing $(TAG)..."
-	sed -i '' 's/^version = ".*"/version = "$(VERSION)"/' Cargo.toml
+	$(SED_INPLACE) 's/^version = ".*"/version = "$(VERSION)"/' Cargo.toml
 	cargo check --quiet 2>/dev/null || (echo "Cargo.toml version update failed"; exit 1)
 	jq --arg v "$(VERSION)" '.version = $$v' manifest.json > manifest.json.tmp && mv manifest.json.tmp manifest.json
 	git add Cargo.toml manifest.json

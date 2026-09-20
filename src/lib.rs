@@ -86,6 +86,17 @@ const SOURCE_CODE_EXTENSIONS: &[&str] = &[
     "sql", "pas", "f90", "f95", "f03", "for",
 ];
 
+/// Rewrite a native path to the forward-slash form the index is keyed on.
+/// A no-op on platforms that already use `/`.
+#[cfg(feature = "sqlite")]
+fn normalize_separators(path: &str) -> String {
+    if std::path::MAIN_SEPARATOR == '/' {
+        path.to_string()
+    } else {
+        path.replace(std::path::MAIN_SEPARATOR, "/")
+    }
+}
+
 /// Whether `ext` (assumed lowercase) names a program-source-code file type.
 #[cfg(feature = "sqlite")]
 fn is_source_code_extension(ext: &str) -> bool {
@@ -376,11 +387,18 @@ fn collect_entries(
         hasher.update(content.as_bytes());
         let content_hash = hex::encode(hasher.finalize());
 
-        let rel_path = path
-            .strip_prefix(root)
-            .unwrap_or(path)
-            .display()
-            .to_string();
+        // Key the index on forward slashes everywhere. `display()` emits the
+        // platform separator, which on Windows stored `src\foo.rs` while every
+        // MCP client and CLI caller passes `src/foo.rs` — so lookups by path
+        // silently found nothing. This is the one place paths enter the index,
+        // so normalizing here covers every downstream consumer.
+        let rel_path = normalize_separators(
+            &path
+                .strip_prefix(root)
+                .unwrap_or(path)
+                .display()
+                .to_string(),
+        );
 
         if matches!(mode, IndexMode::Incremental) && !db.needs_reindex(&rel_path, &content_hash)? {
             debug!("Skipping unchanged file: {}", rel_path);

@@ -77,20 +77,69 @@ esac
 TARBALL="symgraph-v${VERSION}-${TARGET}.tar.gz"
 LEGACY_TARBALL="symgraph-${VERSION}-${OS}-${ARCH}.tar.gz"
 BASE_URL="https://github.com/${REPO}/releases/download/v${VERSION}"
+CHECKSUM_URL="${BASE_URL}/SHA256SUMS"
 
 echo "Installing symgraph ${VERSION} for ${OS}/${ARCH}..."
 
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "${TMP_DIR}"' EXIT
 
+# `ASSET` is the name the release actually carries, which is also how
+# SHA256SUMS lists it. The two naming schemes must not be confused at
+# verification time, or a legitimate download looks unlisted.
+ASSET="${TARBALL}"
 if ! curl -fsSL "${BASE_URL}/${TARBALL}" -o "${TMP_DIR}/${TARBALL}" 2>/dev/null; then
+    ASSET="${LEGACY_TARBALL}"
     curl -fsSL "${BASE_URL}/${LEGACY_TARBALL}" -o "${TMP_DIR}/${TARBALL}"
 fi
+
+# Verify the download against the release's published checksums. This script
+# is run as `curl | bash`, so the archive is executed on the machine moments
+# later; taking it on trust from the transport alone is not good enough.
+verify_checksum() {
+    local expected actual
+    if ! curl -fsSL "${CHECKSUM_URL}" -o "${TMP_DIR}/SHA256SUMS" 2>/dev/null; then
+        # Releases before checksums were published have no manifest to check.
+        echo "Warning: no SHA256SUMS published for v${VERSION}; skipping verification." >&2
+        return 0
+    fi
+
+    expected="$(awk -v f="${ASSET}" '$2 == f || $2 == "*" f { print $1 }' "${TMP_DIR}/SHA256SUMS")"
+    if [ -z "${expected}" ]; then
+        echo "Error: ${ASSET} is not listed in SHA256SUMS." >&2
+        exit 1
+    fi
+
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual="$(sha256sum "${TMP_DIR}/${TARBALL}" | cut -d' ' -f1)"
+    elif command -v shasum >/dev/null 2>&1; then
+        actual="$(shasum -a 256 "${TMP_DIR}/${TARBALL}" | cut -d' ' -f1)"
+    else
+        echo "Error: neither sha256sum nor shasum found; cannot verify download." >&2
+        exit 1
+    fi
+
+    if [ "${expected}" != "${actual}" ]; then
+        echo "Error: checksum mismatch for ${ASSET}." >&2
+        echo "  expected: ${expected}" >&2
+        echo "  actual:   ${actual}" >&2
+        echo "Refusing to install. Report this at https://github.com/${REPO}/issues" >&2
+        exit 1
+    fi
+    echo "Checksum verified."
+}
+verify_checksum
+
 tar -xzf "${TMP_DIR}/${TARBALL}" -C "${TMP_DIR}"
 
-# Install binary and manifest
+# Install binaries and manifest. The tarball ships both the full `symgraph`
+# (CLI + MCP server) and the lean `symgraph-cli`; only the former used to be
+# installed, leaving the other silently discarded.
 mkdir -p "${INSTALL_DIR}/bin"
 install -m 755 "${TMP_DIR}/symgraph" "${INSTALL_DIR}/bin/symgraph"
+if [ -f "${TMP_DIR}/symgraph-cli" ]; then
+    install -m 755 "${TMP_DIR}/symgraph-cli" "${INSTALL_DIR}/bin/symgraph-cli"
+fi
 
 if [ -f "${TMP_DIR}/manifest.json" ]; then
     install -m 644 "${TMP_DIR}/manifest.json" "${INSTALL_DIR}/manifest.json"
@@ -126,8 +175,11 @@ echo "symgraph ${VERSION} installed to ${INSTALL_DIR}/bin/symgraph"
 # Configure as MCP server
 if [ "${CONFIGURE_MCP}" = true ]; then
     SYMGRAPH_BIN="${INSTALL_DIR}/bin/symgraph"
-    MCP_ENTRY="{\"command\":\"${SYMGRAPH_BIN}\",\"args\":[\"serve\"]}"
 
+    # Merge a server entry into a JSON config, without disturbing the rest of
+    # the file. Paths are passed as arguments rather than spliced into the
+    # program text: an install dir containing a quote or a backslash would
+    # otherwise produce a syntax error at best, and execute as code at worst.
     configure_json() {
         local file="$1"
         local label="$2"
@@ -137,27 +189,49 @@ if [ "${CONFIGURE_MCP}" = true ]; then
             echo '{}' > "${file}"
         fi
 
-        # Use python3 (available on macOS and most Linux) to safely merge JSON
-        python3 -c "
-import json, sys
-with open('${file}') as f:
-    config = json.load(f)
-config.setdefault('mcpServers', {})
-config['mcpServers']['symgraph'] = {'command': '${SYMGRAPH_BIN}', 'args': ['serve']}
-with open('${file}', 'w') as f:
-    json.dump(config, f, indent=2)
-    f.write('\n')
-"
+        python3 - "${file}" "${SYMGRAPH_BIN}" <<'PYEOF'
+import json
+import sys
+
+config_path, binary = sys.argv[1], sys.argv[2]
+
+try:
+    with open(config_path) as handle:
+        config = json.load(handle)
+except (OSError, ValueError) as exc:
+    raise SystemExit(f"could not read {config_path}: {exc}")
+
+if not isinstance(config, dict):
+    raise SystemExit(f"{config_path} is not a JSON object; leaving it alone")
+
+servers = config.setdefault("mcpServers", {})
+servers["symgraph"] = {"command": binary, "args": ["serve"]}
+
+with open(config_path, "w") as handle:
+    json.dump(config, handle, indent=2)
+    handle.write("\n")
+PYEOF
         echo "  Configured ${label}: ${file}"
     }
 
     echo ""
     echo "Configuring MCP server..."
 
-    # Claude Code: ~/.claude/settings.json
-    configure_json "$HOME/.claude/settings.json" "Claude Code"
+    # Claude Code: prefer its own CLI, which owns the user-scope config and
+    # will keep owning it if the file layout changes. Only fall back to
+    # editing the config directly when the CLI is not installed.
+    if command -v claude >/dev/null 2>&1; then
+        if claude mcp add symgraph --scope user -- "${SYMGRAPH_BIN}" serve >/dev/null 2>&1; then
+            echo "  Configured Claude Code (via 'claude mcp add --scope user')"
+        else
+            echo "  Claude Code: 'claude mcp add' failed — it may already be configured."
+            echo "               Check with: claude mcp list"
+        fi
+    else
+        configure_json "$HOME/.claude.json" "Claude Code"
+    fi
 
-    # Claude Desktop: platform-specific config
+    # Claude Desktop reads mcpServers from its own config file.
     if [ "${OS}" = "darwin" ]; then
         DESKTOP_CONFIG="$HOME/Library/Application Support/Claude/claude_desktop_config.json"
     else

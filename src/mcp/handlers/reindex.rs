@@ -26,7 +26,8 @@ pub fn handle_reindex(
         for file_path in files {
             // Normalize and validate — reindex is a rare write path, so we
             // fail loudly on traversal attempts rather than silently skip.
-            let path = match validate_relative(normalize_path(file_path)) {
+            let normalized = normalize_path(file_path);
+            let path = match validate_relative(&normalized) {
                 Ok(p) => p,
                 Err(e) => {
                     errors.push(format!("{}: {}", file_path, e));

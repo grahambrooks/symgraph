@@ -674,7 +674,7 @@ impl Render for FileSymbols {
 
 pub fn file_symbols(db: &Database, path: &str) -> Result<FileSymbols, String> {
     let normalized = format::normalize_path(path);
-    let path = validate_relative(normalized).map_err(|e| e.to_string())?;
+    let path = validate_relative(&normalized).map_err(|e| e.to_string())?;
     let symbols = db.get_nodes_by_file(path).map_err(|e| e.to_string())?;
     Ok(FileSymbols {
         file: path.to_string(),
