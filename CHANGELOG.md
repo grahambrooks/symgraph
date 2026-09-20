@@ -1,12 +1,13 @@
 # Changelog
 
-Notable changes to symgraph. Versions use CalVer (`YYYY.M.D`).
+Notable changes to symgraph. Versions use CalVer (`YYYY.M.N`).
 
 ## Unreleased
 
-Work from the 2026-09-20 review (`docs/review-2026-09-20.md`). The through-line
+Mostly the 2026-09-20 review (`docs/review-2026-09-20.md`), whose through-line
 is that several tools answered in a way that read as complete and exact when it
-was neither; they now say what they know and what they do not.
+was neither; they now say what they know and what they do not. Plus the
+release-pipeline follow-ups to the release-kit v2 adoption in 2026.9.2.
 
 ### Added
 
@@ -20,13 +21,14 @@ was neither; they now say what they know and what they do not.
   crate version that built them. `status` reports whether the index is current,
   whether the full-text index is intact, how many references went unresolved,
   and what share of names more than one definition answers to.
-- **Supply chain.** Releases publish `SHA256SUMS`; both installers verify the
-  download before unpacking it. `cargo deny` runs in CI over advisories,
-  licenses, sources and bans.
+- **Supply chain.** Both installers now verify the downloaded archive against
+  the release's published `SHA256SUMS` before unpacking it — it is about to be
+  run on the machine, so the transport alone is not good enough. `cargo deny`
+  runs in CI over advisories, licenses, sources and bans.
 - **Declared MSRV** of 1.90, verified by a CI job that builds against exactly
   that toolchain.
 - **`--format json` on every tool.** `context`, `search`, `blame`, `churn`,
-  `diff-impact`, `status` and `reindex` were markdown-only; all 14 request
+  `diff-impact`, `status` and `reindex` were markdown-only; all 16 request
   types now carry `format`. Blame output is parsed into commit/author/date/line
   fields rather than one opaque string.
 - **`symgraph reindex --files a.rs b.rs`** — the targeted mode the MCP tool
@@ -45,8 +47,6 @@ was neither; they now say what they know and what they do not.
   codebase this cut arbitrary resolutions by a third.
 - **Benchmarks** (`cargo bench`) over full indexing, the no-op incremental
   pass, and graph folding.
-- `symgraph-cli` is now installed by the install scripts, which previously
-  discarded it despite shipping it in the archive.
 
 ### Fixed
 
@@ -99,12 +99,21 @@ was neither; they now say what they know and what they do not.
   rather than failing, so half-parsed files were indexed with no signal. They
   are now flagged and counted. A size cap (2 MiB) skips files too large to be
   worth parsing.
-- **The macOS "universal" bundle was arm64-only** — unrunnable on an Intel Mac.
-  It is now a real `lipo` binary, and the build fails if either slice is missing.
+- **Intel Macs got a binary they could not run.** The macOS archive was built
+  only for arm64. The release now builds `x86_64-apple-darwin` natively on an
+  Intel runner, so each macOS archive really is for the architecture it names.
+  (The `darwin-universal` **MCPB bundle** is still arm64-only — see Known
+  limitations.)
 - **`git log` mis-keyed non-ASCII paths**, so churn read zero for those files.
 - `make release` used BSD-only `sed -i ''` and could only be run from macOS.
-- The tag/`Cargo.toml` version check ran *after* the GitHub release was
-  published; it is now a pre-flight gate.
+- A tag whose version did not match `Cargo.toml` produced a GitHub release
+  that then failed to publish to crates.io, leaving the two out of step. The
+  tag is now the single source of the version: it is stamped into `Cargo.toml`
+  during the build, so the two cannot disagree.
+- **The next release would not have built.** `.release.env` still listed
+  `symgraph-cli` in `BINS` after the binaries were merged, and that value is
+  passed to the build as `--bin`; every leg of the five-target matrix would
+  have failed on a target that no longer exists.
 
 ### Changed
 
@@ -136,8 +145,6 @@ was neither; they now say what they know and what they do not.
   returned" but read as "how many exist".
 - Incremental indexing refuses a stale index rather than mixing old and new
   extraction semantics; `symgraph index` detects this and rebuilds.
-- Release workflow permissions are scoped per job instead of granting
-  `contents: write` to everything.
 
 ### Performance
 
@@ -147,19 +154,53 @@ was neither; they now say what they know and what they do not.
   are unchanged.
 - Reference resolution is one set-based statement per phase instead of several
   queries per reference.
-- Coupling analysis aggregates edges in SQL — 559 rows instead of 7246 on
-  symgraph's own index.
+- Coupling analysis aggregates edges in SQL — 581 rows instead of 7711 on
+  symgraph's own index, and the ratio grows with the codebase.
 - Reindexing named files no longer walks the whole tree.
 
 ### Known limitations
 
-- Symbol resolution is name-based. It is now deterministic and reports its own
-  ambiguity, but it does not yet use imports to narrow candidates — on
-  symgraph's own codebase 11.5% of names are shared by more than one
-  definition. `status` reports this figure for your codebase. Import scoping
-  narrows the choice but cannot rescue an import that is itself ambiguous.
+- **Symbol resolution is still name-based.** It is deterministic, it reports
+  its own ambiguity, it prefers a file the caller imports from, and it no
+  longer resolves a reference to a kind it could not denote — but a method
+  call on a receiver whose type cannot be inferred still matches any
+  same-named definition. On symgraph's own codebase 10.6% of names are shared
+  by more than one definition (`status` reports this for yours), and 216 of
+  837 cross-file calls between production files (26%) resolve to a file the
+  caller does not import.
+  Import scoping also cannot rescue an import that is itself ambiguous.
+- **Treat `module-graph` cycles as a prompt, not a verdict.** Those remaining
+  mis-resolved edges are enough to merge modules that are not really cyclic:
+  symgraph's own graph still reports one cycle spanning 33 of 39 files. Fan-in,
+  fan-out and the coupling ranking are reliable; SCC membership is not.
+- **The `darwin-universal` MCPB bundle carries the arm64 binary only** and will
+  not run on an Intel Mac. The per-architecture bundles (`darwin-x64`,
+  `darwin-arm64`) and every `.tar.gz` archive are built for the architecture
+  they name — prefer those.
 - Groovy parses partially: `tree-sitter-groovy` 0.1.2 rejects idiomatic
   semicolon-free statements. Symbols are still recovered.
+
+## 2026.9.2
+
+- **Adopted release-kit v2** as the release pipeline: the tag is the version
+  and is stamped into `Cargo.toml` during the build, `SHA256SUMS` is published
+  for every archive, the Homebrew formula is generated rather than hand-edited,
+  and each job asks for only the permissions it needs. Repo-specific settings
+  live in `.release.env`; `release.yml` and `scripts/release.py` are shared
+  across repositories and should not be edited here.
+- **Archive names changed** to `symgraph-v<version>-<rust target triple>`
+  (for example `symgraph-v2026.9.2-aarch64-apple-darwin.tar.gz`). The install
+  scripts fall back to the old `symgraph-<version>-<os>-<arch>` names, so
+  pinning an older version still works.
+
+## 2026.9.1
+
+- Dependency update: tree-sitter 0.27.
+
+## 2026.8.1
+
+- Re-release of 2026.7.21 with no source changes; its binaries report
+  `2026.7.21`, which is the drift the tag-driven versioning above fixes.
 
 ## 2026.7.21
 
