@@ -105,13 +105,23 @@ impl SymgraphHandler {
         }
     }
 
-    /// Create a handler with a pre-wrapped database (for sharing across HTTP sessions)
-    pub fn new_shared(db: Arc<RwLock<SyncDatabase>>, project_root: String) -> Self {
+    /// Create a handler over a pre-wrapped database shared with other sessions.
+    ///
+    /// `is_reindexing` is passed in rather than created here: the HTTP
+    /// transport builds a fresh handler per session over the *same* database,
+    /// so a per-handler flag would let each session start its own rebuild and
+    /// pile up on the write lock. The guard is only a guard when every handler
+    /// sharing a database shares the flag.
+    pub fn new_shared(
+        db: Arc<RwLock<SyncDatabase>>,
+        project_root: String,
+        is_reindexing: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             tool_router: Self::tool_router(),
             db,
             project_root,
-            is_reindexing: Arc::new(AtomicBool::new(false)),
+            is_reindexing,
         }
     }
 
@@ -423,5 +433,42 @@ impl ServerHandler for SymgraphHandler {
                 .into(),
         );
         info
+    }
+}
+
+#[cfg(all(test, feature = "server"))]
+mod tests {
+    use super::*;
+
+    /// The HTTP transport builds one handler per session over a shared
+    /// database. If each got its own `is_reindexing`, the "already in
+    /// progress" guard would be invisible to every other session and two
+    /// clients could kick off concurrent full rebuilds.
+    #[test]
+    fn shared_handlers_share_the_reindex_guard() {
+        let db = Arc::new(RwLock::new(SyncDatabase(Database::in_memory().unwrap())));
+        let flag = Arc::new(AtomicBool::new(false));
+
+        let session_a = SymgraphHandler::new_shared(db.clone(), ".".to_string(), flag.clone());
+        let session_b = SymgraphHandler::new_shared(db.clone(), ".".to_string(), flag.clone());
+
+        assert!(Arc::ptr_eq(
+            &session_a.is_reindexing,
+            &session_b.is_reindexing
+        ));
+
+        session_a.is_reindexing.store(true, Ordering::SeqCst);
+        assert!(
+            session_b.is_reindexing.load(Ordering::SeqCst),
+            "a reindex started in one session must be visible to the others"
+        );
+    }
+
+    /// A handler that owns its database is the only user of it, so it owns the
+    /// guard too.
+    #[test]
+    fn owned_handler_gets_its_own_guard() {
+        let handler = SymgraphHandler::new(Database::in_memory().unwrap(), ".".to_string());
+        assert!(!handler.is_reindexing.load(Ordering::SeqCst));
     }
 }

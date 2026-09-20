@@ -1,8 +1,7 @@
 //! Handler for diff impact tool
 
-use std::process::Command;
-
 use crate::db::Database;
+use crate::git::run_git;
 use crate::mcp::types::DiffImpactRequest;
 use crate::ops::format;
 use crate::security::safe_join;
@@ -136,17 +135,13 @@ fn git_changed_regions(
 ) -> Result<Vec<(String, u32, u32)>, String> {
     // `--` separates revs from paths; we pass no paths, but explicitly
     // closing the rev-spec section still hardens against future callers.
-    let output = Command::new("git")
-        .args(["diff", "--unified=0", git_ref, "--"])
-        .current_dir(project_root)
-        .output()
-        .map_err(|e| format!("running git diff: {}", e))?;
+    let output = run_git(
+        std::path::Path::new(project_root),
+        ["diff", "--unified=0", git_ref, "--"],
+    )?;
 
     if !output.status.success() {
-        return Err(format!(
-            "git diff failed: {}",
-            String::from_utf8_lossy(&output.stderr).trim()
-        ));
+        return Err(format!("git diff failed: {}", output.stderr_message()));
     }
 
     let text = String::from_utf8_lossy(&output.stdout);

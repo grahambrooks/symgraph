@@ -92,9 +92,50 @@ jobs:
           name: ${{ matrix.artifact }}
           path: dist/
 
+  universal:
+    name: Universal macOS binary
+    needs: build
+    # lipo ships with the Xcode command line tools, so this has to run on
+    # macOS. The previous arrangement ran on the Linux packaging job, could
+    # not call lipo, and shipped the arm64 slice under a "universal" name —
+    # which an Intel Mac cannot execute.
+    runs-on: macos-latest
+    steps:
+      - name: Download macOS artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: symgraph-darwin-*
+          path: artifacts
+
+      - name: Fuse x64 + arm64 slices
+        run: |
+          mkdir -p dist
+          for bin in symgraph symgraph-cli; do
+            lipo -create \
+              -output "dist/${bin}" \
+              "artifacts/symgraph-darwin-x64/${bin}" \
+              "artifacts/symgraph-darwin-arm64/${bin}"
+            chmod +x "dist/${bin}"
+            lipo -info "dist/${bin}"
+          done
+
+      - name: Verify both architectures are present
+        run: |
+          for bin in symgraph symgraph-cli; do
+            info="$(lipo -info "dist/${bin}")"
+            echo "${info}" | grep -q x86_64 || { echo "::error::${bin} is missing the x86_64 slice"; exit 1; }
+            echo "${info}" | grep -q arm64  || { echo "::error::${bin} is missing the arm64 slice";  exit 1; }
+          done
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: symgraph-darwin-universal
+          path: dist/
+
   package:
     name: Package MCPB
-    needs: build
+    needs: [build, universal]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -166,15 +207,11 @@ jobs:
         run: |
           VERSION=${GITHUB_REF#refs/tags/v}
 
-          # Create universal binary for macOS
+          # The fat binary is built by the `universal` job on a macOS runner;
+          # here it is only repackaged.
           mkdir -p bundle-darwin-universal/bin
           cp bundle/manifest.json bundle-darwin-universal/
-
-          # Use lipo to create universal binary (if both exist)
-          if [ -f artifacts/symgraph-darwin-x64/symgraph ] && [ -f artifacts/symgraph-darwin-arm64/symgraph ]; then
-            # Note: lipo only works on macOS, so we'll just include arm64 as primary
-            cp artifacts/symgraph-darwin-arm64/symgraph bundle-darwin-universal/bin/
-          fi
+          cp artifacts/symgraph-darwin-universal/symgraph bundle-darwin-universal/bin/
           chmod +x bundle-darwin-universal/bin/symgraph
           cd bundle-darwin-universal && zip -r "../symgraph-${VERSION}-darwin-universal.mcpb" . && cd ..
 
