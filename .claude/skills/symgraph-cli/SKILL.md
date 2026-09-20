@@ -139,4 +139,6 @@ symgraph-cli dispatch-sites NodeKind
   ranking are reliable; treat SCCs as a prompt to look, not a verdict.
 - Go reports no `implementations`: interface satisfaction is implicit, so
   there is nothing in the syntax to index.
-- `symgraph` (the other binary) has the same commands plus `serve` for MCP.
+- The other binary, `symgraph`, has `serve` (the MCP server) but is **missing**
+  `reindex`, `watch`, `completions` and `man`. The two have drifted; use
+  `symgraph-cli` for anything in this document.
