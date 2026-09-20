@@ -6,7 +6,12 @@ use tracing::info;
 
 use crate::context::{format_context_markdown, ContextBuilder, ContextOptions};
 use crate::db::Database;
+use crate::ops::constants::effective_limit;
 use crate::types::{IndexStats, Node};
+
+/// Default result count for `symgraph search`. Matches what the command has
+/// always shown; `--limit` raises it.
+const CLI_SEARCH_LIMIT: u32 = 20;
 use crate::IndexConfig;
 
 use super::db_utils::{
@@ -56,6 +61,8 @@ fn print_json<T: Serialize>(value: &T) -> Result<()> {
 struct SearchReport {
     query: String,
     count: usize,
+    /// True when more symbols matched than the limit allowed through.
+    truncated: bool,
     results: Vec<Node>,
 }
 
@@ -192,7 +199,12 @@ pub fn status_command(path: &str, fmt: OutputFormat) -> Result<()> {
 }
 
 /// Search for symbols by name
-pub fn search_command(path: &str, query: &str, fmt: OutputFormat) -> Result<()> {
+pub fn search_command(
+    path: &str,
+    query: &str,
+    limit: Option<u32>,
+    fmt: OutputFormat,
+) -> Result<()> {
     let project_root = canonicalize_path(path)?;
     let db_path = resolve_db(&project_root)?.path;
 
@@ -201,6 +213,7 @@ pub fn search_command(path: &str, query: &str, fmt: OutputFormat) -> Result<()> 
             return print_json(&SearchReport {
                 query: query.to_string(),
                 count: 0,
+                truncated: false,
                 results: Vec::new(),
             });
         }
@@ -209,12 +222,18 @@ pub fn search_command(path: &str, query: &str, fmt: OutputFormat) -> Result<()> 
     }
 
     let db = Database::open(&db_path)?;
-    let results = db.search_nodes(query, None, 20)?;
+    // Ask for one more than we will show, so a full page can be distinguished
+    // from a page that happens to be exactly the limit.
+    let limit = effective_limit(limit, CLI_SEARCH_LIMIT);
+    let mut results = db.search_nodes(query, None, limit + 1)?;
+    let truncated = results.len() > limit as usize;
+    results.truncate(limit as usize);
 
     if fmt.is_json() {
         return print_json(&SearchReport {
             query: query.to_string(),
             count: results.len(),
+            truncated,
             results,
         });
     }
@@ -242,6 +261,13 @@ pub fn search_command(path: &str, query: &str, fmt: OutputFormat) -> Result<()> 
                 println!("    {}", sig);
             }
         }
+    }
+
+    if truncated {
+        println!(
+            "\nMore than {} symbols match. Raise --limit or narrow the query.",
+            limit
+        );
     }
 
     Ok(())

@@ -9,8 +9,24 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 use anyhow::Result;
 
-use crate::db::Database;
+use crate::db::{Database, SymbolHint, SymbolMatch};
 use crate::types::{Edge, Node, TraversalOptions};
+
+/// Maximum callers expanded per node during impact traversal. A hub symbol
+/// with thousands of callers would otherwise make the BFS unbounded.
+pub const IMPACT_FANOUT_CAP: u32 = 100;
+
+/// One page of callers or callees, with the resolution and total behind it.
+#[derive(Debug, Clone)]
+pub struct CallPage {
+    /// How the symbol name was resolved, including how many definitions
+    /// competed for it.
+    pub matched: SymbolMatch,
+    /// The nodes on this page.
+    pub nodes: Vec<Node>,
+    /// How many distinct nodes exist in total, across all pages.
+    pub total: usize,
+}
 
 /// Graph operations on the code database
 pub struct Graph<'a> {
@@ -22,25 +38,71 @@ impl<'a> Graph<'a> {
         Self { db }
     }
 
-    /// Find all callers of a symbol (functions that call this function)
-    pub fn find_callers(&self, symbol_name: &str, limit: u32) -> Result<Vec<Node>> {
-        // First, find the node by name
-        let target = match self.db.find_node_by_name(symbol_name)? {
-            Some(node) => node,
-            None => return Ok(Vec::new()),
+    /// One page of callers or callees, together with the resolution that
+    /// produced it and the total the page was drawn from.
+    ///
+    /// Returning the total alongside the page is the whole point: a bare
+    /// `Vec` of 20 nodes cannot distinguish "these are all of them" from
+    /// "these are the first 20 of 400", and callers were reading the former
+    /// when the latter was true.
+    pub fn callers_page(
+        &self,
+        symbol_name: &str,
+        hint: &SymbolHint,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Option<CallPage>> {
+        let matched = match self.db.resolve_symbol(symbol_name, hint)? {
+            Some(m) => m,
+            None => return Ok(None),
         };
-
-        self.db.get_callers(target.id, limit)
+        let total = self.db.count_callers(matched.node.id)?;
+        let nodes = self.db.get_callers(matched.node.id, limit, offset)?;
+        Ok(Some(CallPage {
+            matched,
+            nodes,
+            total,
+        }))
     }
 
-    /// Find all callees of a symbol (functions that this function calls)
-    pub fn find_callees(&self, symbol_name: &str, limit: u32) -> Result<Vec<Node>> {
-        let source = match self.db.find_node_by_name(symbol_name)? {
-            Some(node) => node,
-            None => return Ok(Vec::new()),
+    /// One page of the symbols this symbol calls. See [`Graph::callers_page`].
+    pub fn callees_page(
+        &self,
+        symbol_name: &str,
+        hint: &SymbolHint,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Option<CallPage>> {
+        let matched = match self.db.resolve_symbol(symbol_name, hint)? {
+            Some(m) => m,
+            None => return Ok(None),
         };
+        let total = self.db.count_callees(matched.node.id)?;
+        let nodes = self.db.get_callees(matched.node.id, limit, offset)?;
+        Ok(Some(CallPage {
+            matched,
+            nodes,
+            total,
+        }))
+    }
 
-        self.db.get_callees(source.id, limit)
+    /// Find all callers of a symbol (functions that call this function).
+    ///
+    /// Convenience wrapper over [`Graph::callers_page`] for callers that do
+    /// not need the totals.
+    pub fn find_callers(&self, symbol_name: &str, limit: u32) -> Result<Vec<Node>> {
+        Ok(self
+            .callers_page(symbol_name, &SymbolHint::default(), limit, 0)?
+            .map(|p| p.nodes)
+            .unwrap_or_default())
+    }
+
+    /// Find all callees of a symbol (functions that this function calls).
+    pub fn find_callees(&self, symbol_name: &str, limit: u32) -> Result<Vec<Node>> {
+        Ok(self
+            .callees_page(symbol_name, &SymbolHint::default(), limit, 0)?
+            .map(|p| p.nodes)
+            .unwrap_or_default())
     }
 
     /// Analyze the impact of changing a symbol
@@ -54,6 +116,7 @@ impl<'a> Graph<'a> {
                     direct_callers: Vec::new(),
                     indirect_callers: Vec::new(),
                     total_impact: 0,
+                    truncated: false,
                 })
             }
         };
@@ -61,6 +124,7 @@ impl<'a> Graph<'a> {
         let mut visited: HashSet<i64> = HashSet::new();
         let mut direct_callers = Vec::new();
         let mut indirect_callers = Vec::new();
+        let mut truncated = false;
 
         visited.insert(root.id);
 
@@ -73,8 +137,16 @@ impl<'a> Graph<'a> {
                 continue;
             }
 
-            // Get callers of this node
-            let callers = self.db.get_callers(node_id, 100)?;
+            // Get callers of this node. The per-node cap keeps a hub symbol
+            // from exploding the traversal, but hitting it means the result is
+            // a floor on the blast radius rather than the whole of it — which
+            // the caller has to be told, or it will read an understated number
+            // as the complete one.
+            let total_callers = self.db.count_callers(node_id)?;
+            if total_callers > IMPACT_FANOUT_CAP as usize {
+                truncated = true;
+            }
+            let callers = self.db.get_callers(node_id, IMPACT_FANOUT_CAP, 0)?;
 
             for caller in callers {
                 if visited.contains(&caller.id) {
@@ -99,6 +171,7 @@ impl<'a> Graph<'a> {
             direct_callers,
             indirect_callers,
             total_impact,
+            truncated,
         })
     }
 
@@ -298,7 +371,7 @@ impl<'a> Graph<'a> {
         // For each entry point, find its neighbors
         for entry in entry_points {
             // Callees (what this function calls)
-            let callees = self.db.get_callees(entry.id, 10)?;
+            let callees = self.db.get_callees(entry.id, 10, 0)?;
             for (idx, callee) in callees.into_iter().enumerate() {
                 if !visited.contains(&callee.id) {
                     let score = 1.0 / (idx as f64 + 1.0);
@@ -310,7 +383,7 @@ impl<'a> Graph<'a> {
             }
 
             // Callers (what calls this function)
-            let callers = self.db.get_callers(entry.id, 10)?;
+            let callers = self.db.get_callers(entry.id, 10, 0)?;
             for (idx, caller) in callers.into_iter().enumerate() {
                 if !visited.contains(&caller.id) {
                     let score = 0.8 / (idx as f64 + 1.0);
@@ -338,6 +411,9 @@ pub struct ImpactAnalysis {
     pub direct_callers: Vec<Node>,
     pub indirect_callers: Vec<Node>,
     pub total_impact: usize,
+    /// Some node in the traversal had more callers than [`IMPACT_FANOUT_CAP`],
+    /// so `total_impact` is a lower bound rather than the full blast radius.
+    pub truncated: bool,
 }
 
 /// A subgraph extracted from the code graph
@@ -426,6 +502,78 @@ mod tests {
         };
         db.insert_or_update_file(&file).unwrap();
         db
+    }
+
+    /// A hub symbol with more callers than the fan-out cap must be reported as
+    /// a lower bound. Silently returning the capped number would understate a
+    /// blast radius that someone is using to decide whether a change is safe.
+    #[test]
+    fn analyze_impact_flags_truncation_past_the_fanout_cap() {
+        let db = setup_test_db();
+        let target = db
+            .insert_node(&create_test_node("hub", NodeKind::Function))
+            .unwrap();
+        for i in 0..(IMPACT_FANOUT_CAP + 1) {
+            let mut caller = create_test_node(&format!("c{}", i), NodeKind::Function);
+            caller.start_line = 100 + i;
+            let id = db.insert_node(&caller).unwrap();
+            db.insert_edge(&Edge::new(id, target, EdgeKind::Calls))
+                .unwrap();
+        }
+
+        let analysis = Graph::new(&db).analyze_impact("hub", 1).unwrap();
+        assert!(
+            analysis.truncated,
+            "{} callers exceeds the cap of {} and must be flagged",
+            IMPACT_FANOUT_CAP + 1,
+            IMPACT_FANOUT_CAP
+        );
+        assert_eq!(analysis.total_impact, IMPACT_FANOUT_CAP as usize);
+    }
+
+    /// Below the cap the traversal is complete, and must not cry truncation.
+    #[test]
+    fn analyze_impact_is_not_truncated_below_the_cap() {
+        let db = setup_test_db();
+        let target = db
+            .insert_node(&create_test_node("small", NodeKind::Function))
+            .unwrap();
+        for i in 0..3 {
+            let mut caller = create_test_node(&format!("c{}", i), NodeKind::Function);
+            caller.start_line = 100 + i;
+            let id = db.insert_node(&caller).unwrap();
+            db.insert_edge(&Edge::new(id, target, EdgeKind::Calls))
+                .unwrap();
+        }
+
+        let analysis = Graph::new(&db).analyze_impact("small", 1).unwrap();
+        assert!(!analysis.truncated);
+        assert_eq!(analysis.total_impact, 3);
+    }
+
+    /// `callers_page` carries the total behind the page, so a short page can be
+    /// told apart from a complete list.
+    #[test]
+    fn callers_page_reports_the_total_behind_it() {
+        let db = setup_test_db();
+        let target = db
+            .insert_node(&create_test_node("target", NodeKind::Function))
+            .unwrap();
+        for i in 0..6 {
+            let mut caller = create_test_node(&format!("c{}", i), NodeKind::Function);
+            caller.start_line = 100 + i;
+            let id = db.insert_node(&caller).unwrap();
+            db.insert_edge(&Edge::new(id, target, EdgeKind::Calls))
+                .unwrap();
+        }
+
+        let page = Graph::new(&db)
+            .callers_page("target", &SymbolHint::default(), 2, 0)
+            .unwrap()
+            .expect("symbol resolves");
+        assert_eq!(page.nodes.len(), 2);
+        assert_eq!(page.total, 6);
+        assert!(!page.matched.is_ambiguous());
     }
 
     #[test]

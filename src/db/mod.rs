@@ -39,6 +39,54 @@ const CONNECTION_PRAGMAS: &str = "PRAGMA auto_vacuum = INCREMENTAL; \
              PRAGMA busy_timeout = 5000; \
              PRAGMA cache_size = -64000;";
 
+/// Deterministic preference order among definitions that share one name.
+///
+/// Production code outranks tests and generated code — a `new` in a test
+/// fixture should never stand in for the real one — and the remaining columns
+/// are a stable tiebreak, so the same index always resolves a name the same
+/// way. Before this existed the fallback was a bare `LIMIT 1`, which made call
+/// attribution (and therefore every coupling number derived from it) depend on
+/// insertion order.
+const SYMBOL_PREFERENCE: &str =
+    "is_test ASC, is_generated ASC, file_path ASC, start_line ASC, id ASC";
+
+/// How many competing definitions to carry back for the "did you mean" list.
+const MAX_ALTERNATIVES: usize = 5;
+
+/// Narrowing hints a caller supplies to pick between same-named definitions.
+#[derive(Debug, Default, Clone)]
+pub struct SymbolHint {
+    /// Restrict to definitions in this file (repo-relative path).
+    pub file: Option<String>,
+    /// Restrict to definitions with this exact qualified name.
+    pub qualified_name: Option<String>,
+}
+
+impl SymbolHint {
+    pub fn is_empty(&self) -> bool {
+        self.file.is_none() && self.qualified_name.is_none()
+    }
+}
+
+/// A symbol name resolved to one definition, carrying enough context for the
+/// caller to say how confident that resolution was.
+#[derive(Debug, Clone)]
+pub struct SymbolMatch {
+    /// The chosen definition: first under [`SYMBOL_PREFERENCE`].
+    pub node: Node,
+    /// How many definitions matched the name (and hints) in total.
+    pub candidates: usize,
+    /// Up to [`MAX_ALTERNATIVES`] of the definitions that were *not* chosen.
+    pub alternatives: Vec<Node>,
+}
+
+impl SymbolMatch {
+    /// More than one definition matched, so the chosen one is a guess.
+    pub fn is_ambiguous(&self) -> bool {
+        self.candidates > 1
+    }
+}
+
 /// Database handle for the code graph
 pub struct Database {
     conn: Connection,
@@ -460,17 +508,66 @@ impl Database {
         Ok(out)
     }
 
-    /// Find a node by name (exact match)
+    /// Resolve a symbol name to a single definition, reporting how many
+    /// definitions competed for it.
+    ///
+    /// Callers that need to know whether the answer is trustworthy should use
+    /// this rather than [`Database::find_node_by_name`]: `candidates > 1` means
+    /// the name was ambiguous and the chosen definition is only the
+    /// highest-preference one, not the only one.
+    pub fn resolve_symbol(&self, name: &str, hint: &SymbolHint) -> Result<Option<SymbolMatch>> {
+        let mut where_sql = String::from("name = ?1");
+        let mut args: Vec<&dyn rusqlite::ToSql> = vec![&name];
+        if let Some(file) = &hint.file {
+            args.push(file);
+            where_sql.push_str(&format!(" AND file_path = ?{}", args.len()));
+        }
+        if let Some(qualified) = &hint.qualified_name {
+            args.push(qualified);
+            where_sql.push_str(&format!(" AND qualified_name = ?{}", args.len()));
+        }
+
+        let candidates: i64 = self.conn.query_row(
+            &format!("SELECT COUNT(*) FROM nodes WHERE {}", where_sql),
+            args.as_slice(),
+            |row| row.get(0),
+        )?;
+        if candidates == 0 {
+            return Ok(None);
+        }
+
+        // One row for the match plus MAX_ALTERNATIVES to report alongside it.
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT * FROM nodes WHERE {} ORDER BY {} LIMIT {}",
+            where_sql,
+            SYMBOL_PREFERENCE,
+            MAX_ALTERNATIVES + 1
+        ))?;
+        let mut rows = stmt.query_map(args.as_slice(), Self::row_to_node)?;
+
+        let node = match rows.next() {
+            Some(row) => row?,
+            None => return Ok(None),
+        };
+        let mut alternatives = Vec::new();
+        for row in rows {
+            alternatives.push(row?);
+        }
+
+        Ok(Some(SymbolMatch {
+            node,
+            candidates: candidates as usize,
+            alternatives,
+        }))
+    }
+
+    /// Find a node by name (exact match), taking the highest-preference
+    /// definition when several share the name. Prefer
+    /// [`Database::resolve_symbol`] when the caller can surface ambiguity.
     pub fn find_node_by_name(&self, name: &str) -> Result<Option<Node>> {
-        let result = self
-            .conn
-            .query_row(
-                "SELECT * FROM nodes WHERE name = ?1 LIMIT 1",
-                params![name],
-                Self::row_to_node,
-            )
-            .optional()?;
-        Ok(result)
+        Ok(self
+            .resolve_symbol(name, &SymbolHint::default())?
+            .map(|m| m.node))
     }
 
     fn row_to_node(row: &rusqlite::Row) -> rusqlite::Result<Node> {
@@ -520,18 +617,71 @@ impl Database {
         Ok(self.conn.last_insert_rowid())
     }
 
-    /// Get callers of a node (nodes that call this node)
-    pub fn get_callers(&self, node_id: i64, limit: u32) -> Result<Vec<Node>> {
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT n.* FROM nodes n
-            INNER JOIN edges e ON e.source_id = n.id
-            WHERE e.target_id = ?1 AND e.kind = 'calls'
-            LIMIT ?2
-            "#,
-        )?;
-        let rows = stmt.query_map(params![node_id, limit as i64], Self::row_to_node)?;
+    /// One page of the distinct nodes that call `node_id`.
+    ///
+    /// `DISTINCT` matters: a caller that invokes the target three times has
+    /// three `calls` edges, and without it the same function would fill three
+    /// slots of the page and be counted three times. The `ORDER BY` makes the
+    /// page boundary reproducible — a `LIMIT` without one returns an arbitrary
+    /// subset, so "the first 20 callers" meant nothing in particular.
+    pub fn get_callers(&self, node_id: i64, limit: u32, offset: u32) -> Result<Vec<Node>> {
+        self.query_call_page(
+            "SELECT DISTINCT n.* FROM nodes n \
+             INNER JOIN edges e ON e.source_id = n.id \
+             WHERE e.target_id = ?1 AND e.kind = 'calls' \
+             ORDER BY n.file_path, n.start_line, n.id \
+             LIMIT ?2 OFFSET ?3",
+            node_id,
+            limit,
+            offset,
+        )
+    }
 
+    /// How many distinct nodes call `node_id`. Pairs with
+    /// [`Database::get_callers`] so a page can say what it is a page *of*.
+    pub fn count_callers(&self, node_id: i64) -> Result<usize> {
+        self.count_calls(
+            "SELECT COUNT(DISTINCT e.source_id) FROM edges e \
+             WHERE e.target_id = ?1 AND e.kind = 'calls'",
+            node_id,
+        )
+    }
+
+    /// One page of the distinct nodes that `node_id` calls.
+    pub fn get_callees(&self, node_id: i64, limit: u32, offset: u32) -> Result<Vec<Node>> {
+        self.query_call_page(
+            "SELECT DISTINCT n.* FROM nodes n \
+             INNER JOIN edges e ON e.target_id = n.id \
+             WHERE e.source_id = ?1 AND e.kind = 'calls' \
+             ORDER BY n.file_path, n.start_line, n.id \
+             LIMIT ?2 OFFSET ?3",
+            node_id,
+            limit,
+            offset,
+        )
+    }
+
+    /// How many distinct nodes `node_id` calls.
+    pub fn count_callees(&self, node_id: i64) -> Result<usize> {
+        self.count_calls(
+            "SELECT COUNT(DISTINCT e.target_id) FROM edges e \
+             WHERE e.source_id = ?1 AND e.kind = 'calls'",
+            node_id,
+        )
+    }
+
+    fn query_call_page(
+        &self,
+        sql: &str,
+        node_id: i64,
+        limit: u32,
+        offset: u32,
+    ) -> Result<Vec<Node>> {
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map(
+            params![node_id, limit as i64, offset as i64],
+            Self::row_to_node,
+        )?;
         let mut nodes = Vec::new();
         for row in rows {
             nodes.push(row?);
@@ -539,23 +689,11 @@ impl Database {
         Ok(nodes)
     }
 
-    /// Get callees of a node (nodes that this node calls)
-    pub fn get_callees(&self, node_id: i64, limit: u32) -> Result<Vec<Node>> {
-        let mut stmt = self.conn.prepare(
-            r#"
-            SELECT n.* FROM nodes n
-            INNER JOIN edges e ON e.target_id = n.id
-            WHERE e.source_id = ?1 AND e.kind = 'calls'
-            LIMIT ?2
-            "#,
-        )?;
-        let rows = stmt.query_map(params![node_id, limit as i64], Self::row_to_node)?;
-
-        let mut nodes = Vec::new();
-        for row in rows {
-            nodes.push(row?);
-        }
-        Ok(nodes)
+    fn count_calls(&self, sql: &str, node_id: i64) -> Result<usize> {
+        let n: i64 = self
+            .conn
+            .query_row(sql, params![node_id], |row| row.get(0))?;
+        Ok(n as usize)
     }
 
     /// Get all edges from a node
@@ -1167,7 +1305,8 @@ impl Database {
              SELECT n.* FROM nodes n
              INNER JOIN edges e ON e.target_id = n.id
              INNER JOIN nodes source ON e.source_id = source.id
-             WHERE e.kind = 'contains' AND source.name = ?",
+             WHERE e.kind = 'contains' AND source.name = ?
+             ORDER BY 5, 6, 1",
         )?;
 
         let rows = stmt.query_map(params![symbol, symbol], Self::row_to_node)?;
@@ -1209,7 +1348,7 @@ impl Database {
                     visited.insert(current_id);
 
                     // Get all callees
-                    let callees = self.get_callees(current_id, 100)?;
+                    let callees = self.get_callees(current_id, 100, 0)?;
                     for callee in callees {
                         let mut new_path = path.clone();
                         new_path.push(callee.clone());
@@ -1223,24 +1362,42 @@ impl Database {
         }
     }
 
-    /// Find unused symbols (no incoming calls/references)
-    pub fn find_unused_symbols(&self) -> Result<Vec<Node>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT n.* FROM nodes n
-             WHERE n.kind IN ('function', 'method', 'class', 'struct', 'interface')
-             AND n.is_test = 0
-             AND n.is_generated = 0
-             AND n.id NOT IN (SELECT DISTINCT target_id FROM edges WHERE kind IN ('calls', 'references', 'instantiates', 'tests'))
-             ORDER BY n.file_path, n.start_line",
-        )?;
+    /// Predicate shared by the unused-symbol page and its count, so the two
+    /// can never drift apart.
+    const UNUSED_PREDICATE: &'static str =
+        "n.kind IN ('function', 'method', 'class', 'struct', 'interface') \
+         AND n.is_test = 0 \
+         AND n.is_generated = 0 \
+         AND n.id NOT IN (SELECT DISTINCT target_id FROM edges \
+                          WHERE kind IN ('calls', 'references', 'instantiates', 'tests'))";
 
-        let rows = stmt.query_map([], Self::row_to_node)?;
-
+    /// One page of symbols with no incoming calls or references.
+    pub fn find_unused_symbols(&self, limit: u32, offset: u32) -> Result<Vec<Node>> {
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT n.* FROM nodes n WHERE {} \
+             ORDER BY n.file_path, n.start_line, n.id LIMIT ?1 OFFSET ?2",
+            Self::UNUSED_PREDICATE
+        ))?;
+        let rows = stmt.query_map(params![limit as i64, offset as i64], Self::row_to_node)?;
         let mut nodes = Vec::new();
         for row in rows {
             nodes.push(row?);
         }
         Ok(nodes)
+    }
+
+    /// How many unused symbols exist in total. On a large codebase this is
+    /// routinely in the thousands, which is exactly why the listing is paged.
+    pub fn count_unused_symbols(&self) -> Result<usize> {
+        let n: i64 = self.conn.query_row(
+            &format!(
+                "SELECT COUNT(*) FROM nodes n WHERE {}",
+                Self::UNUSED_PREDICATE
+            ),
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(n as usize)
     }
 
     /// Find all implementations of an interface/trait
@@ -1249,7 +1406,8 @@ impl Database {
             "SELECT n.* FROM nodes n
              INNER JOIN edges e ON e.source_id = n.id
              INNER JOIN nodes target ON e.target_id = target.id
-             WHERE e.kind IN ('implements', 'extends') AND target.name = ?",
+             WHERE e.kind IN ('implements', 'extends') AND target.name = ?
+             ORDER BY n.file_path, n.start_line, n.id",
         )?;
 
         let rows = stmt.query_map([symbol], Self::row_to_node)?;
@@ -1290,7 +1448,7 @@ impl Database {
         // For each affected symbol, find all callers
         let mut impacted = affected.clone();
         for node in &affected {
-            let callers = self.get_callers(node.id, 100)?;
+            let callers = self.get_callers(node.id, 100, 0)?;
             for caller in callers {
                 if !impacted.iter().any(|n| n.id == caller.id) {
                     impacted.push(caller);
@@ -1485,6 +1643,197 @@ mod tests {
     // Database initialization tests
     /// Several processes share one index file, so a query must wait out a
     /// concurrent writer instead of failing with SQLITE_BUSY straight away.
+    /// Two definitions of one name, one of them in a test file. Resolution
+    /// must pick the production one and say that it had a choice — the old
+    /// bare `LIMIT 1` did neither.
+    #[test]
+    fn test_resolve_symbol_prefers_production_and_reports_candidates() {
+        let db = Database::in_memory().unwrap();
+        db.insert_or_update_file(&mk_file("tests/helper.rs"))
+            .unwrap();
+        db.insert_or_update_file(&mk_file("src/real.rs")).unwrap();
+
+        let mut test_node = create_test_node("build", NodeKind::Function, "tests/helper.rs");
+        test_node.is_test = true;
+        db.insert_node(&test_node).unwrap();
+        db.insert_node(&create_test_node(
+            "build",
+            NodeKind::Function,
+            "src/real.rs",
+        ))
+        .unwrap();
+
+        let matched = db
+            .resolve_symbol("build", &SymbolHint::default())
+            .unwrap()
+            .expect("symbol resolves");
+
+        assert_eq!(matched.node.file_path, "src/real.rs");
+        assert_eq!(matched.candidates, 2);
+        assert!(matched.is_ambiguous());
+        assert_eq!(matched.alternatives.len(), 1);
+        assert_eq!(matched.alternatives[0].file_path, "tests/helper.rs");
+    }
+
+    /// Insertion order must not decide which definition wins.
+    #[test]
+    fn test_resolve_symbol_is_stable_regardless_of_insert_order() {
+        fn resolve_with(order: [&str; 3]) -> String {
+            let db = Database::in_memory().unwrap();
+            for path in order {
+                db.insert_or_update_file(&mk_file(path)).unwrap();
+                db.insert_node(&create_test_node("handle", NodeKind::Function, path))
+                    .unwrap();
+            }
+            db.resolve_symbol("handle", &SymbolHint::default())
+                .unwrap()
+                .unwrap()
+                .node
+                .file_path
+        }
+
+        let forward = resolve_with(["src/a.rs", "src/b.rs", "src/c.rs"]);
+        let reverse = resolve_with(["src/c.rs", "src/b.rs", "src/a.rs"]);
+        assert_eq!(forward, reverse);
+        assert_eq!(forward, "src/a.rs");
+    }
+
+    /// A `file` hint narrows the candidate set, and an unambiguous result
+    /// reports exactly one candidate.
+    #[test]
+    fn test_resolve_symbol_honours_file_hint() {
+        let db = Database::in_memory().unwrap();
+        for path in ["src/a.rs", "src/b.rs"] {
+            db.insert_or_update_file(&mk_file(path)).unwrap();
+            db.insert_node(&create_test_node("parse", NodeKind::Function, path))
+                .unwrap();
+        }
+
+        let hint = SymbolHint {
+            file: Some("src/b.rs".to_string()),
+            qualified_name: None,
+        };
+        let matched = db.resolve_symbol("parse", &hint).unwrap().unwrap();
+        assert_eq!(matched.node.file_path, "src/b.rs");
+        assert_eq!(matched.candidates, 1);
+        assert!(!matched.is_ambiguous());
+    }
+
+    /// A hint that matches nothing resolves to nothing, rather than silently
+    /// falling back to some other file's definition.
+    #[test]
+    fn test_resolve_symbol_hint_with_no_match_is_none() {
+        let db = Database::in_memory().unwrap();
+        db.insert_or_update_file(&mk_file("src/a.rs")).unwrap();
+        db.insert_node(&create_test_node("parse", NodeKind::Function, "src/a.rs"))
+            .unwrap();
+
+        let hint = SymbolHint {
+            file: Some("src/nowhere.rs".to_string()),
+            qualified_name: None,
+        };
+        assert!(db.resolve_symbol("parse", &hint).unwrap().is_none());
+    }
+
+    /// Repeated calls from one function are one caller, not three. Before
+    /// `DISTINCT` the same node filled three slots of the page and was counted
+    /// three times over.
+    #[test]
+    fn test_callers_are_distinct_and_counted_once() {
+        let db = Database::in_memory().unwrap();
+        db.insert_or_update_file(&mk_file("src/lib.rs")).unwrap();
+        let caller = db
+            .insert_node(&create_test_node(
+                "caller",
+                NodeKind::Function,
+                "src/lib.rs",
+            ))
+            .unwrap();
+        let callee = db
+            .insert_node(&create_test_node(
+                "callee",
+                NodeKind::Function,
+                "src/lib.rs",
+            ))
+            .unwrap();
+
+        for line in 1..=3 {
+            db.insert_edge(&Edge::new(caller, callee, EdgeKind::Calls).at(
+                "src/lib.rs".to_string(),
+                line,
+                0,
+            ))
+            .unwrap();
+        }
+
+        assert_eq!(db.count_callers(callee).unwrap(), 1);
+        assert_eq!(db.get_callers(callee, 10, 0).unwrap().len(), 1);
+        assert_eq!(db.count_callees(caller).unwrap(), 1);
+    }
+
+    /// Paging must cover the set exactly once, with no overlap and no gaps.
+    #[test]
+    fn test_caller_pages_partition_the_set() {
+        let db = Database::in_memory().unwrap();
+        db.insert_or_update_file(&mk_file("src/lib.rs")).unwrap();
+        let callee = db
+            .insert_node(&create_test_node(
+                "target",
+                NodeKind::Function,
+                "src/lib.rs",
+            ))
+            .unwrap();
+        for i in 0..5 {
+            let mut caller = create_test_node(&format!("c{}", i), NodeKind::Function, "src/lib.rs");
+            caller.start_line = 10 + i;
+            let id = db.insert_node(&caller).unwrap();
+            db.insert_edge(&Edge::new(id, callee, EdgeKind::Calls))
+                .unwrap();
+        }
+
+        assert_eq!(db.count_callers(callee).unwrap(), 5);
+
+        let first: Vec<String> = db
+            .get_callers(callee, 2, 0)
+            .unwrap()
+            .into_iter()
+            .map(|n| n.name)
+            .collect();
+        let second: Vec<String> = db
+            .get_callers(callee, 2, 2)
+            .unwrap()
+            .into_iter()
+            .map(|n| n.name)
+            .collect();
+        let third: Vec<String> = db
+            .get_callers(callee, 2, 4)
+            .unwrap()
+            .into_iter()
+            .map(|n| n.name)
+            .collect();
+
+        assert_eq!(first, vec!["c0", "c1"]);
+        assert_eq!(second, vec!["c2", "c3"]);
+        assert_eq!(third, vec!["c4"]);
+    }
+
+    /// The unused count is over the whole set, not over the page.
+    #[test]
+    fn test_unused_count_is_independent_of_page_size() {
+        let db = Database::in_memory().unwrap();
+        db.insert_or_update_file(&mk_file("src/lib.rs")).unwrap();
+        for i in 0..5 {
+            let mut node =
+                create_test_node(&format!("dead{}", i), NodeKind::Function, "src/lib.rs");
+            node.start_line = 10 + i;
+            db.insert_node(&node).unwrap();
+        }
+
+        assert_eq!(db.count_unused_symbols().unwrap(), 5);
+        assert_eq!(db.find_unused_symbols(2, 0).unwrap().len(), 2);
+        assert_eq!(db.find_unused_symbols(2, 4).unwrap().len(), 1);
+    }
+
     #[test]
     fn test_busy_timeout_is_configured() {
         let db = Database::in_memory().unwrap();
@@ -1757,11 +2106,11 @@ mod tests {
         };
         db.insert_edge(&edge).unwrap();
 
-        let callers = db.get_callers(callee_id, 10).unwrap();
+        let callers = db.get_callers(callee_id, 10, 0).unwrap();
         assert_eq!(callers.len(), 1);
         assert_eq!(callers[0].name, "caller");
 
-        let callees = db.get_callees(caller_id, 10).unwrap();
+        let callees = db.get_callees(caller_id, 10, 0).unwrap();
         assert_eq!(callees.len(), 1);
         assert_eq!(callees[0].name, "callee");
     }
@@ -2256,7 +2605,7 @@ mod tests {
         .unwrap();
 
         // Find unused symbols
-        let unused = db.find_unused_symbols().unwrap();
+        let unused = db.find_unused_symbols(100, 0).unwrap();
         assert_eq!(unused.len(), 2); // unused_func and caller (no one calls caller)
         assert!(unused.iter().any(|n| n.name == "unused_func"));
         assert!(unused.iter().any(|n| n.name == "caller"));
@@ -2529,7 +2878,7 @@ mod language_tests_2 {
         g.is_generated = true;
         db.insert_node(&g).unwrap();
 
-        let unused = db.find_unused_symbols().unwrap();
+        let unused = db.find_unused_symbols(100, 0).unwrap();
         assert!(unused.iter().all(|n| n.name != "test_thing"));
         assert!(unused.iter().all(|n| n.name != "generated_thing"));
     }

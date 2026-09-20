@@ -17,12 +17,15 @@ use std::fs;
 
 use serde::Serialize;
 
-use crate::db::Database;
+use crate::db::{Database, SymbolHint, SymbolMatch};
 use crate::graph::Graph;
 use crate::security::{safe_join, validate_relative};
 use crate::types::{EdgeKind, Node};
 
-use constants::{DEFAULT_CONTEXT_LINES, DEFAULT_GRAPH_LIMIT, MAX_REFERENCES_PER_KIND};
+use constants::{
+    effective_limit, DEFAULT_CONTEXT_LINES, DEFAULT_GRAPH_LIMIT, DEFAULT_UNUSED_LIMIT,
+    MAX_REFERENCES_PER_KIND,
+};
 
 /// Output representation for a tool result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,6 +54,128 @@ pub fn present<T: Serialize + Render>(value: &T, format: Format) -> Result<Strin
     match format {
         Format::Json => serde_json::to_string_pretty(value).map_err(|e| e.to_string()),
         Format::Markdown => Ok(value.to_markdown()),
+    }
+}
+
+/// Where one of several competing definitions of a name lives.
+#[derive(Serialize)]
+pub struct SymbolLocation {
+    pub kind: String,
+    pub file: String,
+    pub line: u32,
+}
+
+impl From<&Node> for SymbolLocation {
+    fn from(n: &Node) -> Self {
+        SymbolLocation {
+            kind: n.kind.as_str().to_string(),
+            file: n.file_path.clone(),
+            line: n.start_line,
+        }
+    }
+}
+
+/// How confidently a symbol name was resolved to one definition.
+///
+/// Carried on every single-symbol result so a caller can tell an exact answer
+/// from a best guess. Name-based resolution picks the highest-preference
+/// definition when several share a name; saying so is the difference between a
+/// usable answer and a misleading one.
+#[derive(Serialize)]
+pub struct Resolution {
+    /// How many definitions shared this name (after any narrowing hints).
+    pub candidates: usize,
+    /// True when `candidates > 1` — the chosen definition is one of several.
+    pub ambiguous: bool,
+    /// Some of the definitions that were not chosen.
+    pub alternatives: Vec<SymbolLocation>,
+}
+
+impl Resolution {
+    fn of(matched: &SymbolMatch) -> Self {
+        Resolution {
+            candidates: matched.candidates,
+            ambiguous: matched.is_ambiguous(),
+            alternatives: matched
+                .alternatives
+                .iter()
+                .map(SymbolLocation::from)
+                .collect(),
+        }
+    }
+
+    /// A markdown warning naming the other definitions, or nothing when the
+    /// resolution was unambiguous.
+    fn note(&self) -> String {
+        if !self.ambiguous {
+            return String::new();
+        }
+        let mut out = format!(
+            "\n> **Ambiguous:** {} definitions share this name; showing the first. \
+             Narrow it with `file` or `qualified_name`.\n",
+            self.candidates
+        );
+        for alt in &self.alternatives {
+            out.push_str(&format!("> - {} at {}:{}\n", alt.kind, alt.file, alt.line));
+        }
+        if self.candidates > self.alternatives.len() + 1 {
+            out.push_str(&format!(
+                "> - … and {} more\n",
+                self.candidates - self.alternatives.len() - 1
+            ));
+        }
+        out.push('\n');
+        out
+    }
+}
+
+/// The bounds of one page of a larger result set.
+///
+/// `shown` is what came back; `total` is what exists. Reporting only `shown` —
+/// as these tools used to — makes a truncated list indistinguishable from a
+/// complete one, which is precisely the wrong thing to get wrong when someone
+/// is deciding whether a change is safe.
+#[derive(Serialize)]
+pub struct Page {
+    pub total: usize,
+    pub shown: usize,
+    pub offset: u32,
+    pub limit: u32,
+    pub truncated: bool,
+}
+
+impl Page {
+    fn new(total: usize, shown: usize, limit: u32, offset: u32) -> Self {
+        Page {
+            total,
+            shown,
+            offset,
+            limit,
+            truncated: offset as usize + shown < total,
+        }
+    }
+
+    /// "20 of 413" when the list is partial, "413" when it is whole.
+    fn describe(&self) -> String {
+        if self.truncated || self.offset > 0 {
+            format!("{} of {}", self.shown, self.total)
+        } else {
+            self.total.to_string()
+        }
+    }
+
+    /// A markdown footer telling the reader how to get the next page.
+    fn note(&self) -> String {
+        if !self.truncated {
+            return String::new();
+        }
+        format!(
+            "\n> **Truncated:** showing {} of {}. Pass `offset={}` for the next page, \
+             or raise `limit`.\n",
+            self.shown,
+            self.total,
+            self.offset as usize + self.shown
+        )
     }
 }
 
@@ -84,6 +209,7 @@ impl Render for NotFound {
 pub struct NodeInfo {
     #[serde(flatten)]
     pub node: Node,
+    pub resolution: Resolution,
 }
 
 impl Render for NodeInfo {
@@ -111,13 +237,21 @@ impl Render for NodeInfo {
         if let Some(ref doc) = n.docstring {
             out.push_str(&format!("\n**Documentation:**\n{}\n", doc));
         }
+        out.push_str(&self.resolution.note());
         out
     }
 }
 
-pub fn node_info(db: &Database, symbol: &str) -> Result<Option<NodeInfo>, String> {
-    match db.find_node_by_name(symbol).map_err(|e| e.to_string())? {
-        Some(node) => Ok(Some(NodeInfo { node })),
+pub fn node_info(
+    db: &Database,
+    symbol: &str,
+    hint: &SymbolHint,
+) -> Result<Option<NodeInfo>, String> {
+    match db.resolve_symbol(symbol, hint).map_err(|e| e.to_string())? {
+        Some(matched) => Ok(Some(NodeInfo {
+            resolution: Resolution::of(&matched),
+            node: matched.node,
+        })),
         None => Ok(None),
     }
 }
@@ -137,6 +271,7 @@ pub struct DefinitionResult {
     pub signature: Option<String>,
     /// The definition's source lines, joined.
     pub code: String,
+    pub resolution: Resolution,
     #[serde(skip)]
     before: Vec<String>,
     #[serde(skip)]
@@ -180,6 +315,7 @@ impl Render for DefinitionResult {
             out.push_str("// ... context after\n");
         }
         out.push_str("```\n");
+        out.push_str(&self.resolution.note());
         out
     }
 }
@@ -189,11 +325,14 @@ pub fn definition(
     project_root: &str,
     symbol: &str,
     context_lines: Option<u32>,
+    hint: &SymbolHint,
 ) -> Result<Option<DefinitionResult>, String> {
-    let node = match db.find_node_by_name(symbol).map_err(|e| e.to_string())? {
-        Some(n) => n,
+    let matched = match db.resolve_symbol(symbol, hint).map_err(|e| e.to_string())? {
+        Some(m) => m,
         None => return Ok(None),
     };
+    let resolution = Resolution::of(&matched);
+    let node = matched.node;
 
     let context_lines = context_lines.unwrap_or(DEFAULT_CONTEXT_LINES) as usize;
     let file_path = safe_join(project_root, &node.file_path).map_err(|e| e.to_string())?;
@@ -222,6 +361,7 @@ pub fn definition(
         language: node.language.as_str().to_string(),
         signature: node.signature.clone(),
         code: lines[start..end].join("\n"),
+        resolution,
         before: lines[ctx_start..start]
             .iter()
             .map(|s| s.to_string())
@@ -248,7 +388,10 @@ pub struct ReferenceItem {
 #[derive(Serialize)]
 pub struct RefGroup {
     pub edge_kind: String,
+    /// How many references of this kind exist in total.
     pub count: usize,
+    /// True when `shown` holds fewer than `count`.
+    pub truncated: bool,
     pub shown: Vec<ReferenceItem>,
 }
 
@@ -259,7 +402,10 @@ pub struct ReferencesResult {
     pub start_line: u32,
     pub end_line: u32,
     pub total: usize,
+    /// True when any group was cut short by the per-kind limit.
+    pub truncated: bool,
     pub groups: Vec<RefGroup>,
+    pub resolution: Resolution,
 }
 
 impl Render for ReferencesResult {
@@ -286,15 +432,30 @@ impl Render for ReferencesResult {
             out.push('\n');
         }
         out.push_str(&format!("**Total references:** {}\n", self.total));
+        if self.truncated {
+            out.push_str(
+                "\n> **Truncated:** some groups list only the first few references. \
+                 Raise `limit` to see the rest.\n",
+            );
+        }
+        out.push_str(&self.resolution.note());
         out
     }
 }
 
-pub fn references(db: &Database, symbol: &str) -> Result<Option<ReferencesResult>, String> {
-    let node = match db.find_node_by_name(symbol).map_err(|e| e.to_string())? {
-        Some(n) => n,
+pub fn references(
+    db: &Database,
+    symbol: &str,
+    hint: &SymbolHint,
+    limit: Option<u32>,
+) -> Result<Option<ReferencesResult>, String> {
+    let per_kind = effective_limit(limit, MAX_REFERENCES_PER_KIND as u32) as usize;
+    let matched = match db.resolve_symbol(symbol, hint).map_err(|e| e.to_string())? {
+        Some(m) => m,
         None => return Ok(None),
     };
+    let resolution = Resolution::of(&matched);
+    let node = matched.node;
     let edges = db.get_incoming_edges(node.id).map_err(|e| e.to_string())?;
 
     let mut by_kind: std::collections::HashMap<EdgeKind, Vec<_>> = std::collections::HashMap::new();
@@ -316,7 +477,7 @@ pub fn references(db: &Database, symbol: &str) -> Result<Option<ReferencesResult
         if let Some(group_edges) = by_kind.get(&kind) {
             total += group_edges.len();
             let mut shown = Vec::new();
-            for edge in group_edges.iter().take(MAX_REFERENCES_PER_KIND) {
+            for edge in group_edges.iter().take(per_kind) {
                 if let Ok(Some(source)) = db.get_node(edge.source_id) {
                     shown.push(ReferenceItem {
                         name: source.name,
@@ -329,6 +490,7 @@ pub fn references(db: &Database, symbol: &str) -> Result<Option<ReferencesResult
             groups.push(RefGroup {
                 edge_kind: kind.as_str().to_string(),
                 count: group_edges.len(),
+                truncated: group_edges.len() > shown.len(),
                 shown,
             });
         }
@@ -340,7 +502,9 @@ pub fn references(db: &Database, symbol: &str) -> Result<Option<ReferencesResult
         start_line: node.start_line,
         end_line: node.end_line,
         total,
+        truncated: groups.iter().any(|g| g.truncated),
         groups,
+        resolution,
     }))
 }
 
@@ -353,54 +517,108 @@ pub struct CallList {
     pub symbol: String,
     /// "callers" or "callees".
     pub direction: String,
-    pub count: usize,
+    #[serde(flatten)]
+    pub page: Page,
     pub nodes: Vec<Node>,
+    pub resolution: Resolution,
 }
 
 impl Render for CallList {
     fn to_markdown(&self) -> String {
         if self.nodes.is_empty() {
-            return if self.direction == "callers" {
+            let empty = if self.direction == "callers" {
                 format!("No callers found for '{}'", self.symbol)
             } else {
                 format!("No callees found for '{}'", self.symbol)
             };
+            return format!("{}\n{}", empty, self.resolution.note());
         }
         let mut out = if self.direction == "callers" {
-            format!("Found {} callers of '{}':\n\n", self.count, self.symbol)
+            format!(
+                "Found {} callers of '{}':\n\n",
+                self.page.describe(),
+                self.symbol
+            )
         } else {
-            format!("'{}' calls {} functions:\n\n", self.symbol, self.count)
+            format!(
+                "'{}' calls {} functions:\n\n",
+                self.symbol,
+                self.page.describe()
+            )
         };
         for node in &self.nodes {
             out.push_str(&format::format_node_simple(node));
             out.push('\n');
         }
+        out.push_str(&self.page.note());
+        out.push_str(&self.resolution.note());
         out
     }
 }
 
-pub fn callers(db: &Database, symbol: &str) -> Result<CallList, String> {
-    let nodes = Graph::new(db)
-        .find_callers(symbol, DEFAULT_GRAPH_LIMIT)
-        .map_err(|e| e.to_string())?;
-    Ok(CallList {
-        symbol: symbol.to_string(),
-        direction: "callers".to_string(),
-        count: nodes.len(),
-        nodes,
-    })
+/// Shape a `CallPage` (or its absence) into the rendered result.
+fn call_list(
+    symbol: &str,
+    direction: &str,
+    page: Option<crate::graph::CallPage>,
+    limit: u32,
+    offset: u32,
+) -> CallList {
+    match page {
+        Some(p) => CallList {
+            symbol: symbol.to_string(),
+            direction: direction.to_string(),
+            page: Page::new(p.total, p.nodes.len(), limit, offset),
+            resolution: Resolution::of(&p.matched),
+            nodes: p.nodes,
+        },
+        // Unresolved symbol: an empty page, not a page of zero out of zero.
+        None => CallList {
+            symbol: symbol.to_string(),
+            direction: direction.to_string(),
+            page: Page::new(0, 0, limit, offset),
+            nodes: Vec::new(),
+            resolution: Resolution {
+                candidates: 0,
+                ambiguous: false,
+                alternatives: Vec::new(),
+            },
+        },
+    }
 }
 
-pub fn callees(db: &Database, symbol: &str) -> Result<CallList, String> {
-    let nodes = Graph::new(db)
-        .find_callees(symbol, DEFAULT_GRAPH_LIMIT)
+pub fn callers(
+    db: &Database,
+    symbol: &str,
+    hint: &SymbolHint,
+    limit: Option<u32>,
+    offset: Option<u32>,
+) -> Result<CallList, String> {
+    let (limit, offset) = (
+        effective_limit(limit, DEFAULT_GRAPH_LIMIT),
+        offset.unwrap_or(0),
+    );
+    let page = Graph::new(db)
+        .callers_page(symbol, hint, limit, offset)
         .map_err(|e| e.to_string())?;
-    Ok(CallList {
-        symbol: symbol.to_string(),
-        direction: "callees".to_string(),
-        count: nodes.len(),
-        nodes,
-    })
+    Ok(call_list(symbol, "callers", page, limit, offset))
+}
+
+pub fn callees(
+    db: &Database,
+    symbol: &str,
+    hint: &SymbolHint,
+    limit: Option<u32>,
+    offset: Option<u32>,
+) -> Result<CallList, String> {
+    let (limit, offset) = (
+        effective_limit(limit, DEFAULT_GRAPH_LIMIT),
+        offset.unwrap_or(0),
+    );
+    let page = Graph::new(db)
+        .callees_page(symbol, hint, limit, offset)
+        .map_err(|e| e.to_string())?;
+    Ok(call_list(symbol, "callees", page, limit, offset))
 }
 
 // ===========================================================================
@@ -474,6 +692,7 @@ pub struct NodeListing {
     pub symbol: String,
     pub count: usize,
     pub nodes: Vec<Node>,
+    pub resolution: Resolution,
     #[serde(skip)]
     style: ListingStyle,
 }
@@ -489,7 +708,11 @@ impl Render for NodeListing {
         match self.style {
             ListingStyle::Hierarchy => {
                 if self.nodes.is_empty() {
-                    return format!("No hierarchy found for symbol '{}'", self.symbol);
+                    return format!(
+                        "No hierarchy found for symbol '{}'\n{}",
+                        self.symbol,
+                        self.resolution.note()
+                    );
                 }
                 let mut out = format!("# Hierarchy for '{}'\n\n", self.symbol);
                 out.push_str(&format!("Found {} related symbols:\n\n", self.count));
@@ -497,11 +720,16 @@ impl Render for NodeListing {
                     out.push_str(&format::format_node(node));
                     out.push_str("\n\n");
                 }
+                out.push_str(&self.resolution.note());
                 out
             }
             ListingStyle::Implementations => {
                 if self.nodes.is_empty() {
-                    return format!("No implementations found for '{}'", self.symbol);
+                    return format!(
+                        "No implementations found for '{}'\n{}",
+                        self.symbol,
+                        self.resolution.note()
+                    );
                 }
                 let mut out = format!("# Implementations of '{}'\n\n", self.symbol);
                 out.push_str(&format!("Found {} implementation(s):\n\n", self.count));
@@ -509,28 +737,49 @@ impl Render for NodeListing {
                     out.push_str(&format::format_node(node));
                     out.push_str("\n\n");
                 }
+                out.push_str(&self.resolution.note());
                 out
             }
         }
     }
 }
 
-pub fn hierarchy(db: &Database, symbol: &str) -> Result<NodeListing, String> {
+/// The ambiguity of `symbol` itself, independent of what the listing found.
+/// Both listings match on name, so a name shared by several definitions makes
+/// the listing a union over all of them — worth saying out loud.
+fn resolution_for(db: &Database, symbol: &str, hint: &SymbolHint) -> Resolution {
+    match db.resolve_symbol(symbol, hint) {
+        Ok(Some(matched)) => Resolution::of(&matched),
+        _ => Resolution {
+            candidates: 0,
+            ambiguous: false,
+            alternatives: Vec::new(),
+        },
+    }
+}
+
+pub fn hierarchy(db: &Database, symbol: &str, hint: &SymbolHint) -> Result<NodeListing, String> {
     let nodes = db.get_hierarchy(symbol).map_err(|e| e.to_string())?;
     Ok(NodeListing {
         symbol: symbol.to_string(),
         count: nodes.len(),
         nodes,
+        resolution: resolution_for(db, symbol, hint),
         style: ListingStyle::Hierarchy,
     })
 }
 
-pub fn implementations(db: &Database, symbol: &str) -> Result<NodeListing, String> {
+pub fn implementations(
+    db: &Database,
+    symbol: &str,
+    hint: &SymbolHint,
+) -> Result<NodeListing, String> {
     let nodes = db.find_implementations(symbol).map_err(|e| e.to_string())?;
     Ok(NodeListing {
         symbol: symbol.to_string(),
         count: nodes.len(),
         nodes,
+        resolution: resolution_for(db, symbol, hint),
         style: ListingStyle::Implementations,
     })
 }
@@ -541,7 +790,8 @@ pub fn implementations(db: &Database, symbol: &str) -> Result<NodeListing, Strin
 
 #[derive(Serialize)]
 pub struct UnusedResult {
-    pub count: usize,
+    #[serde(flatten)]
+    pub page: Page,
     pub nodes: Vec<Node>,
 }
 
@@ -552,7 +802,7 @@ impl Render for UnusedResult {
         }
         let mut out = format!(
             "# Unused Symbols\n\nFound {} unused symbols:\n\n",
-            self.count
+            self.page.describe()
         );
         let mut by_file: std::collections::HashMap<String, Vec<&Node>> =
             std::collections::HashMap::new();
@@ -577,14 +827,26 @@ impl Render for UnusedResult {
             }
             out.push('\n');
         }
+        out.push_str(&self.page.note());
         out
     }
 }
 
-pub fn unused(db: &Database) -> Result<UnusedResult, String> {
-    let nodes = db.find_unused_symbols().map_err(|e| e.to_string())?;
+pub fn unused(
+    db: &Database,
+    limit: Option<u32>,
+    offset: Option<u32>,
+) -> Result<UnusedResult, String> {
+    let (limit, offset) = (
+        effective_limit(limit, DEFAULT_UNUSED_LIMIT),
+        offset.unwrap_or(0),
+    );
+    let total = db.count_unused_symbols().map_err(|e| e.to_string())?;
+    let nodes = db
+        .find_unused_symbols(limit, offset)
+        .map_err(|e| e.to_string())?;
     Ok(UnusedResult {
-        count: nodes.len(),
+        page: Page::new(total, nodes.len(), limit, offset),
         nodes,
     })
 }
@@ -653,4 +915,238 @@ pub fn call_paths(db: &Database, from: &str, to: &str) -> Result<CallPaths, Stri
         to: to.to_string(),
         paths,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{Edge, EdgeKind, FileRecord, Language, NodeKind, Visibility};
+
+    fn db_with(files: &[&str]) -> Database {
+        let db = Database::in_memory().unwrap();
+        for path in files {
+            db.insert_or_update_file(&FileRecord {
+                path: path.to_string(),
+                content_hash: "h".into(),
+                language: Language::Rust,
+                size: 0,
+                modified_at: 0,
+                indexed_at: 0,
+                node_count: 0,
+            })
+            .unwrap();
+        }
+        db
+    }
+
+    fn node(name: &str, file: &str, line: u32) -> Node {
+        Node {
+            id: 0,
+            kind: NodeKind::Function,
+            name: name.to_string(),
+            qualified_name: None,
+            file_path: file.to_string(),
+            start_line: line,
+            end_line: line + 1,
+            start_column: 0,
+            end_column: 0,
+            signature: None,
+            visibility: Visibility::Public,
+            docstring: None,
+            is_async: false,
+            is_static: false,
+            is_exported: false,
+            is_test: false,
+            is_generated: false,
+            language: Language::Rust,
+        }
+    }
+
+    // --- Page -------------------------------------------------------------
+
+    #[test]
+    fn page_is_not_truncated_when_it_holds_everything() {
+        let p = Page::new(3, 3, 20, 0);
+        assert!(!p.truncated);
+        assert_eq!(p.describe(), "3");
+        assert!(p.note().is_empty());
+    }
+
+    #[test]
+    fn page_reports_truncation_and_the_next_offset() {
+        let p = Page::new(413, 20, 20, 0);
+        assert!(p.truncated);
+        assert_eq!(p.describe(), "20 of 413");
+        assert!(p.note().contains("offset=20"), "note was: {}", p.note());
+    }
+
+    #[test]
+    fn last_page_of_several_is_not_truncated_but_still_says_of() {
+        let p = Page::new(25, 5, 20, 20);
+        assert!(!p.truncated);
+        assert_eq!(p.describe(), "5 of 25");
+    }
+
+    // --- Resolution -------------------------------------------------------
+
+    #[test]
+    fn unambiguous_resolution_adds_no_note() {
+        let r = Resolution {
+            candidates: 1,
+            ambiguous: false,
+            alternatives: vec![],
+        };
+        assert!(r.note().is_empty());
+    }
+
+    #[test]
+    fn ambiguous_resolution_names_the_alternatives_and_the_remainder() {
+        let r = Resolution {
+            candidates: 9,
+            ambiguous: true,
+            alternatives: vec![SymbolLocation {
+                kind: "function".into(),
+                file: "src/b.rs".into(),
+                line: 7,
+            }],
+        };
+        let note = r.note();
+        assert!(note.contains("9 definitions share this name"));
+        assert!(note.contains("src/b.rs:7"));
+        // 9 total, 1 shown, 1 chosen => 7 unlisted.
+        assert!(note.contains("7 more"), "note was: {}", note);
+    }
+
+    // --- callers ----------------------------------------------------------
+
+    #[test]
+    fn callers_reports_the_total_not_just_the_page() {
+        let db = db_with(&["src/lib.rs"]);
+        let target = db.insert_node(&node("target", "src/lib.rs", 1)).unwrap();
+        for i in 0..5 {
+            let id = db
+                .insert_node(&node(&format!("c{}", i), "src/lib.rs", 10 + i))
+                .unwrap();
+            db.insert_edge(&Edge::new(id, target, EdgeKind::Calls))
+                .unwrap();
+        }
+
+        let result = callers(&db, "target", &SymbolHint::default(), Some(2), None).unwrap();
+        assert_eq!(result.page.total, 5);
+        assert_eq!(result.page.shown, 2);
+        assert!(result.page.truncated);
+
+        let md = result.to_markdown();
+        assert!(md.contains("Found 2 of 5 callers"), "markdown was:\n{}", md);
+        assert!(md.contains("Truncated"));
+    }
+
+    #[test]
+    fn callers_of_an_unambiguous_symbol_carry_no_warning() {
+        let db = db_with(&["src/lib.rs"]);
+        let target = db.insert_node(&node("solo", "src/lib.rs", 1)).unwrap();
+        let caller = db.insert_node(&node("caller", "src/lib.rs", 10)).unwrap();
+        db.insert_edge(&Edge::new(caller, target, EdgeKind::Calls))
+            .unwrap();
+
+        let result = callers(&db, "solo", &SymbolHint::default(), None, None).unwrap();
+        assert!(!result.resolution.ambiguous);
+        assert!(!result.page.truncated);
+        let md = result.to_markdown();
+        assert!(md.contains("Found 1 callers"));
+        assert!(!md.contains("Truncated"));
+        assert!(!md.contains("Ambiguous"));
+    }
+
+    #[test]
+    fn callers_of_an_ambiguous_symbol_say_so() {
+        let db = db_with(&["src/a.rs", "src/b.rs"]);
+        db.insert_node(&node("new", "src/a.rs", 1)).unwrap();
+        db.insert_node(&node("new", "src/b.rs", 1)).unwrap();
+
+        let result = callers(&db, "new", &SymbolHint::default(), None, None).unwrap();
+        assert!(result.resolution.ambiguous);
+        assert_eq!(result.resolution.candidates, 2);
+        assert!(result.to_markdown().contains("Ambiguous"));
+    }
+
+    #[test]
+    fn a_file_hint_resolves_the_ambiguity() {
+        let db = db_with(&["src/a.rs", "src/b.rs"]);
+        db.insert_node(&node("new", "src/a.rs", 1)).unwrap();
+        db.insert_node(&node("new", "src/b.rs", 1)).unwrap();
+
+        let hint = SymbolHint {
+            file: Some("src/b.rs".into()),
+            qualified_name: None,
+        };
+        let result = callers(&db, "new", &hint, None, None).unwrap();
+        assert!(!result.resolution.ambiguous);
+        assert_eq!(result.resolution.candidates, 1);
+        assert!(!result.to_markdown().contains("Ambiguous"));
+    }
+
+    #[test]
+    fn callers_of_a_missing_symbol_is_an_empty_page_not_a_full_one() {
+        let db = db_with(&["src/lib.rs"]);
+        let result = callers(&db, "nope", &SymbolHint::default(), None, None).unwrap();
+        assert_eq!(result.page.total, 0);
+        assert!(!result.page.truncated);
+        assert_eq!(result.resolution.candidates, 0);
+        assert!(result.to_markdown().contains("No callers found"));
+    }
+
+    // --- unused -----------------------------------------------------------
+
+    #[test]
+    fn unused_pages_and_reports_the_full_total() {
+        let db = db_with(&["src/lib.rs"]);
+        for i in 0..7 {
+            db.insert_node(&node(&format!("dead{}", i), "src/lib.rs", 10 + i))
+                .unwrap();
+        }
+
+        let result = unused(&db, Some(3), None).unwrap();
+        assert_eq!(result.page.total, 7);
+        assert_eq!(result.page.shown, 3);
+        assert!(result.page.truncated);
+        assert!(result.to_markdown().contains("Found 3 of 7 unused symbols"));
+    }
+
+    // --- JSON shape -------------------------------------------------------
+
+    #[test]
+    fn json_exposes_total_and_ambiguity_for_machine_callers() {
+        let db = db_with(&["src/a.rs", "src/b.rs"]);
+        let target = db.insert_node(&node("run", "src/a.rs", 1)).unwrap();
+        db.insert_node(&node("run", "src/b.rs", 1)).unwrap();
+        for i in 0..3 {
+            let id = db
+                .insert_node(&node(&format!("c{}", i), "src/a.rs", 20 + i))
+                .unwrap();
+            db.insert_edge(&Edge::new(id, target, EdgeKind::Calls))
+                .unwrap();
+        }
+
+        let result = callers(&db, "run", &SymbolHint::default(), Some(1), None).unwrap();
+        let json: serde_json::Value =
+            serde_json::from_str(&present(&result, Format::Json).unwrap()).unwrap();
+
+        assert_eq!(json["total"], 3);
+        assert_eq!(json["shown"], 1);
+        assert_eq!(json["truncated"], true);
+        assert_eq!(json["resolution"]["ambiguous"], true);
+        assert_eq!(json["resolution"]["candidates"], 2);
+    }
+
+    // --- limits -----------------------------------------------------------
+
+    #[test]
+    fn limit_is_clamped_and_zero_means_default() {
+        use constants::{effective_limit, MAX_LIMIT};
+        assert_eq!(effective_limit(None, 20), 20);
+        assert_eq!(effective_limit(Some(0), 20), 20);
+        assert_eq!(effective_limit(Some(5), 20), 5);
+        assert_eq!(effective_limit(Some(MAX_LIMIT * 10), 20), MAX_LIMIT);
+    }
 }

@@ -2,6 +2,9 @@
 
 use serde::Deserialize;
 
+use crate::db::SymbolHint;
+use crate::ops::format::normalize_path;
+
 /// Request for context tool
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ContextRequest {
@@ -18,6 +21,8 @@ pub struct SearchRequest {
         description = "If true, run semantic (bm25) search over identifier tokens + docstrings instead of prefix-only name search"
     )]
     pub semantic: Option<bool>,
+    #[schemars(description = "Max results to return (default 10, max 1000)")]
+    pub limit: Option<u32>,
 }
 
 /// Request for symbol-based tools (callers, callees, node, references,
@@ -26,6 +31,20 @@ pub struct SearchRequest {
 pub struct SymbolRequest {
     #[schemars(description = "Function/method/class name")]
     pub symbol: String,
+    #[schemars(
+        description = "Disambiguate: only consider the definition in this file (repo-relative path). Use when the result reports ambiguous=true."
+    )]
+    pub file: Option<String>,
+    #[schemars(
+        description = "Disambiguate: only consider the definition with this exact qualified name."
+    )]
+    pub qualified_name: Option<String>,
+    #[schemars(description = "Max results to return (default varies by tool, max 1000)")]
+    pub limit: Option<u32>,
+    #[schemars(
+        description = "Skip this many results — use with limit to page through a truncated list"
+    )]
+    pub offset: Option<u32>,
     #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
     pub format: Option<String>,
 }
@@ -35,6 +54,12 @@ pub struct SymbolRequest {
 pub struct ImpactRequest {
     #[schemars(description = "Function/method/class/struct name")]
     pub symbol: String,
+    #[schemars(description = "Disambiguate: only consider the definition in this file")]
+    pub file: Option<String>,
+    #[schemars(
+        description = "Disambiguate: only consider the definition with this qualified name"
+    )]
+    pub qualified_name: Option<String>,
     #[schemars(
         description = "If true, annotate inbound modules with git churn (volatility). Default: false"
     )]
@@ -59,6 +84,12 @@ pub struct FileRequest {
 pub struct DefinitionRequest {
     #[schemars(description = "Function/method/class name")]
     pub symbol: String,
+    #[schemars(description = "Disambiguate: only consider the definition in this file")]
+    pub file: Option<String>,
+    #[schemars(
+        description = "Disambiguate: only consider the definition with this qualified name"
+    )]
+    pub qualified_name: Option<String>,
     #[schemars(description = "Number of context lines before/after (default: 3)")]
     pub context_lines: Option<u32>,
     #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
@@ -68,6 +99,10 @@ pub struct DefinitionRequest {
 /// Request carrying only an output format (for parameterless tools like unused).
 #[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
 pub struct FormatRequest {
+    #[schemars(description = "Max results to return (default 100, max 1000)")]
+    pub limit: Option<u32>,
+    #[schemars(description = "Skip this many results — use with limit to page through the list")]
+    pub offset: Option<u32>,
     #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
     pub format: Option<String>,
 }
@@ -112,6 +147,12 @@ pub struct DiffImpactRequest {
 pub struct BlameRequest {
     #[schemars(description = "Symbol name to blame")]
     pub symbol: String,
+    #[schemars(description = "Disambiguate: only consider the definition in this file")]
+    pub file: Option<String>,
+    #[schemars(
+        description = "Disambiguate: only consider the definition with this qualified name"
+    )]
+    pub qualified_name: Option<String>,
 }
 
 /// Request for churn tool
@@ -171,4 +212,43 @@ pub struct DispatchSitesRequest {
 /// Helper: does this format string request JSON output?
 pub fn wants_json(format: &Option<String>) -> bool {
     format.as_deref().map(|f| f.eq_ignore_ascii_case("json")) == Some(true)
+}
+
+/// Build the resolution hints from a request's optional `file` /
+/// `qualified_name` fields.
+///
+/// `file` is normalised the same way indexed paths are, so a caller copying a
+/// `./src/foo.rs` out of one tool's output can paste it into the next.
+pub fn symbol_hint(file: &Option<String>, qualified_name: &Option<String>) -> SymbolHint {
+    SymbolHint {
+        file: file
+            .as_deref()
+            .map(|f| normalize_path(f).to_string())
+            .filter(|f| !f.is_empty()),
+        qualified_name: qualified_name.clone().filter(|q| !q.is_empty()),
+    }
+}
+
+impl SymbolRequest {
+    pub fn hint(&self) -> SymbolHint {
+        symbol_hint(&self.file, &self.qualified_name)
+    }
+}
+
+impl ImpactRequest {
+    pub fn hint(&self) -> SymbolHint {
+        symbol_hint(&self.file, &self.qualified_name)
+    }
+}
+
+impl DefinitionRequest {
+    pub fn hint(&self) -> SymbolHint {
+        symbol_hint(&self.file, &self.qualified_name)
+    }
+}
+
+impl BlameRequest {
+    pub fn hint(&self) -> SymbolHint {
+        symbol_hint(&self.file, &self.qualified_name)
+    }
 }

@@ -9,14 +9,14 @@ use crate::ops::{self, present, Format};
 
 pub fn handle_callers(db: &Database, req: &SymbolRequest) -> Result<String, String> {
     present(
-        &ops::callers(db, &req.symbol)?,
+        &ops::callers(db, &req.symbol, &req.hint(), req.limit, req.offset)?,
         Format::from_request(&req.format),
     )
 }
 
 pub fn handle_callees(db: &Database, req: &SymbolRequest) -> Result<String, String> {
     present(
-        &ops::callees(db, &req.symbol)?,
+        &ops::callees(db, &req.symbol, &req.hint(), req.limit, req.offset)?,
         Format::from_request(&req.format),
     )
 }
@@ -83,9 +83,18 @@ pub fn handle_impact(
     }
 
     output.push_str(&format!(
-        "**Call-graph impact (depth {}):** {} symbols affected\n\n",
-        DEFAULT_IMPACT_DEPTH, analysis.total_impact
+        "**Call-graph impact (depth {}):** {}{} symbols affected\n\n",
+        DEFAULT_IMPACT_DEPTH,
+        if analysis.truncated { "at least " } else { "" },
+        analysis.total_impact
     ));
+    if analysis.truncated {
+        output.push_str(&format!(
+            "> **Truncated:** a symbol in the traversal has more than {} callers, so the \
+             count above is a lower bound on the blast radius, not the whole of it.\n\n",
+            crate::graph::IMPACT_FANOUT_CAP
+        ));
+    }
 
     if !analysis.direct_callers.is_empty() {
         output.push_str(&format!(
@@ -108,13 +117,20 @@ pub fn handle_impact(
             "\n### Indirect Callers ({}):\n\n",
             analysis.indirect_callers.len()
         ));
-        for caller in analysis.indirect_callers.iter().take(20) {
+        let shown = 20;
+        for caller in analysis.indirect_callers.iter().take(shown) {
             output.push_str(&format!(
                 "- `{}` ({}:{}) - {}\n",
                 caller.name,
                 caller.file_path,
                 caller.start_line,
                 caller.kind.as_str()
+            ));
+        }
+        if analysis.indirect_callers.len() > shown {
+            output.push_str(&format!(
+                "- … and {} more\n",
+                analysis.indirect_callers.len() - shown
             ));
         }
     }
