@@ -1,0 +1,24 @@
+CHANGELOG.md
+  s_2a3a5cdcb907e9::t_d828f0dc93b3fb 3,31,102-106,109-112
+  s_2a3a5cdcb907e9::t_0a3e8619bf4d70 183-204
+  s_2a3a5cdcb907e9::t_b811b797673738 113-116,169-170
+  s_2a3a5cdcb907e9::t_553810eaffdc07 157-158
+  s_2a3a5cdcb907e9::t_89c4acf11dbf76 7,9-10,24-27
+  s_2a3a5cdcb907e9::t_1172feed24cb29 163-168,171-179
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "8068d5ab0220d753debc12266d1052a946bd5a0b",
+  "prompts": {},
+  "sessions": {
+    "s_2a3a5cdcb907e9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "863e2dbc-2c6a-4667-951c-e284f4e32919",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}
