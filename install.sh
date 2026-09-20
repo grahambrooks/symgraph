@@ -132,14 +132,14 @@ verify_checksum
 
 tar -xzf "${TMP_DIR}/${TARBALL}" -C "${TMP_DIR}"
 
-# Install binaries and manifest. The tarball ships both the full `symgraph`
-# (CLI + MCP server) and the lean `symgraph-cli`; only the former used to be
-# installed, leaving the other silently discarded.
+# Install the binary and manifest. One binary carries both the CLI and the
+# MCP server; `symgraph serve` is the server.
 mkdir -p "${INSTALL_DIR}/bin"
 install -m 755 "${TMP_DIR}/symgraph" "${INSTALL_DIR}/bin/symgraph"
-if [ -f "${TMP_DIR}/symgraph-cli" ]; then
-    install -m 755 "${TMP_DIR}/symgraph-cli" "${INSTALL_DIR}/bin/symgraph-cli"
-fi
+
+# Releases before the binaries were merged shipped a separate `symgraph-cli`.
+# Remove a stale one so it cannot shadow the real binary on PATH.
+rm -f "${INSTALL_DIR}/bin/symgraph-cli"
 
 if [ -f "${TMP_DIR}/manifest.json" ]; then
     install -m 644 "${TMP_DIR}/manifest.json" "${INSTALL_DIR}/manifest.json"

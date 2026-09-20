@@ -1,17 +1,137 @@
-//! symgraph: Semantic code intelligence MCP server and CLI.
+//! symgraph: semantic code intelligence — one binary, CLI and MCP server.
 //!
-//! Commands: index, status, search, context, where, prune, serve.
-//! Run `symgraph help` for full syntax, arguments, options, and examples.
+//! Every query and analysis command, plus `serve` for the MCP server. The
+//! server stack (rmcp/axum/tokio) is behind the `server` feature, so a lean
+//! CLI-only build is the same binary without that one command:
+//!
+//! ```sh
+//! cargo build --release                                   # CLI + MCP server
+//! cargo build --release --no-default-features -F sqlite    # CLI only
+//! ```
+//!
+//! This used to be two binaries, `symgraph` and `symgraph-cli`. They shared
+//! ~270 lines verbatim and had drifted: `serve` existed only in one,
+//! `reindex`/`watch`/`completions`/`man` only in the other, and `index` meant
+//! a full rebuild in one and an incremental pass in the other. One dispatch
+//! table cannot drift from itself.
 
+#[cfg(feature = "server")]
 mod server;
 
 use std::env;
+use std::io::Write;
+use std::time::{Duration, UNIX_EPOCH};
 
 use anyhow::Result;
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 
-use symgraph::cli::{index_command, prune_command, tools, where_command, OutputFormat};
+use symgraph::cli::{
+    canonicalize_path, index_command, open_project_database, print_unsupported_types,
+    prune_command, tools, where_command, OutputFormat,
+};
+use symgraph::{index_codebase, IndexConfig};
+
+const BIN: &str = "symgraph";
+
+// ---------------------------------------------------------------------------
+// Command catalog — the single source of truth for dispatch, help,
+// completions, and the man page. Keeping one table means the three generated
+// surfaces can never drift out of sync with what the binary actually accepts.
+// ---------------------------------------------------------------------------
+
+struct Command {
+    name: &'static str,
+    args: &'static str,
+    /// One-line summary used in help, completions, and the man page.
+    help: &'static str,
+}
+
+struct Group {
+    title: &'static str,
+    commands: &'static [Command],
+}
+
+/// `serve` exists only when the server stack is compiled in. Declaring the
+/// group's contents per-build keeps `help`, completions and the man page from
+/// advertising a command a lean build does not have.
+#[cfg(feature = "server")]
+#[rustfmt::skip]
+const SERVER_COMMANDS: &[Command] = &[
+    Command { name: "serve", args: "[--port N] [--bind ADDR] [--in-memory]", help: "Run the MCP server (stdio by default)" },
+];
+#[cfg(not(feature = "server"))]
+const SERVER_COMMANDS: &[Command] = &[];
+
+#[rustfmt::skip]
+const GROUPS: &[Group] = &[
+    Group {
+        title: "SERVER",
+        commands: SERVER_COMMANDS,
+    },
+    Group {
+        title: "CORE COMMANDS",
+        commands: &[
+            Command { name: "index", args: "[PATH]", help: "Incrementally update the index (only changed files)" },
+            Command { name: "reindex", args: "[PATH] [--files F...]", help: "Full rebuild, or re-index just the named files" },
+            Command { name: "watch", args: "[PATH] [--interval SECS]", help: "Re-index on file changes until interrupted" },
+            Command { name: "status", args: "[PATH]", help: "Show index statistics (files, symbols, languages)" },
+            Command { name: "search", args: "<QUERY> [--semantic] [--limit N]", help: "Find symbols whose name matches QUERY" },
+            Command { name: "context", args: "<TASK...> [--limit N]", help: "Build focused context for a coding task" },
+            Command { name: "where", args: "[PATH]", help: "Show where this project's index is stored" },
+            Command { name: "prune", args: "[--max-age-days N]", help: "Delete stale cached indexes" },
+        ],
+    },
+    Group {
+        title: "SYMBOL COMMANDS",
+        commands: &[
+            Command { name: "callers", args: "<SYMBOL> [--file F] [--limit N] [--offset N]", help: "Functions/methods that call SYMBOL" },
+            Command { name: "callees", args: "<SYMBOL> [--file F] [--limit N] [--offset N]", help: "Functions/methods that SYMBOL calls" },
+            Command { name: "references", args: "<SYMBOL> [--file F] [--limit N]", help: "All references to SYMBOL" },
+            Command { name: "node", args: "<SYMBOL>", help: "Detailed info about a symbol" },
+            Command { name: "definition", args: "<SYMBOL> [--context-lines N]", help: "Source of SYMBOL" },
+            Command { name: "hierarchy", args: "<SYMBOL>", help: "Parent/child (contains) hierarchy" },
+            Command { name: "implementations", args: "<SYMBOL>", help: "Implementations of an interface/trait" },
+            Command { name: "file", args: "<PATH>", help: "List symbols defined in a file" },
+            Command { name: "path", args: "<FROM> <TO>", help: "Call path(s) from FROM to TO" },
+            Command { name: "unused", args: "[--limit N] [--offset N]", help: "Symbols with no incoming references (dead code)" },
+        ],
+    },
+    Group {
+        title: "ANALYSIS COMMANDS",
+        commands: &[
+            Command { name: "impact", args: "<SYMBOL> [--churn] [--days N]", help: "Change impact + coupling breakdown" },
+            Command { name: "diff-impact", args: "[--file F --start N --end N --git-ref REF]", help: "Impact of a region/diff" },
+            Command { name: "blame", args: "<SYMBOL>", help: "git blame over a symbol's definition lines" },
+            Command { name: "churn", args: "[PATH] [--days N] [--limit N]", help: "File change frequency (volatility)" },
+            Command { name: "module-graph", args: "[--granularity file|dir|module] [--churn] [--limit N]", help: "Module dependency graph: fan-in/out + cycles" },
+            Command { name: "coupling-score", args: "[--granularity ...] [--churn] [--limit N]", help: "Rank coupling by strength × distance × volatility" },
+            Command { name: "god-struct", args: "[--churn] [--limit N]", help: "Structs ranked by architectural debt" },
+            Command { name: "dispatch-sites", args: "<ENUM>", help: "Files that match/switch on an enum's members" },
+        ],
+    },
+    Group {
+        title: "TOOLING",
+        commands: &[
+            Command { name: "completions", args: "<bash|zsh|fish>", help: "Print a shell completion script" },
+            Command { name: "man", args: "", help: "Print a roff man page for symgraph" },
+            Command { name: "help", args: "", help: "Show this help" },
+            Command { name: "version", args: "", help: "Show the version" },
+        ],
+    },
+];
+
+/// Flat list of every command name, for shell completion.
+fn all_command_names() -> Vec<&'static str> {
+    GROUPS
+        .iter()
+        .flat_map(|g| g.commands.iter().map(|c| c.name))
+        .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Argument helpers (mirrors the hand-rolled parsing in src/main.rs).
+// ---------------------------------------------------------------------------
 
 /// First positional argument at `idx` that isn't a `--flag`.
 fn positional(args: &[String], idx: usize) -> Option<&str> {
@@ -20,12 +140,12 @@ fn positional(args: &[String], idx: usize) -> Option<&str> {
         .filter(|s| !s.starts_with("--"))
 }
 
-/// Required positional symbol/path argument; prints `usage` and returns None if absent.
+/// Required positional argument; prints `usage` and returns None if absent.
 fn need(args: &[String], idx: usize, usage: &str) -> Option<String> {
     match positional(args, idx) {
         Some(s) => Some(s.to_string()),
         None => {
-            eprintln!("Usage: {usage}");
+            eprintln!("Usage: {BIN} {usage}");
             None
         }
     }
@@ -50,6 +170,30 @@ fn has_flag(args: &[String], name: &str) -> bool {
     args.iter().any(|a| a == name)
 }
 
+/// Send `tracing` output to a file beside the index when one is available,
+/// and to stderr otherwise.
+///
+/// Indexing can run in the background, and its progress logs must not land in
+/// the working tree or interleave with `--format json` on stdout.
+fn setup_logging(log_file: Option<&std::path::Path>) {
+    let builder = FmtSubscriber::builder()
+        .with_max_level(Level::INFO)
+        .with_target(false);
+    match log_file.and_then(|p| std::fs::File::create(p).ok()) {
+        Some(file) => {
+            let subscriber = builder
+                .with_ansi(false)
+                .with_writer(std::sync::Mutex::new(file))
+                .finish();
+            tracing::subscriber::set_global_default(subscriber).ok();
+        }
+        None => {
+            let subscriber = builder.with_writer(std::io::stderr).finish();
+            tracing::subscriber::set_global_default(subscriber).ok();
+        }
+    }
+}
+
 fn main() -> Result<()> {
     let mut args: Vec<String> = env::args().collect();
 
@@ -58,9 +202,8 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
-    // Global `--db <path>` override: applies to every command (CLI + serve) by
-    // seeding SYMGRAPH_DB, which the path resolver consults first. Strip the
-    // flag and its value so the remaining positional arguments are unaffected.
+    // Global `--db <path>` override: seeds SYMGRAPH_DB (consulted first by the
+    // path resolver). Strip the flag+value so positional parsing is unaffected.
     if let Some(i) = args.iter().position(|a| a == "--db") {
         if i + 1 < args.len() {
             env::set_var("SYMGRAPH_DB", &args[i + 1]);
@@ -84,6 +227,8 @@ fn main() -> Result<()> {
     }
 
     match args[1].as_str() {
+        // ---- MCP server ----
+        #[cfg(feature = "server")]
         "serve" => {
             let port = args
                 .iter()
@@ -118,19 +263,59 @@ fn main() -> Result<()> {
                 (None, None) => server::start_stdio(in_memory)?,
             }
         }
+        // Say why rather than "unknown command": a lean build is a deliberate
+        // choice someone made, and the fix is to install the default build.
+        #[cfg(not(feature = "server"))]
+        "serve" => {
+            eprintln!(
+                "This build of {BIN} has no MCP server: it was compiled without the \
+                 `server` feature.\nInstall the default build, or rebuild with \
+                 `cargo build --release`."
+            );
+            std::process::exit(2);
+        }
+
+        // ---- indexing ----
         "index" => {
-            let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
-            // Log to a file beside the index so background indexing never
-            // writes into the working tree.
+            let path = positional(&args, 2).unwrap_or(".");
             setup_logging(symgraph::cli::index_log_path(path).ok().as_deref());
-            index_command(path, format)?;
+            index_incremental(path, format)?;
+        }
+        "reindex" => {
+            // `--files a.rs b.rs` is the targeted mode of the symgraph-reindex
+            // tool; with no files it is a full clean rebuild of PATH.
+            let files: Vec<String> = args
+                .iter()
+                .position(|a| a == "--files")
+                .map(|i| {
+                    args[i + 1..]
+                        .iter()
+                        .take_while(|a| !a.starts_with("--"))
+                        .cloned()
+                        .collect()
+                })
+                .unwrap_or_default();
+            if files.is_empty() {
+                let path = positional(&args, 2).unwrap_or(".");
+                setup_logging(symgraph::cli::index_log_path(path).ok().as_deref());
+                index_command(path, format)?;
+            } else {
+                tools::reindex_files(".", files, format)?;
+            }
+        }
+        "watch" => {
+            let path = positional(&args, 2).unwrap_or(".").to_string();
+            let interval = flag_u64(&args, "--interval")
+                .filter(|s| *s > 0)
+                .unwrap_or(2);
+            watch_command(&path, interval, format)?;
         }
         "status" => {
-            let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
+            let path = positional(&args, 2).unwrap_or(".");
             tools::status(path, format)?;
         }
         "where" => {
-            let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
+            let path = positional(&args, 2).unwrap_or(".");
             where_command(path, format)?;
         }
         "prune" => {
@@ -138,18 +323,13 @@ fn main() -> Result<()> {
         }
         "search" => {
             if args.len() < 3 {
-                eprintln!("Usage: symgraph search <query> [--limit N]");
+                eprintln!("Usage: {BIN} search <query> [--limit N]");
                 eprintln!("  <query> is a symbol name or partial name; quote it if it has spaces.");
-                eprintln!(
-                    "  e.g. symgraph search authenticate   |   symgraph search \"User Service\""
-                );
                 return Ok(());
             }
-            let path = ".";
-            let query = &args[2];
             tools::search(
-                path,
-                query,
+                ".",
+                &args[2],
                 has_flag(&args, "--semantic"),
                 flag_u32(&args, "--limit"),
                 format,
@@ -157,39 +337,37 @@ fn main() -> Result<()> {
         }
         "context" => {
             if args.len() < 3 {
-                eprintln!("Usage: symgraph context <task...>");
+                eprintln!("Usage: {BIN} context <task...>");
                 eprintln!("  <task...> is a free-text description of what you want to work on.");
-                eprintln!("  e.g. symgraph context \"add OAuth login to the REST API\"");
                 return Ok(());
             }
-            let path = ".";
             let task = args[2..].join(" ");
-            tools::context(path, &task, flag_u32(&args, "--limit"), format)?;
+            tools::context(".", &task, flag_u32(&args, "--limit"), format)?;
         }
 
-        // ---- MCP-tool parity: symbol relationships ----
+        // ---- symbol relationships ----
         "callers" => {
-            if let Some(s) = need(&args, 2, "symgraph callers <symbol>") {
+            if let Some(s) = need(&args, 2, "callers <symbol>") {
                 tools::callers(".", &tools::SymbolQuery::from_args(&s, &args), format)?;
             }
         }
         "callees" => {
-            if let Some(s) = need(&args, 2, "symgraph callees <symbol>") {
+            if let Some(s) = need(&args, 2, "callees <symbol>") {
                 tools::callees(".", &tools::SymbolQuery::from_args(&s, &args), format)?;
             }
         }
         "node" => {
-            if let Some(s) = need(&args, 2, "symgraph node <symbol>") {
+            if let Some(s) = need(&args, 2, "node <symbol>") {
                 tools::node(".", &tools::SymbolQuery::from_args(&s, &args), format)?;
             }
         }
         "references" => {
-            if let Some(s) = need(&args, 2, "symgraph references <symbol>") {
+            if let Some(s) = need(&args, 2, "references <symbol>") {
                 tools::references(".", &tools::SymbolQuery::from_args(&s, &args), format)?;
             }
         }
         "definition" => {
-            if let Some(s) = need(&args, 2, "symgraph definition <symbol> [--context-lines N]") {
+            if let Some(s) = need(&args, 2, "definition <symbol> [--context-lines N]") {
                 tools::definition(
                     ".",
                     &tools::SymbolQuery::from_args(&s, &args),
@@ -199,12 +377,12 @@ fn main() -> Result<()> {
             }
         }
         "hierarchy" => {
-            if let Some(s) = need(&args, 2, "symgraph hierarchy <symbol>") {
+            if let Some(s) = need(&args, 2, "hierarchy <symbol>") {
                 tools::hierarchy(".", &tools::SymbolQuery::from_args(&s, &args), format)?;
             }
         }
         "implementations" => {
-            if let Some(s) = need(&args, 2, "symgraph implementations <symbol>") {
+            if let Some(s) = need(&args, 2, "implementations <symbol>") {
                 tools::implementations(".", &tools::SymbolQuery::from_args(&s, &args), format)?;
             }
         }
@@ -217,18 +395,18 @@ fn main() -> Result<()> {
             )?;
         }
         "file" => {
-            if let Some(f) = need(&args, 2, "symgraph file <path>") {
+            if let Some(f) = need(&args, 2, "file <path>") {
                 tools::file(".", &f, format)?;
             }
         }
         "path" => match (positional(&args, 2), positional(&args, 3)) {
             (Some(from), Some(to)) => tools::path_between(".", from, to, format)?,
-            _ => eprintln!("Usage: symgraph path <from> <to>"),
+            _ => eprintln!("Usage: {BIN} path <from> <to>"),
         },
 
         // ---- impact / change analysis ----
         "impact" => {
-            if let Some(s) = need(&args, 2, "symgraph impact <symbol> [--churn] [--days N]") {
+            if let Some(s) = need(&args, 2, "impact <symbol> [--churn] [--days N]") {
                 tools::impact(
                     ".",
                     &tools::SymbolQuery::from_args(&s, &args),
@@ -251,7 +429,7 @@ fn main() -> Result<()> {
 
         // ---- git history ----
         "blame" => {
-            if let Some(s) = need(&args, 2, "symgraph blame <symbol>") {
+            if let Some(s) = need(&args, 2, "blame <symbol>") {
                 tools::blame(".", &tools::SymbolQuery::from_args(&s, &args), format)?;
             }
         }
@@ -296,156 +474,358 @@ fn main() -> Result<()> {
             )?;
         }
         "dispatch-sites" => {
-            if let Some(s) = need(&args, 2, "symgraph dispatch-sites <enum>") {
+            if let Some(s) = need(&args, 2, "dispatch-sites <enum>") {
                 tools::dispatch_sites(".", &s, format)?;
             }
         }
 
-        "help" | "--help" | "-h" => {
-            print_usage();
-        }
-        "--version" | "-V" | "version" => {
-            print_version();
-        }
+        // ---- tooling ----
+        "completions" => match positional(&args, 2) {
+            Some(shell) => print_completions(shell)?,
+            None => {
+                eprintln!("Usage: {BIN} completions <bash|zsh|fish>");
+                std::process::exit(2);
+            }
+        },
+        "man" => print_man_page(),
+
+        "help" | "--help" | "-h" => print_usage(),
+        "--version" | "-V" | "version" => print_version(),
         cmd => {
             eprintln!("Unknown command: {}", cmd);
             print_usage();
+            std::process::exit(2);
         }
     }
 
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// Incremental indexing + watch
+// ---------------------------------------------------------------------------
+
+/// Incrementally update the project index in place: only files whose content
+/// hash changed are re-parsed. Unlike `reindex` (a full shadow rebuild) this is
+/// the fast path meant for repeated interactive use.
+fn index_incremental(path: &str, fmt: OutputFormat) -> Result<()> {
+    let json = fmt.request_format().is_some();
+    let project_root = canonicalize_path(path)?;
+    let mut db = open_project_database(&project_root)?;
+
+    // An incremental pass cannot migrate rows it does not revisit, so a stale
+    // index needs the full rebuild it would otherwise get only if the user
+    // happened to know to ask for one.
+    if let Some(stale) = db.staleness()? {
+        if !json {
+            println!("Index is out of date ({stale}); rebuilding from scratch.");
+        }
+        drop(db);
+        return index_command(path, fmt);
+    }
+
+    let config = IndexConfig {
+        root: project_root.clone(),
+        show_progress: !json,
+        ..Default::default()
+    };
+
+    let stats = index_codebase(&mut db, &config)?;
+
+    if json {
+        println!("{}", serde_json::to_string_pretty(&stats)?);
+        return Ok(());
+    }
+
+    println!("\nIndex updated (incremental).");
+    println!("  Files indexed: {}", stats.files);
+    println!("  Files skipped: {}", stats.skipped);
+    println!("  Symbols found: {}", stats.nodes);
+    println!("  Relationships: {}", stats.edges);
+    println!("  Refs resolved: {}", stats.resolved_refs);
+    if stats.errors > 0 {
+        println!("  Errors: {}", stats.errors);
+    }
+    symgraph::cli::print_index_gaps(&stats);
+    print_unsupported_types(&stats.unsupported_types);
+    Ok(())
+}
+
+/// Re-index whenever the source tree changes, until the process is interrupted.
+///
+/// This is deliberately dependency-free: rather than hook OS file-system
+/// events, it polls a cheap signature (source-file count + newest mtime) every
+/// `interval` seconds and runs an incremental index when the signature moves.
+/// That keeps the lean CLI build from pulling in a file-watcher crate while
+/// still giving fresh queries between edits.
+fn watch_command(path: &str, interval: u64, fmt: OutputFormat) -> Result<()> {
+    let project_root = canonicalize_path(path)?;
+
+    // Prime the index once so the first query after `watch` starts is current.
+    eprintln!("watch: indexing {} ...", project_root);
+    index_incremental(&project_root, fmt)?;
+
+    let mut last = scan_signature(&project_root);
+    eprintln!(
+        "watch: watching {} for changes (every {}s). Press Ctrl-C to stop.",
+        project_root, interval
+    );
+
+    loop {
+        std::thread::sleep(Duration::from_secs(interval));
+        let current = scan_signature(&project_root);
+        if current != last {
+            last = current;
+            eprintln!("watch: change detected, re-indexing ...");
+            if let Err(err) = index_incremental(&project_root, fmt) {
+                eprintln!("watch: index error: {err:#}");
+            }
+        }
+    }
+}
+
+/// A cheap change-detection signature over indexable source files: the number
+/// of files and the newest modification time (in whole seconds). Any add,
+/// remove, or edit moves at least one of the two.
+fn scan_signature(root: &str) -> (usize, i64) {
+    let defaults = IndexConfig::default();
+    let mut count = 0usize;
+    let mut newest = 0i64;
+
+    let walker = ignore::WalkBuilder::new(root)
+        .hidden(false)
+        .git_ignore(true)
+        .git_global(true)
+        .git_exclude(true)
+        .build();
+
+    for entry in walker.flatten() {
+        let p = entry.path();
+        if !p.is_file() {
+            continue;
+        }
+        if p.components().any(|c| {
+            defaults
+                .exclude_dirs
+                .iter()
+                .any(|d| c.as_os_str() == d.as_str())
+        }) {
+            continue;
+        }
+        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
+        if !defaults.extensions.iter().any(|e| e == ext) {
+            continue;
+        }
+        count += 1;
+        if let Some(secs) = entry
+            .metadata()
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+        {
+            newest = newest.max(secs);
+        }
+    }
+
+    (count, newest)
+}
+
+// ---------------------------------------------------------------------------
+// Help / version
+// ---------------------------------------------------------------------------
+
+fn print_version() {
+    println!("{BIN} {}", env!("CARGO_PKG_VERSION"));
+}
+
 fn print_usage() {
     println!(
-        r#"symgraph: Semantic code intelligence — a searchable knowledge graph of your code
-
-USAGE:
-    symgraph <COMMAND> [ARGUMENTS] [OPTIONS]
-
-    Build the index once with `symgraph index`, then query it with the commands
-    below. The same on-disk index is shared by the CLI and the MCP server.
-
-CORE COMMANDS:
-    index [PATH]             Build or refresh the index for a project
-    status [PATH]            Show index statistics (files, symbols, languages)
-    search <QUERY>           Find symbols whose name matches QUERY
-    context <TASK...>        Build focused context for a coding task
-    where [PATH]             Show where this project's index is stored
-    prune [--max-age-days N] Delete cached indexes that are gone, now indexed
-                             elsewhere (git dir / in-tree), or older than N days
-    serve [OPTIONS]          Run the MCP server (see SERVE OPTIONS)
-    help, version            Show this help / the version
-
-SYMBOL COMMANDS (query the current project's index):
-    callers <SYMBOL>         Functions/methods that call SYMBOL
-    callees <SYMBOL>         Functions/methods that SYMBOL calls
-    references <SYMBOL>      All references to SYMBOL
-    node <SYMBOL>            Detailed info about a symbol
-    definition <SYMBOL>     Source of SYMBOL        [--context-lines N]
-    hierarchy <SYMBOL>      Parent/child (contains) hierarchy
-    implementations <SYMBOL> Implementations of an interface/trait
-    file <PATH>              List symbols defined in a file
-    path <FROM> <TO>         Call path(s) from FROM to TO
-    unused                   Symbols with no incoming references (dead code)
-
-ANALYSIS COMMANDS:
-    impact <SYMBOL>          Change impact + coupling breakdown  [--churn] [--days N]
-    diff-impact              Impact of a region/diff
-                             [--file F --start N --end N --git-ref REF]
-    blame <SYMBOL>           git blame over a symbol's definition lines
-    churn [PATH]             File change frequency (volatility)  [--days N]
-    module-graph             Module dependency graph: fan-in/out + cycles
-                             [--granularity file|dir|module] [--churn] [--limit N]
-    coupling-score           Rank coupling by strength × distance × volatility
-                             [--granularity ...] [--churn] [--limit N]
-    god-struct               Structs ranked by architectural debt  [--churn] [--limit N]
-    dispatch-sites <ENUM>    Files that match/switch on an enum's members
-
-ARGUMENTS:
-    <QUERY>      A symbol name or partial name (case-insensitive, prefix/
-                 substring match). Returns matching functions, types, methods,
-                 etc. with their file:line. Quote it if it contains spaces:
-                     symgraph search authenticate
-                     symgraph search "User Service"
-
-    <TASK...>    A free-text description of what you want to work on. Every word
-                 after the command becomes the task (quotes optional but clearer).
-                 symgraph returns the relevant entry points and related code:
-                     symgraph context "add OAuth login to the REST API"
-                     symgraph context why does indexing skip generated files
-
-    [PATH]       Project root to act on (default: current directory). Point it
-                 at another checkout to index/query that one instead:
-                     symgraph index ~/code/myapp
-                     symgraph status ~/code/myapp
-
-SERVE OPTIONS:
-    serve                    stdio transport (for editors / Claude Code)
-    serve --port <PORT>      HTTP on 127.0.0.1:<PORT>
-    serve --bind <ADDR:PORT> HTTP on an explicit address (e.g. 0.0.0.0:8080)
-    serve --in-memory        Ephemeral in-memory index (no filesystem writes)
-
-GLOBAL OPTIONS:
-    --format <text|json>    Output format (default: text). `json` emits structured
-                            output for scripts/agents (pipe to `jq`). Supported by
-                            all commands except blame, churn, and diff-impact.
-    --db <PATH>             Use an explicit index database file (any command)
-
-ENVIRONMENT:
-    SYMGRAPH_ROOT           Project root directory (default: current directory)
-    SYMGRAPH_DB             Explicit index database path (overrides storage)
-    SYMGRAPH_STORAGE        Index location strategy: git | cache | local.
-                            Default: reuse existing .symgraph/, else the git dir
-                            (<git-common-dir>/symgraph), else an OS cache dir.
-                            `symgraph index` writes its progress log to
-                            index.log in this same directory (never the worktree).
-    SYMGRAPH_IN_MEMORY=1    Use in-memory database (same as serve --in-memory)
-    SYMGRAPH_AUTH_TOKEN     Bearer token required on /mcp (required for non-
-                            loopback binds; optional on 127.0.0.1)
-
-EXAMPLES:
-    symgraph index                       # index the current project
-    symgraph index ~/projects/myapp      # index a specific project
-    symgraph status                      # how much is indexed?
-    symgraph search authenticate         # find symbols named like "authenticate"
-    symgraph search "User Service"       # quote multi-word queries
-    symgraph search auth --format json   # machine-readable output for scripts
-    symgraph status --format json        # JSON stats (pipe to jq)
-    symgraph context "fix the login bug" # gather context for a task
-    symgraph where                       # where is this project's index stored?
-    symgraph serve                       # start the MCP server (stdio)
-    symgraph serve --port 8080           # start the MCP server over HTTP
-
-NOTE:
-    Query commands (status, search, context, where) need an existing index —
-    run `symgraph index` first, and re-run it after code changes to refresh.
-"#
+        "{BIN}: Semantic code intelligence — CLI and MCP server\n\n\
+         USAGE:\n    {BIN} <COMMAND> [ARGUMENTS] [OPTIONS]\n\n\
+         Build the index once with `{BIN} index`, then query it with the\n\
+         commands below. `index` updates incrementally; `reindex` rebuilds from\n\
+         scratch; `watch` keeps the index fresh as you edit."
+    );
+    for group in GROUPS {
+        // A group can be empty — SERVER is, in a build without the server
+        // feature — and an empty heading helps nobody.
+        if group.commands.is_empty() {
+            continue;
+        }
+        println!("\n{}:", group.title);
+        for c in group.commands {
+            let left = if c.args.is_empty() {
+                c.name.to_string()
+            } else {
+                format!("{} {}", c.name, c.args)
+            };
+            println!("    {left:<40} {}", c.help);
+        }
+    }
+    println!(
+        "\nGLOBAL OPTIONS:\n\
+         \x20   --format <text|json>    Output format (default: text) — supported by every command\n\
+         \x20   --db <PATH>             Use an explicit index database file\n\n\
+         SYMBOL OPTIONS (symbol commands):\n\
+         \x20   --file <PATH>           Disambiguate: use the definition in this file\n\
+         \x20   --qualified-name <QN>   Disambiguate: use the definition with this qualified name\n\
+         \x20   --limit <N>             Max results to return (max 1000)\n\
+         \x20   --offset <N>            Skip N results — page through a truncated list\n\n\
+         ENVIRONMENT:\n\
+         \x20   SYMGRAPH_ROOT           Project root directory (default: cwd)\n\
+         \x20   SYMGRAPH_DB             Explicit index database path\n\
+         \x20   SYMGRAPH_STORAGE        Index location strategy: git | cache | local\n\n\
+         EXAMPLES:\n\
+         \x20   {BIN} index                       # incremental index of the current project\n\
+         \x20   {BIN} reindex ~/projects/myapp    # full rebuild of a specific project\n\
+         \x20   {BIN} watch --interval 5          # re-index on change every 5s\n\
+         \x20   {BIN} search authenticate         # find symbols named like \"authenticate\"\n\
+         \x20   {BIN} context \"fix the login bug\" # gather context for a task\n\
+         \x20   {BIN} coupling-score --limit 20   # architectural coupling hotspots\n\
+         \x20   {BIN} callers new --file src/db/mod.rs  # pick one of several `new`s\n\
+         \x20   {BIN} callers handle --limit 50 --offset 50  # second page of callers\n\n\
+         NOTE:\n\
+         \x20   Query commands need an existing index — run `{BIN} index` first,\n\
+         \x20   and re-run it (or use `watch`) after code changes to refresh.\n\
+         \x20   Results say when they are truncated or when a name was ambiguous —\n\
+         \x20   narrow with --file/--qualified-name, or page with --limit/--offset.\n"
     );
 }
 
-fn print_version() {
-    println!("symgraph {}", env!("CARGO_PKG_VERSION"));
-}
+// ---------------------------------------------------------------------------
+// Shell completions
+// ---------------------------------------------------------------------------
 
-/// Install the global tracing subscriber. When `log_file` is `Some` and can be
-/// created, index progress is written there (co-located with the index, never
-/// the working tree); otherwise it falls back to stderr.
-fn setup_logging(log_file: Option<&std::path::Path>) {
-    let builder = FmtSubscriber::builder()
-        .with_max_level(Level::INFO)
-        .with_target(false);
-    match log_file.and_then(|p| std::fs::File::create(p).ok()) {
-        Some(file) => {
-            let subscriber = builder
-                .with_ansi(false)
-                .with_writer(std::sync::Mutex::new(file))
-                .finish();
-            tracing::subscriber::set_global_default(subscriber).ok();
-        }
-        None => {
-            let subscriber = builder.with_writer(std::io::stderr).finish();
-            tracing::subscriber::set_global_default(subscriber).ok();
+fn print_completions(shell: &str) -> Result<()> {
+    let names = all_command_names().join(" ");
+    match shell {
+        "bash" => print!("{}", bash_completions(&names)),
+        "zsh" => print!("{}", zsh_completions()),
+        "fish" => print!("{}", fish_completions()),
+        other => {
+            eprintln!("Unsupported shell: {other} (expected: bash | zsh | fish)");
+            std::process::exit(2);
         }
     }
+    Ok(())
+}
+
+fn bash_completions(names: &str) -> String {
+    format!(
+        "# bash completion for {BIN}. Install: {BIN} completions bash > \
+         /usr/local/etc/bash_completion.d/{BIN}\n\
+         _{ident}() {{\n\
+         \x20   local cur cmds\n\
+         \x20   cur=\"${{COMP_WORDS[COMP_CWORD]}}\"\n\
+         \x20   cmds=\"{names}\"\n\
+         \x20   if [ \"$COMP_CWORD\" -eq 1 ]; then\n\
+         \x20       COMPREPLY=( $(compgen -W \"$cmds\" -- \"$cur\") )\n\
+         \x20   else\n\
+         \x20       COMPREPLY=( $(compgen -f -- \"$cur\") )\n\
+         \x20   fi\n\
+         }}\n\
+         complete -F _{ident} {BIN}\n",
+        ident = "symgraph",
+    )
+}
+
+fn zsh_completions() -> String {
+    let mut lines = String::new();
+    for group in GROUPS {
+        for c in group.commands {
+            // Escape single quotes and colons for the zsh describe format.
+            let desc = c.help.replace('\'', "'\\''").replace(':', "\\:");
+            lines.push_str(&format!("        '{}:{}'\n", c.name, desc));
+        }
+    }
+    format!(
+        "#compdef {BIN}\n\
+         # zsh completion for {BIN}. Install: place this file on your $fpath as _{BIN}\n\
+         _{ident}() {{\n\
+         \x20   local -a commands\n\
+         \x20   commands=(\n{lines}    )\n\
+         \x20   if (( CURRENT == 2 )); then\n\
+         \x20       _describe '{BIN} command' commands\n\
+         \x20   else\n\
+         \x20       _files\n\
+         \x20   fi\n\
+         }}\n\
+         _{ident} \"$@\"\n",
+        ident = "symgraph",
+    )
+}
+
+fn fish_completions() -> String {
+    let mut out = format!("# fish completion for {BIN}\n");
+    for group in GROUPS {
+        for c in group.commands {
+            let desc = c.help.replace('\'', "\\'");
+            out.push_str(&format!(
+                "complete -c {BIN} -n '__fish_use_subcommand' -f -a '{}' -d '{}'\n",
+                c.name, desc
+            ));
+        }
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Man page (roff)
+// ---------------------------------------------------------------------------
+
+fn print_man_page() {
+    let version = env!("CARGO_PKG_VERSION");
+    let mut out = String::new();
+    out.push_str(&format!(
+        ".TH SYMGRAPH 1 \"\" \"symgraph {version}\" \"User Commands\"\n"
+    ));
+    out.push_str(".SH NAME\n");
+    out.push_str(&format!(
+        "{BIN} \\- semantic code intelligence: CLI and MCP server\n"
+    ));
+    out.push_str(".SH SYNOPSIS\n");
+    out.push_str(&format!(
+        ".B {BIN}\n.RI [ COMMAND ] \" \" [ ARGUMENTS ] \" \" [ OPTIONS ]\n"
+    ));
+    out.push_str(".SH DESCRIPTION\n");
+    out.push_str(
+        "symgraph builds a searchable knowledge graph of a codebase using tree-sitter \
+         and answers structural queries about it \\(em callers, callees, impact, coupling, \
+         and more. It is the CLI-only build of symgraph and does not include the MCP server.\n",
+    );
+    out.push_str(".SH COMMANDS\n");
+    for group in GROUPS {
+        out.push_str(&format!(".SS {}\n", group.title));
+        for c in group.commands {
+            let head = if c.args.is_empty() {
+                c.name.to_string()
+            } else {
+                format!("{} {}", c.name, c.args)
+            };
+            out.push_str(&format!(".TP\n.B {}\n{}\n", head, c.help));
+        }
+    }
+    out.push_str(".SH OPTIONS\n");
+    out.push_str(".TP\n.B \\-\\-format <text|json>\nOutput format (default: text).\n");
+    out.push_str(".TP\n.B \\-\\-db <PATH>\nUse an explicit index database file.\n");
+    out.push_str(".SH ENVIRONMENT\n");
+    out.push_str(".TP\n.B SYMGRAPH_ROOT\nProject root directory (default: current directory).\n");
+    out.push_str(".TP\n.B SYMGRAPH_DB\nExplicit index database path.\n");
+    out.push_str(".TP\n.B SYMGRAPH_STORAGE\nIndex location strategy: git | cache | local.\n");
+    out.push_str(".SH EXAMPLES\n");
+    out.push_str(&format!(
+        ".TP\n.B {BIN} index\nIncrementally index the current project.\n"
+    ));
+    out.push_str(&format!(".TP\n.B {BIN} watch\nRe-index on every change.\n"));
+    out.push_str(&format!(
+        ".TP\n.B {BIN} coupling-score --limit 20\nShow architectural coupling hotspots.\n"
+    ));
+    out.push_str(".SH SEE ALSO\n");
+    out.push_str(".BR symgraph (1)\n");
+
+    // Write straight to stdout so `... man > symgraph.1` works.
+    let stdout = std::io::stdout();
+    let mut lock = stdout.lock();
+    let _ = lock.write_all(out.as_bytes());
 }

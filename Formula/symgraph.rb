@@ -29,11 +29,9 @@ class Symgraph < Formula
 
   def install
     bin.install "symgraph"
-    bin.install "symgraph-cli"
   end
 
   test do
     assert_path_exists bin/"symgraph"
-    assert_path_exists bin/"symgraph-cli"
   end
 end

@@ -46,8 +46,8 @@ brew tap grahambrooks/symgraph https://github.com/grahambrooks/symgraph
 brew install symgraph
 ```
 
-This installs the `symgraph` binary (CLI + MCP server) and the lean `symgraph-cli`
-from the latest GitHub release. Upgrade with `brew upgrade symgraph`. The tap points
+This installs the `symgraph` binary — one executable carrying both the CLI and
+the MCP server (`symgraph serve`) — from the latest GitHub release. Upgrade with `brew upgrade symgraph`. The tap points
 at this repository directly, so no separate `homebrew-*` repo is required.
 
 ### macOS & Linux (install script)

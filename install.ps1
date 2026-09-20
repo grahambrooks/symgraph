@@ -102,16 +102,18 @@ try {
 
     Expand-Archive -Path $ZipPath -DestinationPath $TmpDir -Force
 
-    # Install binaries and manifest. The archive ships both the full
-    # `symgraph` (CLI + MCP server) and the lean `symgraph-cli`.
+    # Install the binary and manifest. One binary carries both the CLI and the
+    # MCP server; `symgraph serve` is the server.
     $BinDir = Join-Path $InstallDir "bin"
     New-Item -ItemType Directory -Path $BinDir -Force | Out-Null
 
     Copy-Item -Path (Join-Path $TmpDir "symgraph.exe") -Destination (Join-Path $BinDir "symgraph.exe") -Force
 
-    $CliPath = Join-Path $TmpDir "symgraph-cli.exe"
-    if (Test-Path $CliPath) {
-        Copy-Item -Path $CliPath -Destination (Join-Path $BinDir "symgraph-cli.exe") -Force
+    # Releases before the binaries were merged shipped a separate
+    # `symgraph-cli`. Remove a stale one so it cannot shadow the real binary.
+    $StaleCli = Join-Path $BinDir "symgraph-cli.exe"
+    if (Test-Path $StaleCli) {
+        Remove-Item -Force $StaleCli
     }
 
     $ManifestPath = Join-Path $TmpDir "manifest.json"

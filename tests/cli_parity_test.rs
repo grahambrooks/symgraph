@@ -82,7 +82,7 @@ fn binary() -> std::path::PathBuf {
     if path.ends_with("deps") {
         path.pop();
     }
-    path.join("symgraph-cli")
+    path.join("symgraph")
 }
 
 /// Run the CLI in the fixture, returning stdout.
