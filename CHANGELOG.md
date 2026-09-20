@@ -25,6 +25,11 @@ was neither; they now say what they know and what they do not.
   licenses, sources and bans.
 - **Declared MSRV** of 1.90, verified by a CI job that builds against exactly
   that toolchain.
+- **Import-scoped symbol resolution.** A call now prefers a definition in a
+  file the caller imports from over an arbitrary one. On symgraph's own
+  codebase this cut arbitrary resolutions by a third.
+- **Benchmarks** (`cargo bench`) over full indexing, the no-op incremental
+  pass, and graph folding.
 - `symgraph-cli` is now installed by the install scripts, which previously
   discarded it despite shipping it in the archive.
 
@@ -46,6 +51,13 @@ was neither; they now say what they know and what they do not.
   nothing.
 - **Tool failures looked like successes.** Errors were returned as result text
   beginning `"Error: "`; they now set the MCP `isError` flag.
+- **The server held a lock that was unsound to share.** The database was
+  wrapped in an `RwLock` behind an `unsafe impl Sync`; two concurrent readers
+  calling into rusqlite's statement cache is a data race. It is a `Mutex` now,
+  and the crate contains no `unsafe` code.
+- **Tool calls blocked the async runtime.** Handlers ran their synchronous
+  SQLite and git work directly on a tokio worker thread, so one slow call
+  stalled every other HTTP session. They run on the blocking pool now.
 - **Partial parses were invisible.** tree-sitter recovers from syntax errors
   rather than failing, so half-parsed files were indexed with no signal. They
   are now flagged and counted. A size cap (2 MiB) skips files too large to be
@@ -67,12 +79,28 @@ was neither; they now say what they know and what they do not.
 - Release workflow permissions are scoped per job instead of granting
   `contents: write` to everything.
 
+### Performance
+
+- Indexing streams in chunks rather than holding the whole repository in
+  memory.
+- A no-op incremental pass skips reading and hashing files whose size and mtime
+  are unchanged.
+- Reference resolution is one set-based statement per phase instead of several
+  queries per reference.
+- Coupling analysis aggregates edges in SQL — 559 rows instead of 7246 on
+  symgraph's own index.
+- Reindexing named files no longer walks the whole tree.
+
 ### Known limitations
 
+- `symgraph-implementations` returns nothing: extraction emits no
+  `implements`/`extends` edges for any language. Use `symgraph-hierarchy` for
+  now.
 - Symbol resolution is name-based. It is now deterministic and reports its own
   ambiguity, but it does not yet use imports to narrow candidates — on
   symgraph's own codebase 11.5% of names are shared by more than one
-  definition. `status` reports this figure for your codebase.
+  definition. `status` reports this figure for your codebase. Import scoping
+  narrows the choice but cannot rescue an import that is itself ambiguous.
 - Groovy parses partially: `tree-sitter-groovy` 0.1.2 rejects idiomatic
   semicolon-free statements. Symbols are still recovered.
 

@@ -156,11 +156,13 @@ pub fn build_module_graph(
                 by_kind: BTreeMap::new(),
                 strength: 0,
             });
-        entry.count += 1;
+        // `e.count` is how many individual edges this aggregated row stands
+        // for, so both totals advance by it rather than by one.
+        entry.count += e.count;
         *entry
             .by_kind
             .entry(e.kind.as_str().to_string())
-            .or_insert(0) += 1;
+            .or_insert(0) += e.count;
         entry.strength = entry.strength.max(e.kind.strength());
     }
 
@@ -381,13 +383,46 @@ fn top_segment(p: &str) -> &str {
 mod tests {
     use super::*;
 
+    /// One edge between two files.
     fn ep(s: &str, t: &str, kind: EdgeKind) -> EdgeEndpoint {
+        eps(s, t, kind, 1)
+    }
+
+    /// `count` edges between two files, as the aggregated accessor returns them.
+    fn eps(s: &str, t: &str, kind: EdgeKind, count: u32) -> EdgeEndpoint {
         EdgeEndpoint {
             source_file: s.to_string(),
             target_file: t.to_string(),
             kind,
             detail: None,
+            count,
         }
+    }
+
+    /// An aggregated row counts for all the edges it stands for, so a graph
+    /// built from aggregated input matches one built from the raw edges.
+    #[test]
+    fn aggregated_rows_count_the_same_as_individual_ones() {
+        let individual = build_module_graph(
+            &[
+                ep("src/a.rs", "src/b.rs", EdgeKind::Calls),
+                ep("src/a.rs", "src/b.rs", EdgeKind::Calls),
+                ep("src/a.rs", "src/b.rs", EdgeKind::Calls),
+            ],
+            Granularity::File,
+            None,
+        );
+        let aggregated = build_module_graph(
+            &[eps("src/a.rs", "src/b.rs", EdgeKind::Calls, 3)],
+            Granularity::File,
+            None,
+        );
+
+        assert_eq!(individual.edges.len(), 1);
+        assert_eq!(aggregated.edges.len(), 1);
+        assert_eq!(individual.edges[0].count, aggregated.edges[0].count);
+        assert_eq!(individual.edges[0].count, 3);
+        assert_eq!(individual.edges[0].by_kind, aggregated.edges[0].by_kind);
     }
 
     #[test]

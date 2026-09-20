@@ -21,7 +21,7 @@ use tracing::{info, warn, Level};
 use tracing_subscriber::FmtSubscriber;
 
 use symgraph::cli::initialize_server_database;
-use symgraph::mcp::{SymgraphHandler, SyncDatabase};
+use symgraph::mcp::SymgraphHandler;
 
 fn setup_debug_logging() {
     let subscriber = FmtSubscriber::builder()
@@ -87,7 +87,7 @@ pub async fn start_http(cfg: HttpConfig) -> Result<()> {
     info!("Project root: {}", project_root);
 
     // Wrap database in Arc for sharing across HTTP sessions
-    let db = Arc::new(std::sync::RwLock::new(SyncDatabase(db)));
+    let db: symgraph::mcp::SharedDatabase = Arc::new(std::sync::Mutex::new(db));
     // One reindex guard for the whole server, not one per session — sessions
     // share the database, so they must share the flag that protects it.
     let is_reindexing = Arc::new(std::sync::atomic::AtomicBool::new(false));

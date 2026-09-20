@@ -22,6 +22,10 @@ pub fn handle_reindex(
         }
 
         let mut errors = Vec::new();
+        let normalized: Vec<String> = files
+            .iter()
+            .map(|f| normalize_path(f).to_string())
+            .collect();
 
         for file_path in files {
             // Normalize and validate — reindex is a rare write path, so we
@@ -41,22 +45,20 @@ pub fn handle_reindex(
             }
         }
 
-        // Now run reindex to pick up the deleted files, but skip global
-        // reference resolution — we'll do scoped resolution instead.
+        // Re-index only the named files. This used to walk the entire tree
+        // and hash every file in it to pick up the handful just deleted, so
+        // "reindex one file" cost the same as a full incremental pass.
         let config = IndexConfig {
             root: project_root.to_string(),
             skip_resolve: true,
+            only_files: Some(normalized.clone()),
             ..Default::default()
         };
 
         match index_codebase(db, &config) {
             Ok(mut stats) => {
                 // Scoped resolution: only resolve refs from the reindexed files
-                let normalized_files: Vec<String> = files
-                    .iter()
-                    .map(|f| normalize_path(f).to_string())
-                    .collect();
-                match db.resolve_references_for_files(&normalized_files) {
+                match db.resolve_references_for_files(&normalized) {
                     Ok(resolved) => stats.resolved_refs = resolved as u64,
                     Err(e) => errors.push(format!("resolve refs: {}", e)),
                 }

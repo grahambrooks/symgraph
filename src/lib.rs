@@ -42,7 +42,7 @@ pub mod security;
 pub mod types;
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use anyhow::Result;
@@ -53,6 +53,14 @@ use indicatif::{ProgressBar, ProgressStyle};
 /// written source almost never approaches this; generated and minified files
 /// routinely exceed it.
 pub const DEFAULT_MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
+
+/// How many files to read, parse and store before moving on.
+///
+/// The bound that makes indexing streaming rather than whole-repository: peak
+/// memory is this many file contents plus their extracted nodes and edges,
+/// regardless of how large the tree is.
+#[cfg(feature = "sqlite")]
+const INDEX_CHUNK_SIZE: usize = 256;
 
 /// Commit and checkpoint the WAL after this many files during bulk indexing.
 /// Keeps WAL size bounded without requiring a single massive transaction.
@@ -148,8 +156,23 @@ pub struct IndexConfig {
     pub respect_gitignore: bool,
     /// Skip the global resolve_references pass (for scoped resolution)
     pub skip_resolve: bool,
+    /// Restrict indexing to these repo-relative paths.
+    ///
+    /// The walk still runs — it is the only thing that knows which files
+    /// exist and are not ignored — but everything outside the set is dropped
+    /// before it is read, hashed or parsed. Without this, reindexing one file
+    /// costs a full incremental pass over the tree.
+    pub only_files: Option<Vec<String>>,
     /// Render progress bars to stderr during indexing (disable for library/server use)
     pub show_progress: bool,
+    /// Treat a file whose size and mtime match the index as unchanged, without
+    /// reading or hashing it.
+    ///
+    /// On by default: reading and SHA-256ing every file is the dominant cost
+    /// of a no-op incremental run. Turn it off when mtimes cannot be trusted —
+    /// a checkout that preserves them across a content change would otherwise
+    /// be missed until the next full rebuild.
+    pub trust_file_stat: bool,
     /// Skip files larger than this many bytes.
     ///
     /// One generated or minified file — a bundled `.js`, a vendored amalgamation —
@@ -197,10 +220,21 @@ impl Default for IndexConfig {
             ],
             respect_gitignore: true,
             skip_resolve: false,
+            only_files: None,
             show_progress: false,
+            trust_file_stat: true,
             max_file_bytes: DEFAULT_MAX_FILE_BYTES,
         }
     }
+}
+
+/// A file the walk selected, before anything has been read.
+#[cfg(feature = "sqlite")]
+struct Candidate {
+    path: PathBuf,
+    rel_path: String,
+    language: Language,
+    modified_at: i64,
 }
 
 /// Collected file metadata ready for extraction
@@ -266,12 +300,11 @@ fn run_index_codebase(
     }
 
     let mut stats = IndexingStats::default();
-    let entries_to_extract = collect_entries(db, config, &root, mode, &mut stats)?;
-    let extracted = extract_entries(entries_to_extract, config.show_progress);
+    let candidates = collect_candidates(db, config, &root, mode, &mut stats)?;
 
     match mode {
-        IndexMode::Incremental => store_incremental_index(db, config, extracted, &mut stats)?,
-        IndexMode::FullBuild => store_full_index(db, config, extracted, &mut stats)?,
+        IndexMode::Incremental => store_incremental_index(db, config, candidates, &mut stats)?,
+        IndexMode::FullBuild => store_full_index(db, config, candidates, &mut stats)?,
     }
 
     info!(
@@ -282,14 +315,22 @@ fn run_index_codebase(
     Ok(stats)
 }
 
+/// Walk the tree and list the files worth looking at, *without* reading any of
+/// them.
+///
+/// Collecting only metadata here is what lets indexing stream: the walk used
+/// to read every file into a `Vec<FileEntry>` and hand the whole repository's
+/// contents to the extractor at once, so peak memory was the source tree plus
+/// the entire graph. Now the walk is cheap and the contents are pulled in a
+/// chunk at a time.
 #[cfg(feature = "sqlite")]
-fn collect_entries(
+fn collect_candidates(
     db: &Database,
     config: &IndexConfig,
     root: &Path,
     mode: IndexMode,
     stats: &mut IndexingStats,
-) -> Result<Vec<FileEntry>> {
+) -> Result<Vec<Candidate>> {
     let mut walker = WalkBuilder::new(root);
     walker
         .hidden(false)
@@ -297,7 +338,7 @@ fn collect_entries(
         .git_global(config.respect_gitignore)
         .git_exclude(config.respect_gitignore);
 
-    let mut entries_to_extract = Vec::new();
+    let mut candidates = Vec::new();
     let scan_pb = if config.show_progress {
         let pb = ProgressBar::new_spinner();
         pb.set_prefix("Scanning");
@@ -358,34 +399,27 @@ fn collect_entries(
             continue;
         }
 
+        let metadata = entry.metadata().ok();
+        let size = metadata.as_ref().map(|m| m.len()).unwrap_or(0);
+
         // Check size from the directory entry, before reading: the point is
         // to not pull a 40 MB bundle into memory in the first place.
-        if config.max_file_bytes > 0 {
-            let size = entry.metadata().ok().map(|m| m.len()).unwrap_or(0);
-            if size > config.max_file_bytes {
-                debug!(
-                    "Skipping {} ({} bytes exceeds max_file_bytes {})",
-                    path.display(),
-                    size,
-                    config.max_file_bytes
-                );
-                stats.skipped_too_large += 1;
-                continue;
-            }
+        if config.max_file_bytes > 0 && size > config.max_file_bytes {
+            debug!(
+                "Skipping {} ({} bytes exceeds max_file_bytes {})",
+                path.display(),
+                size,
+                config.max_file_bytes
+            );
+            stats.skipped_too_large += 1;
+            continue;
         }
 
-        let content = match std::fs::read_to_string(path) {
-            Ok(c) => c,
-            Err(err) => {
-                debug!("Failed to read {}: {}", path.display(), err);
-                stats.errors += 1;
-                continue;
-            }
-        };
-
-        let mut hasher = Sha256::new();
-        hasher.update(content.as_bytes());
-        let content_hash = hex::encode(hasher.finalize());
+        let modified_at = metadata
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
 
         // Key the index on forward slashes everywhere. `display()` emits the
         // platform separator, which on Windows stored `src\foo.rs` while every
@@ -400,87 +434,137 @@ fn collect_entries(
                 .to_string(),
         );
 
-        if matches!(mode, IndexMode::Incremental) && !db.needs_reindex(&rel_path, &content_hash)? {
-            debug!("Skipping unchanged file: {}", rel_path);
+        // An explicit file list drops everything else before it is read.
+        if let Some(only) = &config.only_files {
+            if !only.iter().any(|f| f == &rel_path) {
+                continue;
+            }
+        }
+
+        // Incremental only: if size and mtime both match what was indexed,
+        // take the file as unchanged without reading or hashing it. Reading
+        // and SHA-256ing every file on every pass is the dominant cost of a
+        // no-op incremental run, and this skips almost all of it. The content
+        // hash still decides for anything whose stat differs, so an edit that
+        // preserves both size and mtime is the only thing this can miss —
+        // set `trust_file_stat = false` (or run `reindex`) if that matters.
+        if matches!(mode, IndexMode::Incremental)
+            && config.trust_file_stat
+            && db.matches_indexed_stat(&rel_path, size, modified_at)?
+        {
+            debug!("Skipping unchanged file (stat): {}", rel_path);
             stats.skipped += 1;
             continue;
         }
 
-        let modified_at = entry
-            .metadata()
-            .ok()
-            .and_then(|m| m.modified().ok())
-            .and_then(|t| t.duration_since(SystemTime::UNIX_EPOCH).ok())
-            .map(|d| d.as_secs() as i64)
-            .unwrap_or(0);
-
-        scan_pb.set_message(format!("{} files queued", entries_to_extract.len() + 1));
-        entries_to_extract.push(FileEntry {
+        scan_pb.set_message(format!("{} files queued", candidates.len() + 1));
+        candidates.push(Candidate {
+            path: path.to_path_buf(),
             rel_path,
-            content,
-            content_hash,
             language,
             modified_at,
         });
     }
 
     scan_pb.finish_and_clear();
-    Ok(entries_to_extract)
+    Ok(candidates)
 }
 
+/// Read, hash and extract one chunk of candidates in parallel.
+///
+/// Returns only the files that actually need storing: anything whose content
+/// hash matches the index is counted as skipped and dropped here, so it never
+/// reaches the store phase.
 #[cfg(feature = "sqlite")]
-fn extract_entries(entries_to_extract: Vec<FileEntry>, show_progress: bool) -> Vec<ExtractedFile> {
-    let parse_pb = if show_progress {
-        let pb = ProgressBar::new(entries_to_extract.len() as u64);
-        pb.set_style(
-            ProgressStyle::with_template(
-                "  {prefix:<10} [{bar:40.cyan/blue}] {pos:>5}/{len:<5} {msg}",
-            )
-            .unwrap()
-            .progress_chars("=> "),
-        );
-        pb.set_prefix("Parsing");
-        pb
-    } else {
-        ProgressBar::hidden()
-    };
+fn extract_chunk(
+    db: &Database,
+    chunk: &[Candidate],
+    mode: IndexMode,
+    stats: &mut IndexingStats,
+    progress: &ProgressBar,
+) -> Result<Vec<ExtractedFile>> {
+    // Read and hash in parallel; no database access in here.
+    let read: Vec<Option<FileEntry>> = chunk
+        .par_iter()
+        .map(|candidate| {
+            let content = std::fs::read_to_string(&candidate.path).ok()?;
+            let mut hasher = Sha256::new();
+            hasher.update(content.as_bytes());
+            Some(FileEntry {
+                rel_path: candidate.rel_path.clone(),
+                content,
+                content_hash: hex::encode(hasher.finalize()),
+                language: candidate.language,
+                modified_at: candidate.modified_at,
+            })
+        })
+        .collect();
 
-    let extracted: Vec<ExtractedFile> = entries_to_extract
+    // Decide what still needs indexing. Sequential because `Database` is not
+    // `Sync`, but it is only a hash comparison per file.
+    let mut to_extract = Vec::new();
+    for (candidate, entry) in chunk.iter().zip(read) {
+        match entry {
+            Some(entry) => {
+                if matches!(mode, IndexMode::Incremental)
+                    && !db.needs_reindex(&entry.rel_path, &entry.content_hash)?
+                {
+                    debug!("Skipping unchanged file: {}", entry.rel_path);
+                    stats.skipped += 1;
+                    continue;
+                }
+                to_extract.push(entry);
+            }
+            None => {
+                debug!("Failed to read {}", candidate.path.display());
+                stats.errors += 1;
+            }
+        }
+    }
+
+    // Parse in parallel.
+    let extracted: Vec<ExtractedFile> = to_extract
         .into_par_iter()
         .map(|entry| {
             let mut extractor = Extractor::new();
             let result = extractor.extract_file(&entry.rel_path, &entry.content);
-            parse_pb.inc(1);
+            progress.inc(1);
             ExtractedFile { entry, result }
         })
         .collect();
-    parse_pb.finish_and_clear();
-    extracted
+    Ok(extracted)
 }
 
+/// Index in bounded chunks: read, parse and store `INDEX_CHUNK_SIZE` files at
+/// a time so peak memory stays proportional to the chunk, not to the
+/// repository.
 #[cfg(feature = "sqlite")]
 fn store_incremental_index(
     db: &mut Database,
     config: &IndexConfig,
-    extracted: Vec<ExtractedFile>,
+    candidates: Vec<Candidate>,
     stats: &mut IndexingStats,
 ) -> Result<()> {
-    let total = extracted.len();
+    let progress = make_store_progress_bar(candidates.len(), config.show_progress);
     db.begin_transaction()?;
     db.disable_fts_automerge()?;
 
-    let store_pb = make_store_progress_bar(total, config.show_progress);
-    for (i, extracted_file) in extracted.into_iter().enumerate() {
-        store_extracted_file(db, extracted_file, stats, true, true)?;
-        store_pb.inc(1);
-
-        let is_last = i + 1 == total;
-        if (i + 1) % CHECKPOINT_INTERVAL == 0 && !is_last {
+    let mut since_checkpoint = 0usize;
+    for chunk in candidates.chunks(INDEX_CHUNK_SIZE) {
+        let extracted = extract_chunk(db, chunk, IndexMode::Incremental, stats, &progress)?;
+        for extracted_file in extracted {
+            store_extracted_file(db, extracted_file, stats, true, true)?;
+            since_checkpoint += 1;
+        }
+        // Keep the WAL bounded without wrapping the whole run in one
+        // transaction.
+        if since_checkpoint >= CHECKPOINT_INTERVAL {
             db.commit()?;
             db.begin_transaction()?;
+            since_checkpoint = 0;
         }
     }
-    store_pb.finish_and_clear();
+    progress.finish_and_clear();
 
     db.optimize_fts()?;
     resolve_references_if_needed(db, config, stats)?;
@@ -493,17 +577,19 @@ fn store_incremental_index(
 fn store_full_index(
     db: &mut Database,
     config: &IndexConfig,
-    extracted: Vec<ExtractedFile>,
+    candidates: Vec<Candidate>,
     stats: &mut IndexingStats,
 ) -> Result<()> {
+    let progress = make_store_progress_bar(candidates.len(), config.show_progress);
     db.begin_transaction()?;
 
-    let store_pb = make_store_progress_bar(extracted.len(), config.show_progress);
-    for extracted_file in extracted {
-        store_extracted_file(db, extracted_file, stats, false, false)?;
-        store_pb.inc(1);
+    for chunk in candidates.chunks(INDEX_CHUNK_SIZE) {
+        let extracted = extract_chunk(db, chunk, IndexMode::FullBuild, stats, &progress)?;
+        for extracted_file in extracted {
+            store_extracted_file(db, extracted_file, stats, false, false)?;
+        }
     }
-    store_pb.finish_and_clear();
+    progress.finish_and_clear();
 
     resolve_references_if_needed(db, config, stats)?;
     db.disable_fts_automerge()?;
