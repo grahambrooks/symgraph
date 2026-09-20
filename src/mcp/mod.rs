@@ -36,7 +36,7 @@ pub use types::*;
 #[cfg(feature = "server")]
 use std::sync::atomic::{AtomicBool, Ordering};
 #[cfg(feature = "server")]
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex};
 
 #[cfg(feature = "server")]
 use rmcp::{
@@ -48,38 +48,21 @@ use rmcp::{
 #[cfg(feature = "server")]
 use crate::db::Database;
 
-/// Wrapper around `Database` that opts in to `Sync`.
+/// The shared database handle used by every session of a running server.
 ///
-/// `rusqlite::Connection` is `!Sync` because it uses `RefCell` internally.
-/// We wrap it in an `RwLock` so that access is serialized at the lock level.
+/// A `Mutex` rather than an `RwLock`, which lets the `unsafe impl Sync` this
+/// previously needed go away entirely. `rusqlite::Connection` is `Send` but
+/// `!Sync`, because it keeps a `RefCell` statement cache; an `RwLock` hands
+/// out `&Database` to several readers at once, and two of them calling
+/// `prepare_cached` is a data race on that `RefCell` — undefined behaviour,
+/// not merely a panic. The old comment credited SQLite's serialized mode for
+/// safety, but that protects the C library, not the Rust-side cache.
 ///
-/// NOTE: concurrent read-locks are technically unsound with raw `RefCell`,
-/// but the underlying SQLite C library is compiled with `SQLITE_THREADSAFE=1`
-/// (serialized mode) by default, which serializes all access at the C level.
-/// If true concurrent reader parallelism is needed in the future, switch to a
-/// connection pool (e.g., `r2d2_sqlite`).
+/// `Mutex<Database>` is `Sync` on its own terms because `Database: Send`, and
+/// nothing is lost: SQLite serializes access anyway. Real reader parallelism
+/// needs a connection pool (e.g. `r2d2_sqlite`), which is a separate change.
 #[cfg(feature = "server")]
-pub struct SyncDatabase(pub Database);
-
-// SAFETY: All `Database` access is mediated by an `RwLock`. The underlying
-// SQLite library provides its own thread-safety guarantees in serialized mode.
-#[cfg(feature = "server")]
-unsafe impl Sync for SyncDatabase {}
-
-#[cfg(feature = "server")]
-impl std::ops::Deref for SyncDatabase {
-    type Target = Database;
-    fn deref(&self) -> &Database {
-        &self.0
-    }
-}
-
-#[cfg(feature = "server")]
-impl std::ops::DerefMut for SyncDatabase {
-    fn deref_mut(&mut self) -> &mut Database {
-        &mut self.0
-    }
-}
+pub type SharedDatabase = Arc<Mutex<Database>>;
 
 /// MCP server handler for symgraph
 #[cfg(feature = "server")]
@@ -87,7 +70,7 @@ impl std::ops::DerefMut for SyncDatabase {
 pub struct SymgraphHandler {
     #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
-    db: Arc<RwLock<SyncDatabase>>,
+    db: SharedDatabase,
     project_root: String,
     /// Flag indicating whether a background reindex is currently in progress.
     is_reindexing: Arc<AtomicBool>,
@@ -99,7 +82,7 @@ impl SymgraphHandler {
     pub fn new(db: Database, project_root: String) -> Self {
         Self {
             tool_router: Self::tool_router(),
-            db: Arc::new(RwLock::new(SyncDatabase(db))),
+            db: Arc::new(Mutex::new(db)),
             project_root,
             is_reindexing: Arc::new(AtomicBool::new(false)),
         }
@@ -113,7 +96,7 @@ impl SymgraphHandler {
     /// pile up on the write lock. The guard is only a guard when every handler
     /// sharing a database shares the flag.
     pub fn new_shared(
-        db: Arc<RwLock<SyncDatabase>>,
+        db: SharedDatabase,
         project_root: String,
         is_reindexing: Arc<AtomicBool>,
     ) -> Self {
@@ -125,32 +108,39 @@ impl SymgraphHandler {
         }
     }
 
-    /// Acquire a read lock on the database and run a closure.
+    /// Run a database-backed handler on the blocking pool.
     ///
-    /// Returns `Result` so a failure reaches the client as an MCP error with
-    /// `isError` set. Returning `format!("Error: {e}")` as a *successful* tool
-    /// result, as this used to, leaves a caller no way to tell a failed call
-    /// from a tool that legitimately produced that text.
-    fn with_db<F>(&self, f: F) -> Result<String, String>
+    /// Every handler does synchronous SQLite work, and some of it — a coupling
+    /// score over a large repo, a `git blame` on a slow filesystem — takes
+    /// seconds. Running that directly in an async fn blocks a tokio worker
+    /// thread, and over HTTP that stalls every other session too. The
+    /// `spawn_blocking` pool exists for exactly this.
+    ///
+    /// The lock is taken *inside* the closure so it is acquired and released
+    /// on the blocking thread, never held across an await point.
+    async fn blocking_db<F>(&self, f: F) -> Result<String, String>
     where
-        F: FnOnce(&Database) -> Result<String, String>,
+        F: FnOnce(&Database) -> Result<String, String> + Send + 'static,
     {
-        match self.db.read() {
-            Ok(guard) => f(&guard),
-            Err(e) => Err(format!("database lock poisoned: {}", e)),
-        }
+        let db = Arc::clone(&self.db);
+        tokio::task::spawn_blocking(move || {
+            let guard = db
+                .lock()
+                .map_err(|e| format!("database lock poisoned: {}", e))?;
+            f(&guard)
+        })
+        .await
+        .map_err(|e| format!("tool task failed: {}", e))?
     }
 
-    /// Acquire a write lock on the database and run a closure.
-    #[allow(dead_code)]
-    fn with_db_mut<F>(&self, f: F) -> Result<String, String>
+    /// Run work that needs no database access on the blocking pool.
+    async fn blocking<F>(f: F) -> Result<String, String>
     where
-        F: FnOnce(&mut Database) -> Result<String, String>,
+        F: FnOnce() -> Result<String, String> + Send + 'static,
     {
-        match self.db.write() {
-            Ok(mut guard) => f(&mut guard),
-            Err(e) => Err(format!("database lock poisoned: {}", e)),
-        }
+        tokio::task::spawn_blocking(f)
+            .await
+            .map_err(|e| format!("tool task failed: {}", e))?
     }
 
     /// Build focused context for a specific task
@@ -158,12 +148,13 @@ impl SymgraphHandler {
         name = "symgraph-context",
         description = "Build focused code context for a specific task. Returns entry points, related symbols, and code snippets."
     )]
-    fn symgraph_context(
+    async fn symgraph_context(
         &self,
         Parameters(req): Parameters<ContextRequest>,
     ) -> Result<String, String> {
-        let project_root = &self.project_root;
-        self.with_db(|db| handlers::context::handle_context(db, project_root, &req))
+        let project_root = self.project_root.clone();
+        self.blocking_db(move |db| handlers::context::handle_context(db, &project_root, &req))
+            .await
     }
 
     /// Quick symbol search by name
@@ -171,11 +162,12 @@ impl SymgraphHandler {
         name = "symgraph-search",
         description = "Quick symbol search by name. Returns locations only (no code)."
     )]
-    fn symgraph_search(
+    async fn symgraph_search(
         &self,
         Parameters(req): Parameters<SearchRequest>,
     ) -> Result<String, String> {
-        self.with_db(|db| handlers::search::handle_search(db, &req))
+        self.blocking_db(move |db| handlers::search::handle_search(db, &req))
+            .await
     }
 
     /// Find all callers of a symbol
@@ -183,11 +175,12 @@ impl SymgraphHandler {
         name = "symgraph-callers",
         description = "Find all functions/methods that call a specific symbol."
     )]
-    fn symgraph_callers(
+    async fn symgraph_callers(
         &self,
         Parameters(req): Parameters<SymbolRequest>,
     ) -> Result<String, String> {
-        self.with_db(|db| handlers::graph::handle_callers(db, &req))
+        self.blocking_db(move |db| handlers::graph::handle_callers(db, &req))
+            .await
     }
 
     /// Find all callees of a symbol
@@ -195,11 +188,12 @@ impl SymgraphHandler {
         name = "symgraph-callees",
         description = "Find all functions/methods that a specific symbol calls."
     )]
-    fn symgraph_callees(
+    async fn symgraph_callees(
         &self,
         Parameters(req): Parameters<SymbolRequest>,
     ) -> Result<String, String> {
-        self.with_db(|db| handlers::graph::handle_callees(db, &req))
+        self.blocking_db(move |db| handlers::graph::handle_callees(db, &req))
+            .await
     }
 
     /// Analyze the impact of changing a symbol
@@ -207,12 +201,13 @@ impl SymgraphHandler {
         name = "symgraph-impact",
         description = "Analyze the impact of changing a symbol. Breaks inbound coupling down by edge kind (method-call/contract, field-read/model, field-write/intrusive), counts inbound modules, and (with churn=true) annotates volatility. Supports format='json'."
     )]
-    fn symgraph_impact(
+    async fn symgraph_impact(
         &self,
         Parameters(req): Parameters<ImpactRequest>,
     ) -> Result<String, String> {
         let project_root = self.project_root.clone();
-        self.with_db(|db| handlers::graph::handle_impact(db, &project_root, &req))
+        self.blocking_db(move |db| handlers::graph::handle_impact(db, &project_root, &req))
+            .await
     }
 
     /// Get the full source code definition of a symbol
@@ -220,12 +215,13 @@ impl SymgraphHandler {
         name = "symgraph-definition",
         description = "Get the full source code of a symbol. Returns the complete definition with surrounding context lines."
     )]
-    fn symgraph_definition(
+    async fn symgraph_definition(
         &self,
         Parameters(req): Parameters<DefinitionRequest>,
     ) -> Result<String, String> {
-        let project_root = &self.project_root;
-        self.with_db(|db| handlers::symbol::handle_definition(db, project_root, &req))
+        let project_root = self.project_root.clone();
+        self.blocking_db(move |db| handlers::symbol::handle_definition(db, &project_root, &req))
+            .await
     }
 
     /// List all symbols in a specific file
@@ -233,8 +229,12 @@ impl SymgraphHandler {
         name = "symgraph-file",
         description = "List all symbols defined in a specific file. Returns functions, classes, methods, etc."
     )]
-    fn symgraph_file(&self, Parameters(req): Parameters<FileRequest>) -> Result<String, String> {
-        self.with_db(|db| handlers::file::handle_file(db, &req))
+    async fn symgraph_file(
+        &self,
+        Parameters(req): Parameters<FileRequest>,
+    ) -> Result<String, String> {
+        self.blocking_db(move |db| handlers::file::handle_file(db, &req))
+            .await
     }
 
     /// Find all references to a symbol
@@ -242,11 +242,12 @@ impl SymgraphHandler {
         name = "symgraph-references",
         description = "Find all references to a symbol including calls, imports, type usages, and other relationships."
     )]
-    fn symgraph_references(
+    async fn symgraph_references(
         &self,
         Parameters(req): Parameters<SymbolRequest>,
     ) -> Result<String, String> {
-        self.with_db(|db| handlers::symbol::handle_references(db, &req))
+        self.blocking_db(move |db| handlers::symbol::handle_references(db, &req))
+            .await
     }
 
     /// Trigger background reindexing (runs in background, returns immediately)
@@ -274,7 +275,7 @@ impl SymgraphHandler {
         let file_count_hint = req.files.as_ref().map(|f| f.len());
 
         tokio::task::spawn_blocking(move || {
-            let result = match db.write() {
+            let result = match db.lock() {
                 Ok(mut guard) => {
                     match handlers::reindex::handle_reindex(&mut guard, &project_root, &req) {
                         Ok(output) => output,
@@ -304,8 +305,12 @@ impl SymgraphHandler {
         name = "symgraph-node",
         description = "Get detailed information about a specific code symbol."
     )]
-    fn symgraph_node(&self, Parameters(req): Parameters<SymbolRequest>) -> Result<String, String> {
-        self.with_db(|db| handlers::symbol::handle_node(db, &req))
+    async fn symgraph_node(
+        &self,
+        Parameters(req): Parameters<SymbolRequest>,
+    ) -> Result<String, String> {
+        self.blocking_db(move |db| handlers::symbol::handle_node(db, &req))
+            .await
     }
 
     /// Get index statistics
@@ -313,15 +318,16 @@ impl SymgraphHandler {
         name = "symgraph-status",
         description = "Get the status of the symgraph index. Shows statistics about indexed files, symbols, and relationships."
     )]
-    fn symgraph_status(&self) -> Result<String, String> {
+    async fn symgraph_status(&self) -> Result<String, String> {
         let reindexing = self.is_reindexing.load(Ordering::SeqCst);
-        self.with_db(|db| {
+        self.blocking_db(move |db| {
             let mut output = handlers::status::handle_status(db)?;
             if reindexing {
                 output.push_str("\n**Reindex:** In progress\n");
             }
             Ok(output)
         })
+        .await
     }
 
     /// Get class/module hierarchy
@@ -329,11 +335,12 @@ impl SymgraphHandler {
         name = "symgraph-hierarchy",
         description = "Get the hierarchy of a symbol showing parent/child contains relationships (e.g., class contains methods)."
     )]
-    fn symgraph_hierarchy(
+    async fn symgraph_hierarchy(
         &self,
         Parameters(req): Parameters<SymbolRequest>,
     ) -> Result<String, String> {
-        self.with_db(|db| handlers::hierarchy::handle_hierarchy(db, &req))
+        self.blocking_db(move |db| handlers::hierarchy::handle_hierarchy(db, &req))
+            .await
     }
 
     /// Find call path between two symbols
@@ -341,8 +348,12 @@ impl SymgraphHandler {
         name = "symgraph-path",
         description = "Find call paths from one symbol to another. Shows how function A reaches function B through intermediate calls."
     )]
-    fn symgraph_path(&self, Parameters(req): Parameters<PathRequest>) -> Result<String, String> {
-        self.with_db(|db| handlers::path::handle_path(db, &req))
+    async fn symgraph_path(
+        &self,
+        Parameters(req): Parameters<PathRequest>,
+    ) -> Result<String, String> {
+        self.blocking_db(move |db| handlers::path::handle_path(db, &req))
+            .await
     }
 
     /// Find unused/dead code
@@ -350,11 +361,12 @@ impl SymgraphHandler {
         name = "symgraph-unused",
         description = "Find unused symbols (functions, methods, classes) with no incoming references. Helps identify dead code."
     )]
-    fn symgraph_unused(
+    async fn symgraph_unused(
         &self,
         Parameters(req): Parameters<FormatRequest>,
     ) -> Result<String, String> {
-        self.with_db(|db| handlers::unused::handle_unused(db, &req))
+        self.blocking_db(move |db| handlers::unused::handle_unused(db, &req))
+            .await
     }
 
     /// Find implementations of an interface/trait
@@ -362,11 +374,12 @@ impl SymgraphHandler {
         name = "symgraph-implementations",
         description = "Find all classes/structs that implement an interface or extend a trait/class."
     )]
-    fn symgraph_implementations(
+    async fn symgraph_implementations(
         &self,
         Parameters(req): Parameters<SymbolRequest>,
     ) -> Result<String, String> {
-        self.with_db(|db| handlers::implementations::handle_implementations(db, &req))
+        self.blocking_db(move |db| handlers::implementations::handle_implementations(db, &req))
+            .await
     }
 
     /// Analyze impact of code changes
@@ -374,12 +387,15 @@ impl SymgraphHandler {
         name = "symgraph-diff-impact",
         description = "Analyze the impact of changing a specific region of code. Shows directly modified symbols and their callers."
     )]
-    fn symgraph_diff_impact(
+    async fn symgraph_diff_impact(
         &self,
         Parameters(req): Parameters<DiffImpactRequest>,
     ) -> Result<String, String> {
-        let project_root = &self.project_root;
-        self.with_db(|db| handlers::diff_impact::handle_diff_impact(db, project_root, &req))
+        let project_root = self.project_root.clone();
+        self.blocking_db(move |db| {
+            handlers::diff_impact::handle_diff_impact(db, &project_root, &req)
+        })
+        .await
     }
 
     /// Git blame a symbol's definition lines
@@ -387,9 +403,13 @@ impl SymgraphHandler {
         name = "symgraph-blame",
         description = "Run git blame over the lines of a symbol's definition. Shows who last changed each line and when."
     )]
-    fn symgraph_blame(&self, Parameters(req): Parameters<BlameRequest>) -> Result<String, String> {
-        let project_root = &self.project_root;
-        self.with_db(|db| handlers::blame::handle_blame(db, project_root, &req))
+    async fn symgraph_blame(
+        &self,
+        Parameters(req): Parameters<BlameRequest>,
+    ) -> Result<String, String> {
+        let project_root = self.project_root.clone();
+        self.blocking_db(move |db| handlers::blame::handle_blame(db, &project_root, &req))
+            .await
     }
 
     /// Git churn / change-frequency analysis
@@ -397,9 +417,15 @@ impl SymgraphHandler {
         name = "symgraph-churn",
         description = "Show file change frequency (churn) over a recent window. Highlights hotspots most likely to harbor bugs."
     )]
-    fn symgraph_churn(&self, Parameters(req): Parameters<ChurnRequest>) -> Result<String, String> {
+    async fn symgraph_churn(
+        &self,
+        Parameters(req): Parameters<ChurnRequest>,
+    ) -> Result<String, String> {
         let project_root = self.project_root.clone();
-        handlers::churn::handle_churn(&project_root, &req)
+        // No database access, but it still shells out to git — which is
+        // exactly the kind of multi-second blocking call the reactor must not
+        // be asked to wait on.
+        Self::blocking(move || handlers::churn::handle_churn(&project_root, &req)).await
     }
 
     /// Module dependency graph: fan-in/out and cycles at a chosen boundary
@@ -407,12 +433,15 @@ impl SymgraphHandler {
         name = "symgraph-module-graph",
         description = "Aggregate the resolved graph to a file/dir/module boundary. Returns the dependency adjacency list with edge counts, fan-in/fan-out per node, and detected cycles (SCCs). Supports format='json'. Reindex after edits."
     )]
-    fn symgraph_module_graph(
+    async fn symgraph_module_graph(
         &self,
         Parameters(req): Parameters<ModuleGraphRequest>,
     ) -> Result<String, String> {
         let project_root = self.project_root.clone();
-        self.with_db(|db| handlers::module_graph::handle_module_graph(db, &project_root, &req))
+        self.blocking_db(move |db| {
+            handlers::module_graph::handle_module_graph(db, &project_root, &req)
+        })
+        .await
     }
 
     /// Coupling score: strength × distance × volatility per module pair
@@ -420,12 +449,15 @@ impl SymgraphHandler {
         name = "symgraph-coupling-score",
         description = "Rank module-pair coupling on strength (contract/model/intrusive) × distance × volatility (churn). Produces the hotspots table directly. Supports format='json'. Reindex after edits."
     )]
-    fn symgraph_coupling_score(
+    async fn symgraph_coupling_score(
         &self,
         Parameters(req): Parameters<ModuleGraphRequest>,
     ) -> Result<String, String> {
         let project_root = self.project_root.clone();
-        self.with_db(|db| handlers::module_graph::handle_coupling_score(db, &project_root, &req))
+        self.blocking_db(move |db| {
+            handlers::module_graph::handle_coupling_score(db, &project_root, &req)
+        })
+        .await
     }
 
     /// God-struct / hub report: structs ranked by architectural debt
@@ -433,12 +465,13 @@ impl SymgraphHandler {
         name = "symgraph-god-struct",
         description = "Rank structs/classes by pub-field count × inbound-reference count × churn — the 'where is the architectural debt' entry point. Supports format='json'."
     )]
-    fn symgraph_god_struct(
+    async fn symgraph_god_struct(
         &self,
         Parameters(req): Parameters<GodStructRequest>,
     ) -> Result<String, String> {
         let project_root = self.project_root.clone();
-        self.with_db(|db| handlers::god_struct::handle_god_struct(db, &project_root, &req))
+        self.blocking_db(move |db| handlers::god_struct::handle_god_struct(db, &project_root, &req))
+            .await
     }
 
     /// Dispatch sites: files that match/switch on an enum's members
@@ -446,11 +479,12 @@ impl SymgraphHandler {
         name = "symgraph-dispatch-sites",
         description = "Find every file that dispatches on a member of the given enum (control coupling). Verifies completeness before a trait/strategy refactor. Supports format='json'."
     )]
-    fn symgraph_dispatch_sites(
+    async fn symgraph_dispatch_sites(
         &self,
         Parameters(req): Parameters<DispatchSitesRequest>,
     ) -> Result<String, String> {
-        self.with_db(|db| handlers::dispatch_sites::handle_dispatch_sites(db, &req))
+        self.blocking_db(move |db| handlers::dispatch_sites::handle_dispatch_sites(db, &req))
+            .await
     }
 }
 
@@ -490,7 +524,7 @@ mod tests {
     /// clients could kick off concurrent full rebuilds.
     #[test]
     fn shared_handlers_share_the_reindex_guard() {
-        let db = Arc::new(RwLock::new(SyncDatabase(Database::in_memory().unwrap())));
+        let db = Arc::new(Mutex::new(Database::in_memory().unwrap()));
         let flag = Arc::new(AtomicBool::new(false));
 
         let session_a = SymgraphHandler::new_shared(db.clone(), ".".to_string(), flag.clone());
@@ -543,7 +577,12 @@ mod tests {
     #[test]
     fn handler_errors_propagate_rather_than_stringify() {
         let handler = SymgraphHandler::new(Database::in_memory().unwrap(), ".".to_string());
-        let result = handler.with_db(|_db| Err("something broke".to_string()));
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let result =
+            runtime.block_on(handler.blocking_db(|_db| Err("something broke".to_string())));
         assert_eq!(result, Err("something broke".to_string()));
     }
 }

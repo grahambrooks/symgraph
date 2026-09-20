@@ -101,8 +101,29 @@ impl<'a> ContextBuilder<'a> {
         })
     }
 
-    /// Find entry points for a task by searching symbol names
+    /// Find entry points for a task.
+    ///
+    /// The task is free text — "fix the login bug", not a symbol name — so the
+    /// first attempt is the semantic index: bm25 over camelCase/snake_case
+    /// identifier fragments plus docstrings, which is built for exactly this
+    /// shape of query. The keyword walk below is the fallback for when that
+    /// returns nothing (an unindexed vocabulary, or a task phrased entirely in
+    /// words that appear in no identifier).
+    ///
+    /// This tool used to go straight to the keyword walk, leaving the semantic
+    /// index reachable only through `symgraph-search --semantic` — the weakest
+    /// retrieval on the tool whose whole job is retrieval.
     fn find_entry_points(&self, task: &str, limit: u32) -> Result<Vec<Node>> {
+        let semantic = self.db.semantic_search(task, limit)?;
+        if !semantic.is_empty() {
+            return Ok(semantic);
+        }
+        self.find_entry_points_by_keyword(task, limit)
+    }
+
+    /// Keyword-walk fallback: split the task into non-stop-words and prefix
+    /// search each one.
+    fn find_entry_points_by_keyword(&self, task: &str, limit: u32) -> Result<Vec<Node>> {
         let mut entry_points = Vec::new();
 
         // Extract keywords from the task description

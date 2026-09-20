@@ -84,6 +84,14 @@ pub struct IndexVersion {
     pub built_at: i64,
 }
 
+/// Which references a resolution pass handles. Imports go first because the
+/// file scope they establish is what the second pass resolves against.
+#[derive(Debug, Clone, Copy)]
+enum Phase {
+    Imports,
+    Rest,
+}
+
 /// How far the index can be trusted, as opposed to how large it is.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct IndexHealth {
@@ -167,14 +175,21 @@ pub struct Database {
     path: Option<PathBuf>,
 }
 
-/// A resolved edge reduced to its source/target file paths and kind — the
-/// raw material for folding the graph to a module/file boundary.
+/// Resolved edges reduced to their source/target file paths and kind, with
+/// identical rows collapsed into a count — the raw material for folding the
+/// graph to a module/file boundary.
+///
+/// Aggregated rather than one row per edge because the consumers only ever
+/// count by `(source_file, target_file, kind)`. On symgraph's own index that
+/// is 559 rows instead of 7246, and the ratio grows with the codebase.
 #[derive(Debug, Clone)]
 pub struct EdgeEndpoint {
     pub source_file: String,
     pub target_file: String,
     pub kind: EdgeKind,
     pub detail: Option<String>,
+    /// How many individual edges this row stands for.
+    pub count: u32,
 }
 
 impl Database {
@@ -417,6 +432,24 @@ impl Database {
         Ok(result)
     }
 
+    /// Whether the indexed record for `path` already has this exact size and
+    /// mtime — in which case the file can be taken as unchanged without
+    /// reading it.
+    ///
+    /// A cheap pre-filter for [`Database::needs_reindex`], which is
+    /// authoritative but needs the file's contents to compute a hash.
+    pub fn matches_indexed_stat(&self, path: &str, size: u64, modified_at: i64) -> Result<bool> {
+        let matched: Option<i64> = self
+            .conn
+            .query_row(
+                "SELECT 1 FROM files WHERE path = ?1 AND size = ?2 AND modified_at = ?3",
+                params![path, size as i64, modified_at],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(matched.is_some())
+    }
+
     /// Check if a file needs reindexing
     pub fn needs_reindex(&self, path: &str, content_hash: &str) -> Result<bool> {
         match self.get_file(path)? {
@@ -649,17 +682,23 @@ impl Database {
         Ok(nodes)
     }
 
-    /// Get all resolved edges reduced to their source/target file paths.
+    /// Resolved edges folded to file pairs, aggregated in SQL.
     ///
-    /// This is the bulk-edge accessor used to fold the graph to a file / dir /
-    /// module boundary for coupling analysis. Self-edges (same source and
-    /// target file) are kept; callers filter them out as needed.
+    /// The bulk-edge accessor used to fold the graph to a file / dir / module
+    /// boundary for coupling analysis. Self-edges (same source and target
+    /// file) are kept; callers filter them out as needed.
+    ///
+    /// The `GROUP BY` is what keeps this from materialising the whole edge
+    /// table in memory on every module-graph and coupling-score call. It is
+    /// lossless for the consumers, which count rather than inspect
+    /// individual edges.
     pub fn get_edge_endpoints(&self) -> Result<Vec<EdgeEndpoint>> {
         let mut stmt = self.conn.prepare(
-            "SELECT s.file_path, t.file_path, e.kind, e.detail \
+            "SELECT s.file_path, t.file_path, e.kind, e.detail, COUNT(*) \
              FROM edges e \
              JOIN nodes s ON e.source_id = s.id \
-             JOIN nodes t ON e.target_id = t.id",
+             JOIN nodes t ON e.target_id = t.id \
+             GROUP BY s.file_path, t.file_path, e.kind, e.detail",
         )?;
         let rows = stmt.query_map([], |row| {
             Ok(EdgeEndpoint {
@@ -667,6 +706,7 @@ impl Database {
                 target_file: row.get(1)?,
                 kind: EdgeKind::parse(&row.get::<_, String>(2)?).unwrap_or(EdgeKind::References),
                 detail: row.get(3)?,
+                count: row.get::<_, i64>(4)? as u32,
             })
         })?;
         let mut out = Vec::new();
@@ -1003,123 +1043,156 @@ impl Database {
         Ok(refs)
     }
 
-    /// Resolve references by matching names to nodes.
+    /// Resolve references by matching names to definitions.
     ///
-    /// Resolution prefers same-file matches first (lightweight import-aware
-    /// resolution) before falling back to global lookup. When the source node
-    /// is a test, an additional `Tests` edge is emitted alongside `Calls`
-    /// so that test→prod-code linkage is queryable.
+    /// Resolution is name-based, so a name carried by several definitions has
+    /// to be chosen between. The preference ladder, best first:
+    ///
+    /// 1. a definition in the *same file* as the reference;
+    /// 2. a definition in a file the referencing file **imports from**;
+    /// 3. any definition, in the standard preference order.
+    ///
+    /// Tier 2 is what makes this better than a guess. `a.rs` calling `new()`
+    /// almost always means the `new` on a type it imported, not the first
+    /// `new` in the repository — and imports are already extracted, so the
+    /// information was there to use.
+    ///
+    /// Import edges are themselves resolved references, so they are resolved
+    /// first, in their own pass, and the scope they define is then available
+    /// to everything else.
     pub fn resolve_references(&self) -> Result<u32> {
-        let refs = self.get_unresolved_refs()?;
-        let mut resolved = 0;
-
-        for uref in refs {
-            if let Some(target) =
-                self.find_target_preferring_file(&uref.reference_name, &uref.file_path)?
-            {
-                let edge = Edge::new(uref.source_node_id, target.id, uref.kind)
-                    .at(uref.file_path.clone(), uref.line, uref.column)
-                    .detail(uref.detail.clone());
-                self.insert_edge(&edge)?;
-                resolved += 1;
-
-                if uref.kind == EdgeKind::Calls {
-                    let source_is_test = self
-                        .conn
-                        .query_row(
-                            "SELECT is_test FROM nodes WHERE id = ?1",
-                            params![uref.source_node_id],
-                            |r| r.get::<_, bool>(0),
-                        )
-                        .unwrap_or(false);
-                    if source_is_test {
-                        let test_edge = Edge::new(uref.source_node_id, target.id, EdgeKind::Tests)
-                            .at(uref.file_path.clone(), uref.line, uref.column);
-                        self.insert_edge(&test_edge)?;
-                    }
-                }
-            }
-        }
-
-        // Clear resolved refs
-        self.conn.execute("DELETE FROM unresolved_refs", [])?;
-
-        Ok(resolved)
+        self.resolve_refs(None)
     }
 
     /// Resolve references only for specific files (scoped resolution).
     ///
-    /// This is more efficient than `resolve_references()` for incremental
-    /// reindexing — it only processes unresolved refs whose source node
-    /// belongs to one of the given files, and only deletes those refs
-    /// from the unresolved_refs table.
+    /// More efficient than [`Database::resolve_references`] for incremental
+    /// reindexing — it only considers refs originating in the given files.
     pub fn resolve_references_for_files(&self, files: &[String]) -> Result<u32> {
         if files.is_empty() {
             return Ok(0);
         }
+        self.resolve_refs(Some(files))
+    }
 
-        let mut resolved = 0;
+    /// The shared implementation behind both entry points.
+    fn resolve_refs(&self, only_files: Option<&[String]>) -> Result<u32> {
+        // Imports first: they establish the file scope every later tier uses.
+        let mut resolved = self.resolve_phase(only_files, Phase::Imports)?;
+        resolved += self.resolve_phase(only_files, Phase::Rest)?;
+        Ok(resolved)
+    }
 
-        for file_path in files {
-            let mut stmt = self.conn.prepare(
-                "SELECT source_node_id, reference_name, kind, file_path, line, column, detail \
-                 FROM unresolved_refs WHERE file_path = ?1",
-            )?;
+    /// Resolve one phase of references in a single set-based statement.
+    ///
+    /// This used to be a loop issuing three or four queries per reference,
+    /// which dominated indexing time on any real codebase. SQLite can express
+    /// the whole thing — including the preference ladder — as one INSERT.
+    fn resolve_phase(&self, only_files: Option<&[String]>, phase: Phase) -> Result<u32> {
+        self.rebuild_import_scope()?;
 
-            let refs: Vec<UnresolvedReference> = stmt
-                .query_map(params![file_path], |row| {
-                    Ok(UnresolvedReference {
-                        source_node_id: row.get(0)?,
-                        reference_name: row.get::<_, String>(1)?,
-                        kind: EdgeKind::parse(&row.get::<_, String>(2)?).unwrap_or(EdgeKind::Calls),
-                        file_path: row.get(3)?,
-                        line: row.get::<_, i64>(4)? as u32,
-                        column: row.get::<_, i64>(5)? as u32,
-                        detail: row.get(6)?,
-                    })
-                })?
-                .collect::<std::result::Result<Vec<_>, _>>()?;
+        let file_filter = match only_files {
+            Some(files) => format!(
+                " AND u.file_path IN ({})",
+                files
+                    .iter()
+                    .map(|f| format!("'{}'", f.replace('\'', "''")))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+            None => String::new(),
+        };
+        let kind_filter = match phase {
+            Phase::Imports => " AND u.kind = 'imports'",
+            Phase::Rest => " AND u.kind <> 'imports'",
+        };
 
-            for uref in &refs {
-                if let Some(target) =
-                    self.find_target_preferring_file(&uref.reference_name, &uref.file_path)?
-                {
-                    let edge = Edge::new(uref.source_node_id, target.id, uref.kind)
-                        .at(uref.file_path.clone(), uref.line, uref.column)
-                        .detail(uref.detail.clone());
-                    self.insert_edge(&edge)?;
-                    resolved += 1;
+        // The chosen target for each reference, as a correlated subquery. The
+        // CASE is the preference ladder; the remaining columns are the same
+        // stable tiebreak `resolve_symbol` uses, so a name resolves the same
+        // way whether it is reached through an edge or a lookup.
+        let pick_target = "\
+            SELECT n.id FROM nodes n \
+            WHERE n.name = u.reference_name \
+            ORDER BY \
+                CASE \
+                    WHEN n.file_path = u.file_path THEN 0 \
+                    WHEN EXISTS ( \
+                        SELECT 1 FROM import_scope i \
+                        WHERE i.source_file = u.file_path \
+                          AND i.target_file = n.file_path \
+                    ) THEN 1 \
+                    ELSE 2 \
+                END, \
+                n.is_test ASC, n.is_generated ASC, \
+                n.file_path ASC, n.start_line ASC, n.id ASC \
+            LIMIT 1";
 
-                    if uref.kind == EdgeKind::Calls {
-                        let source_is_test = self
-                            .conn
-                            .query_row(
-                                "SELECT is_test FROM nodes WHERE id = ?1",
-                                params![uref.source_node_id],
-                                |r| r.get::<_, bool>(0),
-                            )
-                            .unwrap_or(false);
-                        if source_is_test {
-                            let test_edge =
-                                Edge::new(uref.source_node_id, target.id, EdgeKind::Tests).at(
-                                    uref.file_path.clone(),
-                                    uref.line,
-                                    uref.column,
-                                );
-                            self.insert_edge(&test_edge)?;
-                        }
-                    }
-                }
-            }
+        let before: i64 =
+            self.conn
+                .query_row("SELECT COALESCE(MAX(id), 0) FROM edges", [], |r| r.get(0))?;
 
-            // Clear only this file's unresolved refs
+        let inserted = self.conn.execute(
+            &format!(
+                "INSERT INTO edges (source_id, target_id, kind, file_path, line, column, detail) \
+                 SELECT u.source_node_id, ({pick}), u.kind, u.file_path, u.line, u.column, u.detail \
+                 FROM unresolved_refs u \
+                 WHERE ({pick}) IS NOT NULL{kind}{files}",
+                pick = pick_target,
+                kind = kind_filter,
+                files = file_filter
+            ),
+            [],
+        )?;
+
+        // A test calling production code gets an extra `tests` edge alongside
+        // the `calls` one. Derived from the edges just inserted rather than
+        // re-queried per reference.
+        if matches!(phase, Phase::Rest) {
             self.conn.execute(
-                "DELETE FROM unresolved_refs WHERE file_path = ?1",
-                params![file_path],
+                "INSERT INTO edges (source_id, target_id, kind, file_path, line, column) \
+                 SELECT e.source_id, e.target_id, 'tests', e.file_path, e.line, e.column \
+                 FROM edges e JOIN nodes s ON e.source_id = s.id \
+                 WHERE e.id > ?1 AND e.kind = 'calls' AND s.is_test = 1",
+                params![before],
             )?;
         }
 
-        Ok(resolved)
+        // Drop only the references that actually resolved. What remains is a
+        // real signal — calls into code outside the index, plus anything
+        // extraction got wrong — and `health()` reports the count. Deleting
+        // the lot, as this used to, made that number permanently zero.
+        self.conn.execute(
+            &format!(
+                "DELETE FROM unresolved_refs AS u WHERE ({pick}) IS NOT NULL{kind}{files}",
+                pick = pick_target,
+                kind = kind_filter,
+                files = file_filter
+            ),
+            [],
+        )?;
+
+        Ok(inserted as u32)
+    }
+
+    /// Materialise "which files does each file import from" for the duration
+    /// of a resolution phase.
+    ///
+    /// Recomputed per phase because the imports pass adds to it. A temp table
+    /// with an index beats evaluating the join inside a per-row correlated
+    /// subquery.
+    fn rebuild_import_scope(&self) -> Result<()> {
+        self.conn.execute_batch(
+            "DROP TABLE IF EXISTS import_scope; \
+             CREATE TEMP TABLE import_scope AS \
+                 SELECT DISTINCT s.file_path AS source_file, t.file_path AS target_file \
+                 FROM edges e \
+                 JOIN nodes s ON e.source_id = s.id \
+                 JOIN nodes t ON e.target_id = t.id \
+                 WHERE e.kind = 'imports' AND s.file_path <> t.file_path; \
+             CREATE INDEX idx_import_scope ON import_scope(source_file, target_file);",
+        )?;
+        Ok(())
     }
 
     // =========================================================================
@@ -1884,6 +1957,227 @@ mod tests {
     }
 
     // Database initialization tests
+
+    /// The middle tier of the resolution ladder: when a name is defined in
+    /// more than one file and none of them is the caller's own, prefer the one
+    /// the caller imports from. Without this the choice falls back to
+    /// alphabetical order, which is arbitrary with respect to meaning.
+    ///
+    /// Modelled on the ordinary Rust shape — `use crate::real::RealThing;`
+    /// followed by `RealThing::helper()`. The import names the type, which is
+    /// unambiguous, and that is what establishes the file relationship the
+    /// ambiguous `helper` call then rides on.
+    #[test]
+    fn test_resolution_prefers_an_imported_file_over_an_arbitrary_one() {
+        let db = Database::in_memory().unwrap();
+        for f in ["src/aaa_decoy.rs", "src/caller.rs", "src/real.rs"] {
+            db.insert_or_update_file(&mk_file(f)).unwrap();
+        }
+
+        // Two definitions of `helper`. `aaa_decoy.rs` sorts first, so it wins
+        // on the plain preference order.
+        db.insert_node(&create_test_node(
+            "helper",
+            NodeKind::Function,
+            "src/aaa_decoy.rs",
+        ))
+        .unwrap();
+        let real = db
+            .insert_node(&create_test_node(
+                "helper",
+                NodeKind::Function,
+                "src/real.rs",
+            ))
+            .unwrap();
+        // The imported type is defined only in real.rs, so the import resolves
+        // unambiguously and puts real.rs in caller.rs's scope.
+        db.insert_node(&create_test_node(
+            "RealThing",
+            NodeKind::Struct,
+            "src/real.rs",
+        ))
+        .unwrap();
+
+        let caller = db
+            .insert_node(&create_test_node(
+                "caller",
+                NodeKind::Function,
+                "src/caller.rs",
+            ))
+            .unwrap();
+        db.insert_unresolved_ref(&UnresolvedReference {
+            source_node_id: caller,
+            reference_name: "RealThing".to_string(),
+            kind: EdgeKind::Imports,
+            file_path: "src/caller.rs".to_string(),
+            line: 1,
+            column: 0,
+            detail: None,
+        })
+        .unwrap();
+        db.insert_unresolved_ref(&UnresolvedReference {
+            source_node_id: caller,
+            reference_name: "helper".to_string(),
+            kind: EdgeKind::Calls,
+            file_path: "src/caller.rs".to_string(),
+            line: 5,
+            column: 0,
+            detail: None,
+        })
+        .unwrap();
+
+        db.resolve_references().unwrap();
+
+        let call = db
+            .get_outgoing_edges(caller)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == EdgeKind::Calls)
+            .expect("the call resolved");
+        let target = db.get_node(call.target_id).unwrap().unwrap();
+        assert_eq!(
+            target.file_path, "src/real.rs",
+            "the call should follow the import, not alphabetical order"
+        );
+        assert_eq!(target.id, real);
+    }
+
+    /// The tier cannot rescue an import that is itself ambiguous: if `helper`
+    /// is imported and two files define it, the import picks one on the plain
+    /// preference order and the call follows it there. Scoping narrows a
+    /// choice, it does not manufacture information that extraction never had.
+    #[test]
+    fn test_an_ambiguous_import_does_not_disambiguate_the_call() {
+        let db = Database::in_memory().unwrap();
+        for f in ["src/aaa_decoy.rs", "src/caller.rs", "src/real.rs"] {
+            db.insert_or_update_file(&mk_file(f)).unwrap();
+        }
+        db.insert_node(&create_test_node(
+            "helper",
+            NodeKind::Function,
+            "src/aaa_decoy.rs",
+        ))
+        .unwrap();
+        db.insert_node(&create_test_node(
+            "helper",
+            NodeKind::Function,
+            "src/real.rs",
+        ))
+        .unwrap();
+
+        let caller = db
+            .insert_node(&create_test_node(
+                "caller",
+                NodeKind::Function,
+                "src/caller.rs",
+            ))
+            .unwrap();
+        for kind in [EdgeKind::Imports, EdgeKind::Calls] {
+            db.insert_unresolved_ref(&UnresolvedReference {
+                source_node_id: caller,
+                reference_name: "helper".to_string(),
+                kind,
+                file_path: "src/caller.rs".to_string(),
+                line: 1,
+                column: 0,
+                detail: None,
+            })
+            .unwrap();
+        }
+
+        db.resolve_references().unwrap();
+
+        let call = db
+            .get_outgoing_edges(caller)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == EdgeKind::Calls)
+            .unwrap();
+        let target = db.get_node(call.target_id).unwrap().unwrap();
+        // Documents the limitation rather than asserting a fix that is not there.
+        assert_eq!(target.file_path, "src/aaa_decoy.rs");
+    }
+
+    /// The same-file tier still outranks the import tier.
+    #[test]
+    fn test_same_file_still_beats_an_imported_file() {
+        let db = Database::in_memory().unwrap();
+        for f in ["src/caller.rs", "src/imported.rs"] {
+            db.insert_or_update_file(&mk_file(f)).unwrap();
+        }
+        let local = db
+            .insert_node(&create_test_node(
+                "helper",
+                NodeKind::Function,
+                "src/caller.rs",
+            ))
+            .unwrap();
+        db.insert_node(&create_test_node(
+            "helper",
+            NodeKind::Function,
+            "src/imported.rs",
+        ))
+        .unwrap();
+
+        let caller = db
+            .insert_node(&create_test_node(
+                "caller",
+                NodeKind::Function,
+                "src/caller.rs",
+            ))
+            .unwrap();
+        for kind in [EdgeKind::Imports, EdgeKind::Calls] {
+            db.insert_unresolved_ref(&UnresolvedReference {
+                source_node_id: caller,
+                reference_name: "helper".to_string(),
+                kind,
+                file_path: "src/caller.rs".to_string(),
+                line: 1,
+                column: 0,
+                detail: None,
+            })
+            .unwrap();
+        }
+
+        db.resolve_references().unwrap();
+
+        let call = db
+            .get_outgoing_edges(caller)
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == EdgeKind::Calls)
+            .unwrap();
+        assert_eq!(call.target_id, local);
+    }
+
+    /// References that match no definition are kept, not silently dropped.
+    /// They are the raw material for the unresolved-reference health figure.
+    #[test]
+    fn test_unresolvable_refs_survive_resolution() {
+        let db = Database::in_memory().unwrap();
+        db.insert_or_update_file(&mk_file("src/a.rs")).unwrap();
+        let caller = db
+            .insert_node(&create_test_node("caller", NodeKind::Function, "src/a.rs"))
+            .unwrap();
+        db.insert_unresolved_ref(&UnresolvedReference {
+            source_node_id: caller,
+            reference_name: "println".to_string(),
+            kind: EdgeKind::Calls,
+            file_path: "src/a.rs".to_string(),
+            line: 2,
+            column: 0,
+            detail: None,
+        })
+        .unwrap();
+
+        assert_eq!(db.resolve_references().unwrap(), 0);
+        assert_eq!(
+            db.get_unresolved_refs().unwrap().len(),
+            1,
+            "a call into code outside the index is unresolved, not resolved-to-nothing"
+        );
+        assert_eq!(db.health().unwrap().unresolved_refs, 1);
+    }
 
     // --- index provenance ---------------------------------------------
 
