@@ -1,0 +1,19 @@
+src/db/mod.rs
+  s_2a3a5cdcb907e9::t_c59ef2109dc33e 32
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "f53de982eee015d650946fbf69920e634a9e6d2e",
+  "prompts": {},
+  "sessions": {
+    "s_2a3a5cdcb907e9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "863e2dbc-2c6a-4667-951c-e284f4e32919",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}
