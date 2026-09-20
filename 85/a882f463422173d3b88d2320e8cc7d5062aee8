@@ -1,0 +1,82 @@
+.claude/skills/symgraph-cli/SKILL.md
+  s_23236ed069bd33::t_2d1ac42fe9720b 1-142
+tests/handlers_test.rs
+  s_23236ed069bd33::t_3b8a0feaa95d73 339
+src/bin/symgraph-cli.rs
+  s_23236ed069bd33::t_bc42b612fd8346 219,249
+  s_23236ed069bd33::t_4aa3732be15dd9 330,337,345-346
+  s_23236ed069bd33::t_41dba91c301f62 54
+  s_23236ed069bd33::t_dfc42b83b783ad 190-208
+  s_23236ed069bd33::t_2bddca0cab8530 57-58,84,567
+  s_23236ed069bd33::t_4e955ae51b2dc3 23-24,234-240
+docs/cli-mcp-parity.md
+  s_23236ed069bd33::t_ec01a4100ea32f 3-22,244-258,280-287
+src/main.rs
+  s_23236ed069bd33::t_4aa3732be15dd9 248,255,263-264
+  s_23236ed069bd33::t_bc42b612fd8346 130,167
+  s_23236ed069bd33::t_4e955ae51b2dc3 14,150-156
+src/db/mod.rs
+  s_23236ed069bd33::t_2730d6f4ef1d38 482-491,493-494,497-499,2192-2245
+  s_23236ed069bd33::t_dce560537f28da 2246
+docs/review-2026-09-20.md
+  s_23236ed069bd33::t_17b13c28f79ae2 65,67,69-77,454-482
+src/mcp/mod.rs
+  s_23236ed069bd33::t_67de923763e39b 321-324,326,328-331
+src/mcp/handlers/blame.rs
+  s_23236ed069bd33::t_63ddcb6df1fa4a 6,14-17,20-21,38-40
+src/mcp/handlers/diff_impact.rs
+  s_23236ed069bd33::t_d6c3111b0d2d7e 6,14-21,23-28,45-48,51-52,56,58-59,63,65-68
+src/ops/mod.rs
+  s_23236ed069bd33::t_05e9bcc81508af 1262-1301,1315-1482
+  s_23236ed069bd33::t_b05db1bd518934 95,1302-1314
+  s_23236ed069bd33::t_964e80f8931bb5 855-962
+  s_23236ed069bd33::t_e77f80ba30f2c6 854,1483-1563
+  s_23236ed069bd33::t_d6c3111b0d2d7e 148
+CHANGELOG.md
+  s_23236ed069bd33::t_1d9466f8f6d63e 28-33,50-60
+src/mcp/handlers/search.rs
+  s_23236ed069bd33::t_63ddcb6df1fa4a 5,8-9
+src/cli/tools.rs
+  s_23236ed069bd33::t_6384b7e71364ce 114-118,120-121
+  s_23236ed069bd33::t_7e16c339d273ae 15,298-313
+  s_23236ed069bd33::t_d4b1a4d7520143 13-14,119,122-158,335-341,349-350
+  s_23236ed069bd33::t_09fd767a0b12b4 287,314,321,330
+src/mcp/handlers/status.rs
+  s_23236ed069bd33::t_0c6bcb67c8c5da 75-89,92-96,98,109,125,246-247
+  s_23236ed069bd33::t_01235dd57b17b0 194,203,212,229-241
+  s_23236ed069bd33::t_17b13c28f79ae2 242-245
+src/mcp/types.rs
+  s_23236ed069bd33::t_da4bf08ba3b0b1 13-16,30-31,151-152,179-182
+  s_23236ed069bd33::t_820cf37b8282e4 123-124,166-167
+src/mcp/handlers/reindex.rs
+  s_23236ed069bd33::t_e77f80ba30f2c6 7,16-26,28-30,32-34,36-56,59-60,63-87,158
+  s_23236ed069bd33::t_17b13c28f79ae2 121-129,163-166
+src/cli/commands.rs
+  s_23236ed069bd33::t_17b13c28f79ae2 81-84
+  s_23236ed069bd33::t_6384b7e71364ce 7
+  s_23236ed069bd33::t_7e16c339d273ae 76-79
+tests/cli_parity_test.rs
+  s_23236ed069bd33::t_0e45d5b4cb9cec 1-40,64-239,249-262
+  s_23236ed069bd33::t_a645283a30ff5c 41-54,63
+  s_23236ed069bd33::t_17b13c28f79ae2 55-62,240-248
+src/mcp/handlers/context.rs
+  s_23236ed069bd33::t_63ddcb6df1fa4a 5-6,13-15
+src/mcp/handlers/churn.rs
+  s_23236ed069bd33::t_33666be92e5c01 7-8,12,66,69,72-75,77-84
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "85a882f463422173d3b88d2320e8cc7d5062aee8",
+  "prompts": {},
+  "sessions": {
+    "s_23236ed069bd33": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b20a211f-f1f4-4830-b7b2-f1fc7b2e7699",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}
