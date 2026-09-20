@@ -26,6 +26,8 @@ Formula/symgraph.rb
   s_23236ed069bd33::t_1f0041b95c32db 59-62,71
 docs/cli-mcp-parity.md
   s_23236ed069bd33::t_1d64f603ae7520 9-20,251
+.release.env
+  s_2a3a5cdcb907e9::t_42fb85c57d4700 3
 ---
 {
   "schema_version": "authorship/3.0.0",
@@ -37,6 +39,14 @@ docs/cli-mcp-parity.md
       "agent_id": {
         "tool": "claude",
         "id": "b20a211f-f1f4-4830-b7b2-f1fc7b2e7699",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    },
+    "s_2a3a5cdcb907e9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "863e2dbc-2c6a-4667-951c-e284f4e32919",
         "model": "claude-opus-5"
       },
       "human_author": "Graham Brooks <graham@grahambrooks.com>"
