@@ -12,7 +12,7 @@ use std::process::Command;
 
 use symgraph::db::Database;
 use symgraph::mcp::handlers;
-use symgraph::mcp::{ContextRequest, FormatRequest, SearchRequest};
+use symgraph::mcp::{ContextRequest, SearchRequest, UnusedRequest};
 use symgraph::{build_full_index, IndexConfig};
 use tempfile::TempDir;
 
@@ -200,9 +200,10 @@ fn cli_unused_matches_the_handler() {
     let db = Database::open(&db_path).unwrap();
     let handler = handlers::unused::handle_unused(
         &db,
-        &FormatRequest {
+        &UnusedRequest {
             limit: None,
             offset: None,
+            ignore_test_callers: None,
             format: Some("json".to_string()),
         },
     )

@@ -63,7 +63,7 @@ Index health:
 | `hierarchy <symbol>` | Parent/child containment |
 | `implementations <symbol>` | Types implementing a trait or interface |
 | `path <from> <to>` | How one function reaches another |
-| `unused [--limit N] [--offset N]` | Symbols with no incoming references |
+| `unused [--limit N] [--offset N] [--ignore-test-callers]` | Symbols with no incoming references |
 
 ### Change and risk
 
@@ -78,9 +78,9 @@ Index health:
 
 | Command | Use it for |
 |---|---|
-| `module-graph [--granularity file\|dir\|module] [--churn] [--limit N]` | Dependencies, fan-in/out, cycles |
+| `module-graph [--granularity file\|dir\|module] [--churn] [--include-tests] [--limit N]` | Dependencies, fan-in/out, cycles |
 | `coupling-score [same flags]` | Hotspots ranked by strength × distance × volatility |
-| `god-struct [--churn] [--limit N]` | Structs ranked by architectural debt |
+| `god-struct [--churn] [--include-tests] [--limit N]` | Structs ranked by architectural debt |
 | `dispatch-sites <enum>` | Every file matching on an enum's members |
 
 ## Two things the output tells you — read them
@@ -138,9 +138,17 @@ symgraph dispatch-sites NodeKind
 - Paths are repo-relative with forward slashes on every platform.
 - Coupling tools read import, field and dispatch edges, so `reindex` after
   edits before trusting them.
-- Cycle membership in `module-graph` is approximate: a few mis-resolved edges
-  merge modules that are not really cyclic. Fan-in/out and the coupling
-  ranking are reliable; treat SCCs as a prompt to look, not a verdict.
+- The three coupling tools (`module-graph`, `coupling-score`, `god-struct`)
+  report on production code only. Test code depends on everything, so counting
+  it inflates fan-in and merges unrelated modules; pass `--include-tests` when
+  you want it. Every other tool — `callers` and `references` especially —
+  still shows test callers, because "the tests call this" is usually the point.
+- Cycle membership in `module-graph` is still approximate: a call whose target
+  type cannot be inferred resolves by name alone, and on symgraph's own index
+  26% of cross-file calls still land in a file the caller does not import.
+  A handful of those merge modules that are not really cyclic. Fan-in/out and
+  the coupling ranking are reliable; treat SCCs as a prompt to look, not a
+  verdict.
 - Go reports no `implementations`: interface satisfaction is implicit, so
   there is nothing in the syntax to index.
 - `symgraph serve` runs the MCP server, exposing these same tools over MCP.

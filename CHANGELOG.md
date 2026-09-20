@@ -31,6 +31,9 @@ was neither; they now say what they know and what they do not.
   fields rather than one opaque string.
 - **`symgraph reindex --files a.rs b.rs`** — the targeted mode the MCP tool
   always had, now on the CLI too.
+- **`ignore_test_callers`** on `symgraph-unused` (CLI:
+  `--ignore-test-callers`), which stops a test-only caller counting as a use
+  and so finds production code kept alive by nothing but its own tests.
 - **Inheritance extraction.** `symgraph-implementations` had never worked:
   extraction emitted no `implements`/`extends` edges for any language, so the
   tool always answered "none found". It now reads inheritance clauses across
@@ -58,6 +61,17 @@ was neither; they now say what they know and what they do not.
   have, and `status` needed its health block written twice. All three now call
   the same functions, and a test runs the binary against the handler to keep
   it that way.
+- **Calls resolved to things that cannot be called.** Name-based resolution
+  matched a reference to a definition by name alone, with no check that the
+  two were compatible, so a call could land on a *field*, module, import or
+  enum member that happened to share the callee's name. On symgraph's own
+  index that was 603 of 3777 `calls` edges (16%), and they fed fan-in/fan-out,
+  the coupling score and cycle detection as real dependencies. A reference now
+  only resolves to a kind it could denote; with no compatible candidate it
+  stays unresolved, which the health report counts, rather than resolving to
+  something wrong. On symgraph's own index every `calls` edge now points at a
+  function — and there are *more* of them (3563 vs 3174), because the filter
+  re-points a reference at the right callable instead of dropping it.
 - **Symbol resolution was non-deterministic.** A name shared by several
   definitions resolved to whichever row SQLite happened to return, and the
   choice could change between reindexes. Resolution now prefers production code
@@ -108,6 +122,15 @@ was neither; they now say what they know and what they do not.
     reindex` is the full rebuild. On a fresh checkout both do the same work.
   - Update any script calling `symgraph-cli` to call `symgraph`. The
     installers remove a stale `symgraph-cli` from their install directory.
+- **Breaking: the coupling tools exclude test code by default.**
+  `symgraph-module-graph`, `symgraph-coupling-score` and `symgraph-god-struct`
+  folded test code into the architecture graph — a third of the edges on
+  symgraph's own index — so a test file read as a module every production
+  module depended on, and fan-in, the coupling ranking and cycle membership
+  were all computed over it. They now report production code; `include_tests`
+  (CLI: `--include-tests`) restores the old behaviour, and each report states
+  which scope it used. Every other tool is unchanged: `symgraph-callers` and
+  `symgraph-references` still show test callers, which is usually the point.
 - **Breaking (JSON output):** `count` on `callers`, `callees` and `unused` is
   replaced by `total`, `shown` and `truncated`. `count` meant "how many we
   returned" but read as "how many exist".

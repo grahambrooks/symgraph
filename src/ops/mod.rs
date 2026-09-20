@@ -792,7 +792,23 @@ pub fn implementations(
 pub struct UnusedResult {
     #[serde(flatten)]
     pub page: Page,
+    /// Whether a test-only caller counted as a use. Carried into the result
+    /// because it changes what "unused" means, and a reader of the JSON has
+    /// no other way to tell which question was answered.
+    pub ignore_test_callers: bool,
     pub nodes: Vec<Node>,
+}
+
+impl UnusedResult {
+    /// One line naming the measure in force, so the answer states its own
+    /// scope rather than leaving the reader to assume the default.
+    fn scope_note(&self) -> &'static str {
+        if self.ignore_test_callers {
+            "Counting only non-test callers: a symbol its own tests exercise still counts as unused.\n\n"
+        } else {
+            "A call from test code counts as a use. Pass ignore_test_callers to exclude them.\n\n"
+        }
+    }
 }
 
 impl Render for UnusedResult {
@@ -801,8 +817,9 @@ impl Render for UnusedResult {
             return "No unused symbols found (all symbols are referenced or exported)".to_string();
         }
         let mut out = format!(
-            "# Unused Symbols\n\nFound {} unused symbols:\n\n",
-            self.page.describe()
+            "# Unused Symbols\n\nFound {} unused symbols:\n\n{}",
+            self.page.describe(),
+            self.scope_note()
         );
         let mut by_file: std::collections::HashMap<String, Vec<&Node>> =
             std::collections::HashMap::new();
@@ -836,17 +853,21 @@ pub fn unused(
     db: &Database,
     limit: Option<u32>,
     offset: Option<u32>,
+    ignore_test_callers: bool,
 ) -> Result<UnusedResult, String> {
     let (limit, offset) = (
         effective_limit(limit, DEFAULT_UNUSED_LIMIT),
         offset.unwrap_or(0),
     );
-    let total = db.count_unused_symbols().map_err(|e| e.to_string())?;
+    let total = db
+        .count_unused_symbols(ignore_test_callers)
+        .map_err(|e| e.to_string())?;
     let nodes = db
-        .find_unused_symbols(limit, offset)
+        .find_unused_symbols(limit, offset, ignore_test_callers)
         .map_err(|e| e.to_string())?;
     Ok(UnusedResult {
         page: Page::new(total, nodes.len(), limit, offset),
+        ignore_test_callers,
         nodes,
     })
 }
@@ -1215,7 +1236,7 @@ mod tests {
                 .unwrap();
         }
 
-        let result = unused(&db, Some(3), None).unwrap();
+        let result = unused(&db, Some(3), None, false).unwrap();
         assert_eq!(result.page.total, 7);
         assert_eq!(result.page.shown, 3);
         assert!(result.page.truncated);

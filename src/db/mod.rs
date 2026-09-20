@@ -92,6 +92,36 @@ enum Phase {
     Rest,
 }
 
+/// A SQL predicate over `u.kind` (the reference) and `n.kind` (the candidate
+/// definition) that is true only where the two are compatible.
+///
+/// Built once from [`EdgeKind::resolvable_target_kinds`] so the rule lives in
+/// one place rather than being restated in SQL. Kinds with no constraint fall
+/// through to the `ELSE 1`, as does any kind string the enum does not know.
+fn kind_compatible_sql() -> &'static str {
+    static SQL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+        let mut sql = String::from("CASE u.kind");
+        for edge in EdgeKind::ALL {
+            let Some(kinds) = edge.resolvable_target_kinds() else {
+                continue;
+            };
+            let list = kinds
+                .iter()
+                .map(|k| format!("'{}'", k.as_str()))
+                .collect::<Vec<_>>()
+                .join(",");
+            sql.push_str(&format!(
+                " WHEN '{}' THEN n.kind IN ({})",
+                edge.as_str(),
+                list
+            ));
+        }
+        sql.push_str(" ELSE 1 END");
+        sql
+    });
+    SQL.as_str()
+}
+
 /// How far the index can be trusted, as opposed to how large it is.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct IndexHealth {
@@ -702,14 +732,25 @@ impl Database {
     /// table in memory on every module-graph and coupling-score call. It is
     /// lossless for the consumers, which count rather than inspect
     /// individual edges.
-    pub fn get_edge_endpoints(&self) -> Result<Vec<EdgeEndpoint>> {
-        let mut stmt = self.conn.prepare(
+    pub fn get_edge_endpoints(&self, include_tests: bool) -> Result<Vec<EdgeEndpoint>> {
+        // Test code is excluded by default. It is a third of the edges on
+        // symgraph's own index, and folding it into the architecture graph
+        // makes a test file look like a module every production module
+        // depends on — which is backwards, and enough on its own to merge
+        // unrelated modules into one enormous cycle.
+        let test_filter = if include_tests {
+            ""
+        } else {
+            " WHERE s.is_test = 0 AND t.is_test = 0"
+        };
+        let mut stmt = self.conn.prepare(&format!(
             "SELECT s.file_path, t.file_path, e.kind, e.detail, COUNT(*) \
              FROM edges e \
              JOIN nodes s ON e.source_id = s.id \
-             JOIN nodes t ON e.target_id = t.id \
-             GROUP BY s.file_path, t.file_path, e.kind, e.detail",
-        )?;
+             JOIN nodes t ON e.target_id = t.id\
+             {test_filter} \
+             GROUP BY s.file_path, t.file_path, e.kind, e.detail"
+        ))?;
         let rows = stmt.query_map([], |row| {
             Ok(EdgeEndpoint {
                 source_file: row.get(0)?,
@@ -726,11 +767,17 @@ impl Database {
         Ok(out)
     }
 
-    /// All nodes of a given kind (e.g. every struct/class).
-    pub fn get_nodes_by_kind(&self, kind: NodeKind) -> Result<Vec<Node>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT * FROM nodes WHERE kind = ?1 ORDER BY name")?;
+    /// All nodes of a given kind (e.g. every struct/class), optionally
+    /// including ones defined in test code.
+    pub fn get_nodes_by_kind(&self, kind: NodeKind, include_tests: bool) -> Result<Vec<Node>> {
+        let test_filter = if include_tests {
+            ""
+        } else {
+            " AND is_test = 0"
+        };
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT * FROM nodes WHERE kind = ?1{test_filter} ORDER BY name"
+        ))?;
         let rows = stmt.query_map(params![kind.as_str()], Self::row_to_node)?;
         let mut nodes = Vec::new();
         for row in rows {
@@ -982,9 +1029,26 @@ impl Database {
 
     /// Get all edges to a node
     pub fn get_incoming_edges(&self, node_id: i64) -> Result<Vec<Edge>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT * FROM edges WHERE target_id = ?1")?;
+        self.incoming_edges(node_id, true)
+    }
+
+    /// Incoming edges, optionally dropping the ones whose *source* is test
+    /// code.
+    ///
+    /// Separate from [`Database::get_incoming_edges`] because most callers
+    /// want every caller, tests included — `symgraph-callers` in particular,
+    /// where "the tests call this" is exactly what a user is asking. Only the
+    /// coupling reports, which claim to describe the architecture, want the
+    /// filtered view.
+    pub fn incoming_edges(&self, node_id: i64, include_tests: bool) -> Result<Vec<Edge>> {
+        let sql = if include_tests {
+            "SELECT e.* FROM edges e WHERE e.target_id = ?1".to_string()
+        } else {
+            "SELECT e.* FROM edges e JOIN nodes s ON e.source_id = s.id \
+             WHERE e.target_id = ?1 AND s.is_test = 0"
+                .to_string()
+        };
+        let mut stmt = self.conn.prepare(&sql)?;
         let rows = stmt.query_map(params![node_id], Self::row_to_edge)?;
 
         let mut edges = Vec::new();
@@ -1118,12 +1182,16 @@ impl Database {
         };
 
         // The chosen target for each reference, as a correlated subquery. The
-        // CASE is the preference ladder; the remaining columns are the same
-        // stable tiebreak `resolve_symbol` uses, so a name resolves the same
-        // way whether it is reached through an edge or a lookup.
-        let pick_target = "\
+        // first CASE rejects candidates the reference could not denote (a call
+        // landing on a field); the second is the preference ladder; the
+        // remaining columns are the same stable tiebreak `resolve_symbol`
+        // uses, so a name resolves the same way whether it is reached through
+        // an edge or a lookup.
+        let pick_target = format!(
+            "\
             SELECT n.id FROM nodes n \
             WHERE n.name = u.reference_name \
+              AND ({kind_compatible}) \
             ORDER BY \
                 CASE \
                     WHEN n.file_path = u.file_path THEN 0 \
@@ -1136,7 +1204,10 @@ impl Database {
                 END, \
                 n.is_test ASC, n.is_generated ASC, \
                 n.file_path ASC, n.start_line ASC, n.id ASC \
-            LIMIT 1";
+            LIMIT 1",
+            kind_compatible = kind_compatible_sql()
+        );
+        let pick_target = pick_target.as_str();
 
         let before: i64 =
             self.conn
@@ -1690,19 +1761,43 @@ impl Database {
 
     /// Predicate shared by the unused-symbol page and its count, so the two
     /// can never drift apart.
-    const UNUSED_PREDICATE: &'static str =
-        "n.kind IN ('function', 'method', 'class', 'struct', 'interface') \
-         AND n.is_test = 0 \
-         AND n.is_generated = 0 \
-         AND n.id NOT IN (SELECT DISTINCT target_id FROM edges \
-                          WHERE kind IN ('calls', 'references', 'instantiates', 'tests'))";
+    ///
+    /// `ignore_test_callers` changes what counts as a use. By default any
+    /// incoming call or reference keeps a symbol alive, tests included; with
+    /// the flag set, only non-test code does. The difference is production
+    /// code that nothing but its own tests exercises — live by the first
+    /// measure, dead by the second, and the second is usually the question
+    /// being asked.
+    fn unused_predicate(ignore_test_callers: bool) -> String {
+        let uses = if ignore_test_callers {
+            // A `tests` edge is by definition test-sourced, so it drops out
+            // of the kind list entirely rather than being filtered afterwards.
+            "SELECT DISTINCT e.target_id FROM edges e \
+             JOIN nodes s ON e.source_id = s.id \
+             WHERE e.kind IN ('calls', 'references', 'instantiates') AND s.is_test = 0"
+        } else {
+            "SELECT DISTINCT target_id FROM edges \
+             WHERE kind IN ('calls', 'references', 'instantiates', 'tests')"
+        };
+        format!(
+            "n.kind IN ('function', 'method', 'class', 'struct', 'interface') \
+             AND n.is_test = 0 \
+             AND n.is_generated = 0 \
+             AND n.id NOT IN ({uses})"
+        )
+    }
 
     /// One page of symbols with no incoming calls or references.
-    pub fn find_unused_symbols(&self, limit: u32, offset: u32) -> Result<Vec<Node>> {
+    pub fn find_unused_symbols(
+        &self,
+        limit: u32,
+        offset: u32,
+        ignore_test_callers: bool,
+    ) -> Result<Vec<Node>> {
         let mut stmt = self.conn.prepare(&format!(
             "SELECT n.* FROM nodes n WHERE {} \
              ORDER BY n.file_path, n.start_line, n.id LIMIT ?1 OFFSET ?2",
-            Self::UNUSED_PREDICATE
+            Self::unused_predicate(ignore_test_callers)
         ))?;
         let rows = stmt.query_map(params![limit as i64, offset as i64], Self::row_to_node)?;
         let mut nodes = Vec::new();
@@ -1714,11 +1809,11 @@ impl Database {
 
     /// How many unused symbols exist in total. On a large codebase this is
     /// routinely in the thousands, which is exactly why the listing is paged.
-    pub fn count_unused_symbols(&self) -> Result<usize> {
+    pub fn count_unused_symbols(&self, ignore_test_callers: bool) -> Result<usize> {
         let n: i64 = self.conn.query_row(
             &format!(
                 "SELECT COUNT(*) FROM nodes n WHERE {}",
-                Self::UNUSED_PREDICATE
+                Self::unused_predicate(ignore_test_callers)
             ),
             [],
             |row| row.get(0),
@@ -2513,9 +2608,9 @@ mod tests {
             db.insert_node(&node).unwrap();
         }
 
-        assert_eq!(db.count_unused_symbols().unwrap(), 5);
-        assert_eq!(db.find_unused_symbols(2, 0).unwrap().len(), 2);
-        assert_eq!(db.find_unused_symbols(2, 4).unwrap().len(), 1);
+        assert_eq!(db.count_unused_symbols(false).unwrap(), 5);
+        assert_eq!(db.find_unused_symbols(2, 0, false).unwrap().len(), 2);
+        assert_eq!(db.find_unused_symbols(2, 4, false).unwrap().len(), 1);
     }
 
     /// Several processes share one index file, so a query must wait out a
@@ -3291,7 +3386,7 @@ mod tests {
         .unwrap();
 
         // Find unused symbols
-        let unused = db.find_unused_symbols(100, 0).unwrap();
+        let unused = db.find_unused_symbols(100, 0, false).unwrap();
         assert_eq!(unused.len(), 2); // unused_func and caller (no one calls caller)
         assert!(unused.iter().any(|n| n.name == "unused_func"));
         assert!(unused.iter().any(|n| n.name == "caller"));
@@ -3564,8 +3659,250 @@ mod language_tests_2 {
         g.is_generated = true;
         db.insert_node(&g).unwrap();
 
-        let unused = db.find_unused_symbols(100, 0).unwrap();
+        let unused = db.find_unused_symbols(100, 0, false).unwrap();
         assert!(unused.iter().all(|n| n.name != "test_thing"));
         assert!(unused.iter().all(|n| n.name != "generated_thing"));
+    }
+
+    /// Two files, one name, two kinds. The reference is a call, so the field
+    /// must not win even though it sorts first by the preference ladder —
+    /// `a.rs` before `b.rs`.
+    ///
+    /// This is the shape that produced 434 bogus `calls` edges on symgraph's
+    /// own index: test functions referring to a local `path` resolved to a
+    /// struct field called `path` in an unrelated module, and the coupling
+    /// report then read that as a dependency between the two files.
+    #[test]
+    fn a_call_skips_a_field_and_takes_the_function() {
+        let db = Database::in_memory().unwrap();
+        db.insert_or_update_file(&mk_file("a.rs")).unwrap();
+        db.insert_or_update_file(&mk_file("b.rs")).unwrap();
+        db.insert_or_update_file(&mk_file("c.rs")).unwrap();
+
+        let caller_id = db.insert_node(&mk_node("caller", "c.rs")).unwrap();
+        let mut field = mk_node("path", "a.rs");
+        field.kind = NodeKind::Field;
+        db.insert_node(&field).unwrap();
+        let func_id = db.insert_node(&mk_node("path", "b.rs")).unwrap();
+
+        db.insert_unresolved_ref(&UnresolvedReference {
+            source_node_id: caller_id,
+            reference_name: "path".to_string(),
+            kind: EdgeKind::Calls,
+            file_path: "c.rs".to_string(),
+            line: 1,
+            column: 0,
+            detail: None,
+        })
+        .unwrap();
+
+        db.resolve_references().unwrap();
+        let outgoing: Vec<_> = db
+            .get_outgoing_edges(caller_id)
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.kind == EdgeKind::Calls)
+            .collect();
+        assert_eq!(outgoing.len(), 1);
+        assert_eq!(
+            outgoing[0].target_id, func_id,
+            "a call resolved to the field rather than the function"
+        );
+    }
+
+    /// With no callable candidate at all, the reference stays unresolved
+    /// rather than resolving to something it could not denote. Unresolved is
+    /// counted by `health()`; a wrong edge is silent.
+    #[test]
+    fn a_call_with_only_a_field_to_match_stays_unresolved() {
+        let db = Database::in_memory().unwrap();
+        db.insert_or_update_file(&mk_file("a.rs")).unwrap();
+        db.insert_or_update_file(&mk_file("c.rs")).unwrap();
+
+        let caller_id = db.insert_node(&mk_node("caller", "c.rs")).unwrap();
+        let mut field = mk_node("path", "a.rs");
+        field.kind = NodeKind::Field;
+        db.insert_node(&field).unwrap();
+
+        db.insert_unresolved_ref(&UnresolvedReference {
+            source_node_id: caller_id,
+            reference_name: "path".to_string(),
+            kind: EdgeKind::Calls,
+            file_path: "c.rs".to_string(),
+            line: 1,
+            column: 0,
+            detail: None,
+        })
+        .unwrap();
+
+        assert_eq!(db.resolve_references().unwrap(), 0);
+        assert!(db
+            .get_outgoing_edges(caller_id)
+            .unwrap()
+            .iter()
+            .all(|e| e.kind != EdgeKind::Calls));
+        assert_eq!(db.get_unresolved_refs().unwrap().len(), 1);
+    }
+
+    /// A field read is the mirror image: it must not land on a function.
+    #[test]
+    fn a_field_read_skips_a_function_and_takes_the_field() {
+        let db = Database::in_memory().unwrap();
+        db.insert_or_update_file(&mk_file("a.rs")).unwrap();
+        db.insert_or_update_file(&mk_file("b.rs")).unwrap();
+        db.insert_or_update_file(&mk_file("c.rs")).unwrap();
+
+        let reader_id = db.insert_node(&mk_node("reader", "c.rs")).unwrap();
+        db.insert_node(&mk_node("name", "a.rs")).unwrap(); // a function
+        let mut field = mk_node("name", "b.rs");
+        field.kind = NodeKind::Field;
+        let field_id = db.insert_node(&field).unwrap();
+
+        db.insert_unresolved_ref(&UnresolvedReference {
+            source_node_id: reader_id,
+            reference_name: "name".to_string(),
+            kind: EdgeKind::Accesses,
+            file_path: "c.rs".to_string(),
+            line: 1,
+            column: 0,
+            detail: None,
+        })
+        .unwrap();
+
+        db.resolve_references().unwrap();
+        let outgoing = db.get_outgoing_edges(reader_id).unwrap();
+        assert_eq!(outgoing.len(), 1);
+        assert_eq!(outgoing[0].target_id, field_id);
+    }
+
+    /// `references` is the catch-all kind and keeps its old, unconstrained
+    /// behaviour — the filter must not quietly narrow it.
+    #[test]
+    fn a_reference_may_still_resolve_to_any_kind() {
+        let db = Database::in_memory().unwrap();
+        db.insert_or_update_file(&mk_file("a.rs")).unwrap();
+        db.insert_or_update_file(&mk_file("c.rs")).unwrap();
+
+        let src_id = db.insert_node(&mk_node("src", "c.rs")).unwrap();
+        let mut member = mk_node("Red", "a.rs");
+        member.kind = NodeKind::EnumMember;
+        let member_id = db.insert_node(&member).unwrap();
+
+        db.insert_unresolved_ref(&UnresolvedReference {
+            source_node_id: src_id,
+            reference_name: "Red".to_string(),
+            kind: EdgeKind::References,
+            file_path: "c.rs".to_string(),
+            line: 1,
+            column: 0,
+            detail: None,
+        })
+        .unwrap();
+
+        db.resolve_references().unwrap();
+        let outgoing = db.get_outgoing_edges(src_id).unwrap();
+        assert_eq!(outgoing.len(), 1);
+        assert_eq!(outgoing[0].target_id, member_id);
+    }
+
+    // --- test exclusion ---------------------------------------------------
+
+    /// A helper that builds two files — one production, one test — with an
+    /// edge from the test into production, and returns the database.
+    fn db_with_a_test_calling_production() -> Database {
+        let db = Database::in_memory().unwrap();
+        db.insert_or_update_file(&mk_file("src/lib.rs")).unwrap();
+        db.insert_or_update_file(&mk_file("tests/it.rs")).unwrap();
+
+        let target = db.insert_node(&mk_node("widget", "src/lib.rs")).unwrap();
+        let mut tester = mk_node("it_works", "tests/it.rs");
+        tester.is_test = true;
+        let tester_id = db.insert_node(&tester).unwrap();
+
+        db.insert_edge(&Edge {
+            id: 0,
+            source_id: tester_id,
+            target_id: target,
+            kind: EdgeKind::Calls,
+            file_path: Some("tests/it.rs".to_string()),
+            line: Some(1),
+            column: Some(0),
+            detail: None,
+        })
+        .unwrap();
+        db
+    }
+
+    /// The coupling view drops test-sourced edges, so a test file never shows
+    /// up as a module the production code depends on.
+    #[test]
+    fn edge_endpoints_exclude_test_code_by_default() {
+        let db = db_with_a_test_calling_production();
+
+        let production = db.get_edge_endpoints(false).unwrap();
+        assert!(
+            production.is_empty(),
+            "test-sourced edge leaked into the coupling view: {production:?}"
+        );
+
+        let everything = db.get_edge_endpoints(true).unwrap();
+        assert_eq!(everything.len(), 1);
+        assert_eq!(everything[0].source_file, "tests/it.rs");
+    }
+
+    #[test]
+    fn incoming_edges_can_exclude_test_callers() {
+        let db = db_with_a_test_calling_production();
+        let target = db.find_node_by_name("widget").unwrap().unwrap();
+
+        assert_eq!(db.incoming_edges(target.id, true).unwrap().len(), 1);
+        assert!(db.incoming_edges(target.id, false).unwrap().is_empty());
+        // The unfiltered entry point keeps its old behaviour: `symgraph-callers`
+        // is supposed to show that the tests call something.
+        assert_eq!(db.get_incoming_edges(target.id).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn nodes_by_kind_can_exclude_test_definitions() {
+        let db = Database::in_memory().unwrap();
+        db.insert_or_update_file(&mk_file("src/lib.rs")).unwrap();
+        db.insert_or_update_file(&mk_file("tests/it.rs")).unwrap();
+
+        let mut prod = mk_node("Config", "src/lib.rs");
+        prod.kind = NodeKind::Struct;
+        db.insert_node(&prod).unwrap();
+
+        let mut fixture = mk_node("Fixture", "tests/it.rs");
+        fixture.kind = NodeKind::Struct;
+        fixture.is_test = true;
+        db.insert_node(&fixture).unwrap();
+
+        let production = db.get_nodes_by_kind(NodeKind::Struct, false).unwrap();
+        assert_eq!(production.len(), 1);
+        assert_eq!(production[0].name, "Config");
+        assert_eq!(
+            db.get_nodes_by_kind(NodeKind::Struct, true).unwrap().len(),
+            2
+        );
+    }
+
+    /// Production code that only its own tests exercise: alive by the default
+    /// measure, dead once test callers stop counting.
+    #[test]
+    fn unused_can_ignore_test_callers() {
+        let db = db_with_a_test_calling_production();
+
+        let default = db.find_unused_symbols(100, 0, false).unwrap();
+        assert!(
+            default.iter().all(|n| n.name != "widget"),
+            "a test caller should keep a symbol alive by default"
+        );
+
+        let strict = db.find_unused_symbols(100, 0, true).unwrap();
+        assert!(
+            strict.iter().any(|n| n.name == "widget"),
+            "test-only code should read as unused when test callers are ignored"
+        );
+        assert_eq!(db.count_unused_symbols(true).unwrap(), strict.len());
     }
 }

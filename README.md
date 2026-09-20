@@ -160,7 +160,7 @@ symgraph hierarchy <symbol>           # Parent/child (contains) hierarchy
 symgraph implementations <symbol>     # Interface/trait implementations
 symgraph file <path>                  # Symbols defined in a file
 symgraph path <from> <to>             # Call path(s) between two symbols
-symgraph unused                       # Dead code (no incoming references)
+symgraph unused [--ignore-test-callers]  # Dead code (no incoming references)
 
 # Impact, git history & coupling
 symgraph impact <symbol> [--churn]    # Change impact + coupling breakdown
@@ -170,6 +170,7 @@ symgraph churn [path] [--days N]      # File change frequency (volatility)
 symgraph module-graph [--granularity file|dir|module]   # Deps, fan-in/out, cycles
 symgraph coupling-score [--churn]     # Rank coupling: strength × distance × volatility
 symgraph god-struct [--churn]         # Structs ranked by architectural debt
+#   those three report production code only; pass --include-tests to count test code
 symgraph dispatch-sites <enum>        # Files that match/switch on an enum
 ```
 

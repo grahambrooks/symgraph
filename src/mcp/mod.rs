@@ -369,7 +369,7 @@ impl SymgraphHandler {
     )]
     async fn symgraph_unused(
         &self,
-        Parameters(req): Parameters<FormatRequest>,
+        Parameters(req): Parameters<UnusedRequest>,
     ) -> Result<String, String> {
         self.blocking_db(move |db| handlers::unused::handle_unused(db, &req))
             .await

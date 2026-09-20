@@ -113,6 +113,24 @@ pub struct FormatRequest {
     pub format: Option<String>,
 }
 
+/// Request for the unused-symbol tool.
+///
+/// Separate from [`FormatRequest`] because `ignore_test_callers` is meaningful
+/// only here, and `symgraph-status` shares that type.
+#[derive(Debug, Default, Deserialize, schemars::JsonSchema)]
+pub struct UnusedRequest {
+    #[schemars(description = "Max results to return (default 100, max 1000)")]
+    pub limit: Option<u32>,
+    #[schemars(description = "Skip this many results — use with limit to page through the list")]
+    pub offset: Option<u32>,
+    #[schemars(
+        description = "If true, a symbol called only from test code still counts as unused — which finds production code kept alive by nothing but its own tests. Default: false"
+    )]
+    pub ignore_test_callers: Option<bool>,
+    #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
+    pub format: Option<String>,
+}
+
 /// Request for reindex tool
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct ReindexRequest {
@@ -195,6 +213,10 @@ pub struct ModuleGraphRequest {
     pub churn: Option<bool>,
     #[schemars(description = "Churn window in days when churn=true (default: 90)")]
     pub days: Option<u32>,
+    #[schemars(
+        description = "If true, count edges into and out of test code. Off by default: tests depend on everything, so including them inflates fan-in and merges unrelated modules into one cycle."
+    )]
+    pub include_tests: Option<bool>,
     #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
     pub format: Option<String>,
     #[schemars(description = "Max rows to show in markdown output (default: 30)")]
@@ -210,6 +232,10 @@ pub struct GodStructRequest {
     pub churn: Option<bool>,
     #[schemars(description = "Churn window in days when churn=true (default: 90)")]
     pub days: Option<u32>,
+    #[schemars(
+        description = "If true, rank structs defined in test code too, and count references from test code. Default: false"
+    )]
+    pub include_tests: Option<bool>,
     #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
     pub format: Option<String>,
     #[schemars(description = "Max structs to show (default: 20)")]

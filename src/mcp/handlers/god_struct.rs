@@ -42,11 +42,16 @@ pub fn handle_god_struct(
         None
     };
 
+    // Test code is out of scope by default, on both sides: a fixture struct
+    // is not architectural debt, and a reference from a test is not a module
+    // depending on this type.
+    let include_tests = req.include_tests.unwrap_or(false);
+
     let mut structs = db
-        .get_nodes_by_kind(NodeKind::Struct)
+        .get_nodes_by_kind(NodeKind::Struct, include_tests)
         .map_err(|e| e.to_string())?;
     structs.extend(
-        db.get_nodes_by_kind(NodeKind::Class)
+        db.get_nodes_by_kind(NodeKind::Class, include_tests)
             .map_err(|e| e.to_string())?,
     );
 
@@ -62,7 +67,9 @@ pub fn handle_god_struct(
         // into the struct itself or any of its fields.
         let mut files: HashSet<String> = HashSet::new();
         for node in std::iter::once(s).chain(fields.iter()) {
-            let incoming = db.get_incoming_edges(node.id).map_err(|e| e.to_string())?;
+            let incoming = db
+                .incoming_edges(node.id, include_tests)
+                .map_err(|e| e.to_string())?;
             for e in incoming {
                 if e.kind == EdgeKind::Contains {
                     continue;
@@ -102,8 +109,13 @@ pub fn handle_god_struct(
         return serde_json::to_string_pretty(&ranked).map_err(|e| e.to_string());
     }
 
-    let mut out = String::from(
-        "# God-struct / hub report\n\nscore = pub_fields × inbound_refs × churn (each floored at 1).\n\n",
+    let scope = if include_tests {
+        "Scope: all code, tests included.\n\n"
+    } else {
+        "Scope: production code. Test code is excluded — pass include_tests to count it.\n\n"
+    };
+    let mut out = format!(
+        "# God-struct / hub report\n\nscore = pub_fields × inbound_refs × churn (each floored at 1).\n\n{scope}",
     );
     out.push_str("| Score | Struct | Pub fields | Fields | Inbound files | Churn | File |\n");
     out.push_str("|---:|---|---:|---:|---:|---:|---|\n");

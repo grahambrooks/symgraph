@@ -11,8 +11,8 @@ use crate::db::Database;
 use crate::mcp::handlers;
 use crate::mcp::{
     BlameRequest, ChurnRequest, ContextRequest, DefinitionRequest, DiffImpactRequest,
-    DispatchSitesRequest, FileRequest, FormatRequest, GodStructRequest, ImpactRequest,
-    ModuleGraphRequest, PathRequest, ReindexRequest, SearchRequest, SymbolRequest,
+    DispatchSitesRequest, FileRequest, GodStructRequest, ImpactRequest, ModuleGraphRequest,
+    PathRequest, ReindexRequest, SearchRequest, SymbolRequest, UnusedRequest,
 };
 
 use super::commands::OutputFormat;
@@ -104,6 +104,13 @@ fn symbol_req(q: &SymbolQuery, fmt: OutputFormat) -> SymbolRequest {
 /// A churn flag present on the command line means "use churn"; absence leaves
 /// the choice to the handler's own default (e.g. coupling-score defaults on).
 fn churn_opt(flag: bool) -> Option<bool> {
+    flag_opt(flag)
+}
+
+/// Same rule for any opt-in flag: present means `Some(true)`, absent means
+/// "unset", so the handler's documented default is what applies rather than
+/// the CLI asserting `false` on its behalf.
+fn flag_opt(flag: bool) -> Option<bool> {
     if flag {
         Some(true)
     } else {
@@ -201,14 +208,16 @@ pub fn unused(
     path: &str,
     limit: Option<u32>,
     offset: Option<u32>,
+    ignore_test_callers: bool,
     fmt: OutputFormat,
 ) -> Result<()> {
     let (_root, db) = query_context(path)?;
     emit(handlers::unused::handle_unused(
         &db,
-        &FormatRequest {
+        &UnusedRequest {
             limit,
             offset,
+            ignore_test_callers: flag_opt(ignore_test_callers),
             format: fmt.request_format(),
         },
     ))
@@ -359,6 +368,7 @@ pub fn module_graph(
     granularity: Option<String>,
     churn: bool,
     days: Option<u32>,
+    include_tests: bool,
     limit: Option<u32>,
     fmt: OutputFormat,
 ) -> Result<()> {
@@ -367,6 +377,7 @@ pub fn module_graph(
         granularity,
         churn: churn_opt(churn),
         days,
+        include_tests: flag_opt(include_tests),
         format: fmt.request_format(),
         limit,
     };
@@ -380,6 +391,7 @@ pub fn coupling_score(
     granularity: Option<String>,
     churn: bool,
     days: Option<u32>,
+    include_tests: bool,
     limit: Option<u32>,
     fmt: OutputFormat,
 ) -> Result<()> {
@@ -388,6 +400,7 @@ pub fn coupling_score(
         granularity,
         churn: churn_opt(churn),
         days,
+        include_tests: flag_opt(include_tests),
         format: fmt.request_format(),
         limit,
     };
@@ -400,6 +413,7 @@ pub fn god_struct(
     path: &str,
     churn: bool,
     days: Option<u32>,
+    include_tests: bool,
     limit: Option<u32>,
     fmt: OutputFormat,
 ) -> Result<()> {
@@ -407,6 +421,7 @@ pub fn god_struct(
     let req = GodStructRequest {
         churn: churn_opt(churn),
         days,
+        include_tests: flag_opt(include_tests),
         format: fmt.request_format(),
         limit,
     };

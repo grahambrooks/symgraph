@@ -13,8 +13,8 @@ use std::fs;
 use symgraph::db::Database;
 use symgraph::mcp::handlers;
 use symgraph::mcp::{
-    DispatchSitesRequest, FileRequest, FormatRequest, GodStructRequest, ModuleGraphRequest,
-    PathRequest, SymbolRequest,
+    DispatchSitesRequest, FileRequest, GodStructRequest, ModuleGraphRequest, PathRequest,
+    SymbolRequest, UnusedRequest,
 };
 use symgraph::{build_full_index, IndexConfig};
 use tempfile::TempDir;
@@ -219,14 +219,15 @@ fn file_rejects_a_traversal_path() {
 #[test]
 fn unused_finds_dead_code_and_pages_it() {
     let (_dir, db) = fixture();
-    let out = handlers::unused::handle_unused(&db, &FormatRequest::default()).unwrap();
+    let out = handlers::unused::handle_unused(&db, &UnusedRequest::default()).unwrap();
     assert!(out.contains("never_called_anywhere"), "output was:\n{out}");
 
     let paged = handlers::unused::handle_unused(
         &db,
-        &FormatRequest {
+        &UnusedRequest {
             limit: Some(1),
             offset: None,
+            ignore_test_callers: None,
             format: Some("json".to_string()),
         },
     )
@@ -269,6 +270,7 @@ fn graph_req(format: Option<&str>) -> ModuleGraphRequest {
         granularity: Some("module".to_string()),
         churn: Some(false),
         days: None,
+        include_tests: None,
         format: format.map(str::to_string),
         limit: None,
     }
@@ -307,6 +309,7 @@ fn god_struct_ranks_the_struct_with_public_fields() {
     let req = GodStructRequest {
         churn: Some(false),
         days: None,
+        include_tests: None,
         format: Some("json".to_string()),
         limit: Some(10),
     };
