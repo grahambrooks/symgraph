@@ -318,11 +318,17 @@ impl SymgraphHandler {
         name = "symgraph-status",
         description = "Get the status of the symgraph index. Shows statistics about indexed files, symbols, and relationships."
     )]
-    async fn symgraph_status(&self) -> Result<String, String> {
+    async fn symgraph_status(
+        &self,
+        Parameters(req): Parameters<FormatRequest>,
+    ) -> Result<String, String> {
         let reindexing = self.is_reindexing.load(Ordering::SeqCst);
+        let json = crate::mcp::types::wants_json(&req.format);
         self.blocking_db(move |db| {
-            let mut output = handlers::status::handle_status(db)?;
-            if reindexing {
+            let mut output = handlers::status::handle_status(db, req.format.clone())?;
+            // The in-progress note is a markdown affordance; the JSON result
+            // has its own shape and must stay parseable.
+            if reindexing && !json {
                 output.push_str("\n**Reindex:** In progress\n");
             }
             Ok(output)

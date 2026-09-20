@@ -4,11 +4,12 @@ use std::collections::HashMap;
 
 use crate::git::run_git;
 use crate::mcp::types::ChurnRequest;
-use crate::ops::constants::MAX_CHURN_DAYS;
+use crate::ops::constants::{effective_limit, MAX_CHURN_DAYS};
+use crate::ops::{present, ChurnEntry, ChurnResult, Format, Page};
 use crate::security::safe_join;
 
 const DEFAULT_DAYS: u32 = 90;
-const DEFAULT_LIMIT: usize = 30;
+const DEFAULT_LIMIT: u32 = 30;
 
 /// Compute per-file change frequency (commits touching each file) over the
 /// last `days` days, optionally scoped to `path`. Returns a map of
@@ -62,33 +63,23 @@ pub fn handle_churn(project_root: &str, req: &ChurnRequest) -> Result<String, St
     // Clamp here too, so the window the output names is the one git was asked for.
     let days = req.days.unwrap_or(DEFAULT_DAYS).clamp(1, MAX_CHURN_DAYS);
     let counts = file_churn(project_root, days, req.path.as_deref())?;
-
-    if counts.is_empty() {
-        return Ok(format!(
-            "No changes in the last {} days{}.",
-            days,
-            req.path
-                .as_deref()
-                .map(|p| format!(" under `{}`", p))
-                .unwrap_or_default()
-        ));
-    }
+    let total = counts.len();
 
     let mut ranked: Vec<(String, u32)> = counts.into_iter().collect();
+    // Most-changed first, then by path so equal counts order predictably.
     ranked.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-    ranked.truncate(DEFAULT_LIMIT);
 
-    let mut out = format!(
-        "# Churn (last {} days{})\n\n",
+    let limit = effective_limit(req.limit, DEFAULT_LIMIT);
+    ranked.truncate(limit as usize);
+
+    let result = ChurnResult {
         days,
-        req.path
-            .as_deref()
-            .map(|p| format!(", path=`{}`", p))
-            .unwrap_or_default()
-    );
-    out.push_str("| Commits | File |\n|---:|---|\n");
-    for (path, n) in ranked {
-        out.push_str(&format!("| {} | {} |\n", n, path));
-    }
-    Ok(out)
+        path: req.path.clone(),
+        page: Page::new(total, ranked.len(), limit, 0),
+        files: ranked
+            .into_iter()
+            .map(|(file, commits)| ChurnEntry { file, commits })
+            .collect(),
+    };
+    present(&result, Format::from_request(&req.format))
 }

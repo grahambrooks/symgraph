@@ -11,10 +11,7 @@ use anyhow::Result;
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 
-use symgraph::cli::{
-    context_command, index_command, prune_command, search_command, status_command, tools,
-    where_command, OutputFormat,
-};
+use symgraph::cli::{index_command, prune_command, tools, where_command, OutputFormat};
 
 /// First positional argument at `idx` that isn't a `--flag`.
 fn positional(args: &[String], idx: usize) -> Option<&str> {
@@ -130,7 +127,7 @@ fn main() -> Result<()> {
         }
         "status" => {
             let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
-            status_command(path, format)?;
+            tools::status(path, format)?;
         }
         "where" => {
             let path = args.get(2).map(|s| s.as_str()).unwrap_or(".");
@@ -150,7 +147,13 @@ fn main() -> Result<()> {
             }
             let path = ".";
             let query = &args[2];
-            search_command(path, query, flag_u32(&args, "--limit"), format)?;
+            tools::search(
+                path,
+                query,
+                has_flag(&args, "--semantic"),
+                flag_u32(&args, "--limit"),
+                format,
+            )?;
         }
         "context" => {
             if args.len() < 3 {
@@ -161,7 +164,7 @@ fn main() -> Result<()> {
             }
             let path = ".";
             let task = args[2..].join(" ");
-            context_command(path, &task, format)?;
+            tools::context(path, &task, flag_u32(&args, "--limit"), format)?;
         }
 
         // ---- MCP-tool parity: symbol relationships ----
@@ -242,13 +245,14 @@ fn main() -> Result<()> {
                 flag_u32(&args, "--start"),
                 flag_u32(&args, "--end"),
                 flag_value(&args, "--git-ref"),
+                format,
             )?;
         }
 
         // ---- git history ----
         "blame" => {
             if let Some(s) = need(&args, 2, "symgraph blame <symbol>") {
-                tools::blame(".", &tools::SymbolQuery::from_args(&s, &args))?;
+                tools::blame(".", &tools::SymbolQuery::from_args(&s, &args), format)?;
             }
         }
         "churn" => {
@@ -256,6 +260,8 @@ fn main() -> Result<()> {
                 ".",
                 positional(&args, 2).map(|s| s.to_string()),
                 flag_u32(&args, "--days"),
+                flag_u32(&args, "--limit"),
+                format,
             )?;
         }
 

@@ -3,19 +3,29 @@
 use crate::db::Database;
 use crate::git::run_git;
 use crate::mcp::types::DiffImpactRequest;
-use crate::ops::format;
+use crate::ops::{present, DiffImpactResult, Format, RegionImpact};
 use crate::security::safe_join;
-use crate::types::Node;
 
 pub fn handle_diff_impact(
     db: &Database,
     project_root: &str,
     req: &DiffImpactRequest,
 ) -> Result<String, String> {
-    if let Some(git_ref) = req.git_ref.as_deref() {
-        return handle_git_ref_impact(db, project_root, git_ref);
-    }
+    let fmt = Format::from_request(&req.format);
 
+    let result = match req.git_ref.as_deref() {
+        Some(git_ref) => git_ref_impact(db, project_root, git_ref)?,
+        None => explicit_region_impact(db, project_root, req)?,
+    };
+    present(&result, fmt)
+}
+
+/// Impact of the caller-supplied file and line range.
+fn explicit_region_impact(
+    db: &Database,
+    project_root: &str,
+    req: &DiffImpactRequest,
+) -> Result<DiffImpactResult, String> {
     let file_path = req
         .file_path
         .as_deref()
@@ -32,76 +42,30 @@ pub fn handle_diff_impact(
     let nodes = db
         .get_diff_impact(file_path, start_line, end_line)
         .map_err(|e| e.to_string())?;
-    Ok(render_impact(file_path, start_line, end_line, nodes))
+    Ok(DiffImpactResult {
+        git_ref: None,
+        regions: vec![RegionImpact::new(file_path, start_line, end_line, nodes)],
+    })
 }
 
-fn handle_git_ref_impact(
+/// Impact of every region git reports as changed against `git_ref`.
+fn git_ref_impact(
     db: &Database,
     project_root: &str,
     git_ref: &str,
-) -> Result<String, String> {
+) -> Result<DiffImpactResult, String> {
     validate_git_ref(git_ref)?;
-    let regions = git_changed_regions(project_root, git_ref)?;
-    if regions.is_empty() {
-        return Ok(format!("No changes detected against `{}`.", git_ref));
-    }
-
-    let mut output = format!("# Diff impact vs `{}`\n\n", git_ref);
-    output.push_str(&format!("Changed regions: {}\n\n", regions.len()));
-
-    for (file, start, end) in regions {
+    let mut regions = Vec::new();
+    for (file, start, end) in git_changed_regions(project_root, git_ref)? {
         let nodes = db
             .get_diff_impact(&file, start, end)
             .map_err(|e| e.to_string())?;
-        output.push_str(&render_impact(&file, start, end, nodes));
-        output.push_str("\n---\n\n");
+        regions.push(RegionImpact::new(&file, start, end, nodes));
     }
-    Ok(output)
-}
-
-fn render_impact(file_path: &str, start_line: u32, end_line: u32, nodes: Vec<Node>) -> String {
-    if nodes.is_empty() {
-        return format!(
-            "No symbols affected by changes to {}:{}—{}\n",
-            file_path, start_line, end_line
-        );
-    }
-
-    let mut output = format!("## Impact: {}:{}—{}\n\n", file_path, start_line, end_line);
-    output.push_str(&format!(
-        "Potentially affected: {} symbol(s)\n\n",
-        nodes.len()
-    ));
-
-    let mut direct = Vec::new();
-    let mut indirect = Vec::new();
-
-    for node in nodes {
-        if node.file_path == file_path && node.start_line <= end_line && node.end_line >= start_line
-        {
-            direct.push(node);
-        } else {
-            indirect.push(node);
-        }
-    }
-
-    if !direct.is_empty() {
-        output.push_str("### Directly Modified\n\n");
-        for node in direct {
-            output.push_str(&format::format_node(&node));
-            output.push_str("\n\n");
-        }
-    }
-
-    if !indirect.is_empty() {
-        output.push_str("### Indirect Impact (Callers)\n\n");
-        for node in indirect {
-            output.push_str(&format::format_node(&node));
-            output.push_str("\n\n");
-        }
-    }
-
-    output
+    Ok(DiffImpactResult {
+        git_ref: Some(git_ref.to_string()),
+        regions,
+    })
 }
 
 /// Conservative allow-list for git refs coming from MCP callers.

@@ -479,14 +479,24 @@ impl Database {
             "DELETE FROM nodes_semantic_fts WHERE rowid IN (SELECT id FROM nodes WHERE file_path = ?1)",
             params![path],
         )?;
+        // Unresolved refs before nodes: `unresolved_refs.source_node_id` has a
+        // foreign key to `nodes.id`, so dropping the nodes first fails the
+        // constraint. That went unnoticed while resolution emptied the table
+        // on every pass; once unresolved refs began to be *kept* (so the
+        // health figure could mean something), every targeted reindex started
+        // failing here instead.
+        //
+        // Matched on `source_node_id` rather than `file_path`: a ref recorded
+        // against a node in this file may carry a different `file_path`, and
+        // leaving it behind would re-fail the constraint.
+        self.conn.execute(
+            "DELETE FROM unresolved_refs WHERE file_path = ?1 \
+             OR source_node_id IN (SELECT id FROM nodes WHERE file_path = ?1)",
+            params![path],
+        )?;
         // Delete nodes
         self.conn
             .execute("DELETE FROM nodes WHERE file_path = ?1", params![path])?;
-        // Delete unresolved references
-        self.conn.execute(
-            "DELETE FROM unresolved_refs WHERE file_path = ?1",
-            params![path],
-        )?;
         // Delete file record
         self.conn
             .execute("DELETE FROM files WHERE path = ?1", params![path])?;
@@ -2177,6 +2187,61 @@ mod tests {
             "a call into code outside the index is unresolved, not resolved-to-nothing"
         );
         assert_eq!(db.health().unwrap().unresolved_refs, 1);
+    }
+
+    /// Deleting a file must not trip the foreign key from `unresolved_refs`
+    /// to `nodes`. This was masked for as long as resolution emptied
+    /// `unresolved_refs` wholesale; keeping unresolvable refs made every
+    /// targeted reindex fail with "FOREIGN KEY constraint failed".
+    #[test]
+    fn test_delete_file_removes_unresolved_refs_before_nodes() {
+        let db = Database::in_memory().unwrap();
+        db.insert_or_update_file(&mk_file("src/a.rs")).unwrap();
+        let node = db
+            .insert_node(&create_test_node("caller", NodeKind::Function, "src/a.rs"))
+            .unwrap();
+        db.insert_unresolved_ref(&UnresolvedReference {
+            source_node_id: node,
+            reference_name: "println".to_string(),
+            kind: EdgeKind::Calls,
+            file_path: "src/a.rs".to_string(),
+            line: 1,
+            column: 0,
+            detail: None,
+        })
+        .unwrap();
+
+        db.delete_file("src/a.rs").expect("delete must not fail");
+
+        assert!(db.get_nodes_by_file("src/a.rs").unwrap().is_empty());
+        assert!(db.get_unresolved_refs().unwrap().is_empty());
+        assert!(db.get_file("src/a.rs").unwrap().is_none());
+    }
+
+    /// A ref whose own `file_path` differs from its source node's file still
+    /// has to go, or the constraint fails on the node delete.
+    #[test]
+    fn test_delete_file_removes_refs_anchored_to_its_nodes() {
+        let db = Database::in_memory().unwrap();
+        db.insert_or_update_file(&mk_file("src/a.rs")).unwrap();
+        db.insert_or_update_file(&mk_file("src/b.rs")).unwrap();
+        let node = db
+            .insert_node(&create_test_node("caller", NodeKind::Function, "src/a.rs"))
+            .unwrap();
+        db.insert_unresolved_ref(&UnresolvedReference {
+            source_node_id: node,
+            reference_name: "thing".to_string(),
+            kind: EdgeKind::Calls,
+            // Recorded against a different file than the node lives in.
+            file_path: "src/b.rs".to_string(),
+            line: 1,
+            column: 0,
+            detail: None,
+        })
+        .unwrap();
+
+        db.delete_file("src/a.rs").expect("delete must not fail");
+        assert!(db.get_unresolved_refs().unwrap().is_empty());
     }
 
     // --- index provenance ---------------------------------------------

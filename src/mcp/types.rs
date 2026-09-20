@@ -10,6 +10,10 @@ use crate::ops::format::normalize_path;
 pub struct ContextRequest {
     #[schemars(description = "Description of the task, bug, or feature to explore")]
     pub task: String,
+    #[schemars(description = "Max entry points and related symbols to gather (default 20)")]
+    pub limit: Option<u32>,
+    #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
+    pub format: Option<String>,
 }
 
 /// Request for search tool
@@ -23,6 +27,8 @@ pub struct SearchRequest {
     pub semantic: Option<bool>,
     #[schemars(description = "Max results to return (default 10, max 1000)")]
     pub limit: Option<u32>,
+    #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
+    pub format: Option<String>,
 }
 
 /// Request for symbol-based tools (callers, callees, node, references,
@@ -114,6 +120,8 @@ pub struct ReindexRequest {
         description = "Optional: specific files to reindex. If omitted, rebuilds the full index via a shadow database."
     )]
     pub files: Option<Vec<String>>,
+    #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
+    pub format: Option<String>,
 }
 
 /// Request for call path tool
@@ -140,6 +148,8 @@ pub struct DiffImpactRequest {
         description = "Optional git ref (commit, branch, or HEAD~N) to diff against working tree. Discovers changed files and line ranges automatically."
     )]
     pub git_ref: Option<String>,
+    #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
+    pub format: Option<String>,
 }
 
 /// Request for blame tool
@@ -153,6 +163,8 @@ pub struct BlameRequest {
         description = "Disambiguate: only consider the definition with this qualified name"
     )]
     pub qualified_name: Option<String>,
+    #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
+    pub format: Option<String>,
 }
 
 /// Request for churn tool
@@ -164,6 +176,10 @@ pub struct ChurnRequest {
     pub path: Option<String>,
     #[schemars(description = "How many days of history to scan (default: 90)")]
     pub days: Option<u32>,
+    #[schemars(description = "Max files to list (default 30, max 1000)")]
+    pub limit: Option<u32>,
+    #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
+    pub format: Option<String>,
 }
 
 /// Request for the module-graph and coupling-score tools.

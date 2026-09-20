@@ -92,7 +92,7 @@ pub struct Resolution {
 }
 
 impl Resolution {
-    fn of(matched: &SymbolMatch) -> Self {
+    pub fn of(matched: &SymbolMatch) -> Self {
         Resolution {
             candidates: matched.candidates,
             ambiguous: matched.is_ambiguous(),
@@ -145,7 +145,7 @@ pub struct Page {
 }
 
 impl Page {
-    fn new(total: usize, shown: usize, limit: u32, offset: u32) -> Self {
+    pub fn new(total: usize, shown: usize, limit: u32, offset: u32) -> Self {
         Page {
             total,
             shown,
@@ -852,6 +852,115 @@ pub fn unused(
 }
 
 // ===========================================================================
+// context — task-focused entry points, neighbours and code
+// ===========================================================================
+
+/// Task context as a typed result.
+///
+/// Wraps `TaskContext` so the tool gains `format=json` through the same
+/// `present` path as everything else. The CLI previously serialised
+/// `TaskContext` directly while the MCP tool had no `format` field at all —
+/// one tool, two shapes.
+#[derive(Serialize)]
+pub struct ContextResult {
+    pub task: String,
+    #[serde(flatten)]
+    pub context: crate::types::TaskContext,
+}
+
+impl Render for ContextResult {
+    fn to_markdown(&self) -> String {
+        crate::context::format_context_markdown(&self.context)
+    }
+}
+
+pub fn context(
+    db: &Database,
+    project_root: &str,
+    task: &str,
+    max_nodes: u32,
+) -> Result<ContextResult, String> {
+    let options = crate::context::ContextOptions {
+        max_nodes,
+        include_code: true,
+        ..Default::default()
+    };
+    let context = crate::context::ContextBuilder::new(db, project_root.to_string())
+        .build_context(task, &options)
+        .map_err(|e| e.to_string())?;
+    Ok(ContextResult {
+        task: task.to_string(),
+        context,
+    })
+}
+
+// ===========================================================================
+// search — symbols matching a query
+// ===========================================================================
+
+#[derive(Serialize)]
+pub struct SearchResult {
+    pub query: String,
+    /// True when the search ran over identifier tokens and docstrings rather
+    /// than symbol-name prefixes.
+    pub semantic: bool,
+    #[serde(flatten)]
+    pub page: Page,
+    pub results: Vec<Node>,
+}
+
+impl Render for SearchResult {
+    fn to_markdown(&self) -> String {
+        if self.results.is_empty() {
+            return format!("No symbols found matching '{}'", self.query);
+        }
+        let mode = if self.semantic { "semantic " } else { "" };
+        let mut out = format!(
+            "Found {} symbols ({}match) for '{}':\n\n",
+            self.page.describe(),
+            mode,
+            self.query
+        );
+        for node in &self.results {
+            out.push_str(&format::format_node_with_signature(node));
+        }
+        out.push_str(&self.page.note());
+        out
+    }
+}
+
+pub fn search(
+    db: &Database,
+    query: &str,
+    semantic: bool,
+    limit: Option<u32>,
+) -> Result<SearchResult, String> {
+    let limit = effective_limit(limit, constants::DEFAULT_SEARCH_LIMIT);
+    // Ask for one more than we will show: if it comes back, more symbols match
+    // than fit the page, and saying so beats implying the list is complete.
+    let mut results = if semantic {
+        db.semantic_search(query, limit + 1)
+    } else {
+        db.search_nodes(query, None, limit + 1)
+    }
+    .map_err(|e| e.to_string())?;
+
+    // A prefix search cannot report a true total without a second count
+    // query, so the page reports "at least this many" by counting the probe
+    // row. `truncated` is what callers act on, and it is exact.
+    let truncated = results.len() > limit as usize;
+    results.truncate(limit as usize);
+    let total = results.len() + usize::from(truncated);
+
+    Ok(SearchResult {
+        query: query.to_string(),
+        semantic,
+        page: Page::new(total, results.len(), limit, 0),
+        results,
+    })
+}
+
+// ===========================================================================
 // path — call paths between two symbols
 // ===========================================================================
 
@@ -1148,5 +1257,307 @@ mod tests {
         assert_eq!(effective_limit(Some(0), 20), 20);
         assert_eq!(effective_limit(Some(5), 20), 5);
         assert_eq!(effective_limit(Some(MAX_LIMIT * 10), 20), MAX_LIMIT);
+    }
+}
+
+// ===========================================================================
+// git-backed results: blame, churn, diff impact
+// ===========================================================================
+
+/// One `git blame` line, parsed into its parts.
+#[derive(Serialize)]
+pub struct BlameLine {
+    pub commit: String,
+    pub author: String,
+    pub date: String,
+    pub line: u32,
+    pub text: String,
+}
+
+#[derive(Serialize)]
+pub struct BlameResult {
+    pub symbol: String,
+    pub file: String,
+    pub start_line: u32,
+    pub end_line: u32,
+    pub lines: Vec<BlameLine>,
+    pub resolution: Resolution,
+    /// The raw `git blame` output, kept so the markdown rendering is
+    /// byte-identical to what this tool has always printed.
+    #[serde(skip)]
+    raw: String,
+}
+
+impl Render for BlameResult {
+    fn to_markdown(&self) -> String {
+        format!(
+            "## blame: `{}` ({}:{}-{})\n\n```\n{}```\n{}",
+            self.symbol,
+            self.file,
+            self.start_line,
+            self.end_line,
+            self.raw,
+            self.resolution.note()
+        )
+    }
+}
+
+/// Build a blame result from a resolved symbol and raw `git blame` output.
+pub fn blame_result(node: &Node, resolution: Resolution, raw: String) -> BlameResult {
+    BlameResult {
+        symbol: node.name.clone(),
+        file: node.file_path.clone(),
+        start_line: node.start_line,
+        end_line: node.end_line,
+        lines: raw.lines().filter_map(parse_blame_line).collect(),
+        resolution,
+        raw,
+    }
+}
+
+/// Parse `git blame --date=short` porcelain-less output.
+///
+/// The shape is `<sha> (<author> <date> <line>) <text>`; author names contain
+/// spaces, so the fields are taken from the ends of the parenthesised group
+/// rather than by splitting it. A line that does not match is still carried,
+/// with empty metadata, so JSON output never silently loses one.
+pub fn parse_blame_line(line: &str) -> Option<BlameLine> {
+    let (commit, rest) = line.split_once(' ')?;
+    let open = rest.find('(')?;
+    let close = rest.find(')')?;
+    if close < open {
+        return None;
+    }
+    let meta = &rest[open + 1..close];
+    let text = rest[close + 1..].trim_start_matches(' ').to_string();
+
+    let mut fields: Vec<&str> = meta.split_whitespace().collect();
+    let line_no = fields.pop()?.parse().ok()?;
+    let date = fields.pop().unwrap_or("").to_string();
+    let author = fields.join(" ");
+
+    Some(BlameLine {
+        commit: commit.trim_start_matches('^').to_string(),
+        author,
+        date,
+        line: line_no,
+        text,
+    })
+}
+
+/// A file and how many commits touched it in the window.
+#[derive(Serialize)]
+pub struct ChurnEntry {
+    pub file: String,
+    pub commits: u32,
+}
+
+#[derive(Serialize)]
+pub struct ChurnResult {
+    pub days: u32,
+    pub path: Option<String>,
+    #[serde(flatten)]
+    pub page: Page,
+    pub files: Vec<ChurnEntry>,
+}
+
+impl Render for ChurnResult {
+    fn to_markdown(&self) -> String {
+        let scope = |sep: &str| {
+            self.path
+                .as_deref()
+                .map(|p| format!("{sep}`{p}`"))
+                .unwrap_or_default()
+        };
+        if self.files.is_empty() {
+            return format!(
+                "No changes in the last {} days{}.",
+                self.days,
+                scope(" under ")
+            );
+        }
+        let mut out = format!("# Churn (last {} days{})\n\n", self.days, scope(", path="));
+        out.push_str("| Commits | File |\n|---:|---|\n");
+        for entry in &self.files {
+            out.push_str(&format!("| {} | {} |\n", entry.commits, entry.file));
+        }
+        out.push_str(&self.page.note());
+        out
+    }
+}
+
+/// Symbols affected by a change to one region of one file.
+#[derive(Serialize)]
+pub struct RegionImpact {
+    pub file: String,
+    pub start_line: u32,
+    pub end_line: u32,
+    pub total: usize,
+    /// Symbols whose own span overlaps the changed region.
+    pub direct: Vec<Node>,
+    /// Symbols that reach the changed region through the call graph.
+    pub indirect: Vec<Node>,
+}
+
+impl RegionImpact {
+    pub fn new(file: &str, start_line: u32, end_line: u32, nodes: Vec<Node>) -> Self {
+        let (direct, indirect): (Vec<Node>, Vec<Node>) = nodes.into_iter().partition(|node| {
+            node.file_path == file && node.start_line <= end_line && node.end_line >= start_line
+        });
+        RegionImpact {
+            file: file.to_string(),
+            start_line,
+            end_line,
+            total: direct.len() + indirect.len(),
+            direct,
+            indirect,
+        }
+    }
+}
+
+impl Render for RegionImpact {
+    fn to_markdown(&self) -> String {
+        if self.total == 0 {
+            return format!(
+                "No symbols affected by changes to {}:{}—{}\n",
+                self.file, self.start_line, self.end_line
+            );
+        }
+        let mut out = format!(
+            "## Impact: {}:{}—{}\n\nPotentially affected: {} symbol(s)\n\n",
+            self.file, self.start_line, self.end_line, self.total
+        );
+        if !self.direct.is_empty() {
+            out.push_str("### Directly Modified\n\n");
+            for node in &self.direct {
+                out.push_str(&format::format_node(node));
+                out.push_str("\n\n");
+            }
+        }
+        if !self.indirect.is_empty() {
+            out.push_str("### Indirect Impact (Callers)\n\n");
+            for node in &self.indirect {
+                out.push_str(&format::format_node(node));
+                out.push_str("\n\n");
+            }
+        }
+        out
+    }
+}
+
+#[derive(Serialize)]
+pub struct DiffImpactResult {
+    /// The ref this was diffed against, when discovered from git rather than
+    /// given as an explicit region.
+    pub git_ref: Option<String>,
+    pub regions: Vec<RegionImpact>,
+}
+
+impl Render for DiffImpactResult {
+    fn to_markdown(&self) -> String {
+        match &self.git_ref {
+            Some(git_ref) => {
+                if self.regions.is_empty() {
+                    return format!("No changes detected against `{}`.", git_ref);
+                }
+                let mut out = format!(
+                    "# Diff impact vs `{}`\n\nChanged regions: {}\n\n",
+                    git_ref,
+                    self.regions.len()
+                );
+                for region in &self.regions {
+                    out.push_str(&region.to_markdown());
+                    out.push_str("\n---\n\n");
+                }
+                out
+            }
+            // An explicit region was asked for, so there is exactly one.
+            None => self
+                .regions
+                .first()
+                .map(Render::to_markdown)
+                .unwrap_or_default(),
+        }
+    }
+}
+
+// ===========================================================================
+// reindex — what a rebuild did
+// ===========================================================================
+
+/// The outcome of a reindex, however it was triggered.
+#[derive(Serialize, Default)]
+pub struct ReindexResult {
+    /// "full rebuild", "files", or "queued" when the server started one in
+    /// the background and has nothing to report yet.
+    pub mode: String,
+    pub files: u64,
+    pub nodes: u64,
+    pub edges: u64,
+    pub resolved_refs: u64,
+    pub errors: u64,
+    pub parse_failures: u64,
+    pub skipped_too_large: u64,
+    /// Problems that did not stop the reindex — a path that failed
+    /// validation, a compaction that did not run.
+    pub warnings: Vec<String>,
+    /// Set when there are no statistics to report, e.g. a background rebuild
+    /// that has only just been queued.
+    pub message: Option<String>,
+}
+
+impl ReindexResult {
+    /// A result carrying only a message — nothing was measured.
+    pub fn message(mode: &str, message: &str) -> Self {
+        ReindexResult {
+            mode: mode.to_string(),
+            message: Some(message.to_string()),
+            ..Default::default()
+        }
+    }
+
+    pub fn from_stats(mode: &str, stats: &crate::IndexingStats) -> Self {
+        ReindexResult {
+            mode: mode.to_string(),
+            files: stats.files,
+            nodes: stats.nodes,
+            edges: stats.edges,
+            resolved_refs: stats.resolved_refs,
+            errors: stats.errors,
+            parse_failures: stats.parse_failures,
+            skipped_too_large: stats.skipped_too_large,
+            warnings: Vec::new(),
+            message: None,
+        }
+    }
+}
+
+impl Render for ReindexResult {
+    fn to_markdown(&self) -> String {
+        if let Some(message) = &self.message {
+            return message.clone();
+        }
+        let mut out = format!(
+            "## Reindex Complete\n\n**Mode:** {}\n**Files indexed:** {}\n\
+             **Symbols found:** {}\n**Edges created:** {}\n\
+             **References resolved:** {}\n**Errors:** {}\n",
+            self.mode, self.files, self.nodes, self.edges, self.resolved_refs, self.errors
+        );
+        if self.parse_failures > 0 {
+            out.push_str(&format!(
+                "**Files with syntax errors:** {} (their symbols are incomplete)\n",
+                self.parse_failures
+            ));
+        }
+        if self.skipped_too_large > 0 {
+            out.push_str(&format!(
+                "**Files skipped as too large:** {}\n",
+                self.skipped_too_large
+            ));
+        }
+        if !self.warnings.is_empty() {
+            out.push_str(&format!("\n**Errors:** {}\n", self.warnings.join(", ")));
+        }
+        out
     }
 }

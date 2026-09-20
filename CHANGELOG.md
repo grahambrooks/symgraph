@@ -25,6 +25,12 @@ was neither; they now say what they know and what they do not.
   licenses, sources and bans.
 - **Declared MSRV** of 1.90, verified by a CI job that builds against exactly
   that toolchain.
+- **`--format json` on every tool.** `context`, `search`, `blame`, `churn`,
+  `diff-impact`, `status` and `reindex` were markdown-only; all 14 request
+  types now carry `format`. Blame output is parsed into commit/author/date/line
+  fields rather than one opaque string.
+- **`symgraph reindex --files a.rs b.rs`** — the targeted mode the MCP tool
+  always had, now on the CLI too.
 - **Inheritance extraction.** `symgraph-implementations` had never worked:
   extraction emitted no `implements`/`extends` edges for any language, so the
   tool always answered "none found". It now reads inheritance clauses across
@@ -41,6 +47,17 @@ was neither; they now say what they know and what they do not.
 
 ### Fixed
 
+- **Targeted reindex always failed.** `delete_file` dropped `nodes` before
+  `unresolved_refs`, which holds a foreign key to it, so every
+  `symgraph-reindex` with a file list returned "FOREIGN KEY constraint failed"
+  in a warnings field nothing surfaced. Masked until unresolvable references
+  began to be kept rather than deleted on every pass.
+- **The CLI and the MCP server had drifted.** `search`, `context` and `status`
+  had separate CLI implementations, so fixes to a handler did not reach the
+  command users run — `context` supported `--format json` the MCP tool did not
+  have, and `status` needed its health block written twice. All three now call
+  the same functions, and a test runs the binary against the handler to keep
+  it that way.
 - **Symbol resolution was non-deterministic.** A name shared by several
   definitions resolved to whichever row SQLite happened to return, and the
   choice could change between reindexes. Resolution now prefers production code

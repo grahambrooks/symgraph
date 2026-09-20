@@ -4,6 +4,7 @@ use crate::cli::rebuild_project_database;
 use crate::db::Database;
 use crate::mcp::types::ReindexRequest;
 use crate::ops::format::normalize_path;
+use crate::ops::{present, Format, ReindexResult};
 use crate::security::validate_relative;
 use crate::{index_codebase, IndexConfig};
 
@@ -12,104 +13,78 @@ pub fn handle_reindex(
     project_root: &str,
     req: &ReindexRequest,
 ) -> Result<String, String> {
-    // If specific files requested, delete and reindex just those
-    if let Some(files) = &req.files {
-        if files.is_empty() {
-            return Ok(
-                "No files specified. Provide file paths or omit the parameter to rebuild the full index."
-                    .to_string(),
-            );
-        }
-
-        let mut errors = Vec::new();
-        let normalized: Vec<String> = files
-            .iter()
-            .map(|f| normalize_path(f).to_string())
-            .collect();
-
-        for file_path in files {
-            // Normalize and validate — reindex is a rare write path, so we
-            // fail loudly on traversal attempts rather than silently skip.
-            let normalized = normalize_path(file_path);
-            let path = match validate_relative(&normalized) {
-                Ok(p) => p,
-                Err(e) => {
-                    errors.push(format!("{}: {}", file_path, e));
-                    continue;
-                }
+    let fmt = Format::from_request(&req.format);
+    let result = match &req.files {
+        Some(files) if files.is_empty() => ReindexResult::message(
+            "none",
+            "No files specified. Provide file paths or omit the parameter to rebuild the full index.",
+        ),
+        Some(files) => reindex_files(db, project_root, files)?,
+        None => {
+            let config = IndexConfig {
+                root: project_root.to_string(),
+                ..Default::default()
             };
-
-            // Delete existing data for this file
-            if let Err(e) = db.delete_file(path) {
-                errors.push(format!("{}: {}", path, e));
-            }
+            let stats = rebuild_project_database(db, &config)
+                .map_err(|e| format!("Reindex failed: {}", e))?;
+            ReindexResult::from_stats("full rebuild", &stats)
         }
+    };
+    present(&result, fmt)
+}
 
-        // Re-index only the named files. This used to walk the entire tree
-        // and hash every file in it to pick up the handful just deleted, so
-        // "reindex one file" cost the same as a full incremental pass.
-        let config = IndexConfig {
-            root: project_root.to_string(),
-            skip_resolve: true,
-            only_files: Some(normalized.clone()),
-            ..Default::default()
-        };
+/// Delete and re-index the named files, then resolve only their references.
+fn reindex_files(
+    db: &mut Database,
+    project_root: &str,
+    files: &[String],
+) -> Result<ReindexResult, String> {
+    let mut warnings = Vec::new();
+    let normalized: Vec<String> = files
+        .iter()
+        .map(|f| normalize_path(f).to_string())
+        .collect();
 
-        match index_codebase(db, &config) {
-            Ok(mut stats) => {
-                // Scoped resolution: only resolve refs from the reindexed files
-                match db.resolve_references_for_files(&normalized) {
-                    Ok(resolved) => stats.resolved_refs = resolved as u64,
-                    Err(e) => errors.push(format!("resolve refs: {}", e)),
-                }
-
-                // Reclaim pages freed by the delete-and-reinsert above so the
-                // live index file does not grow with each incremental reindex.
-                if let Err(e) = db.compact() {
-                    errors.push(format!("compact: {}", e));
-                }
-
-                let mut output = format!(
-                    "## Reindex Complete\n\n**Files reindexed:** {}\n**Symbols found:** {}\n**Edges created:** {}\n**References resolved:** {}\n",
-                    stats.files, stats.nodes, stats.edges, stats.resolved_refs
-                );
-                if !errors.is_empty() {
-                    output.push_str(&format!("\n**Errors:** {}\n", errors.join(", ")));
-                }
-                Ok(output)
+    for file_path in files {
+        // Normalize and validate — reindex is a rare write path, so we
+        // fail loudly on traversal attempts rather than silently skip.
+        let normalized = normalize_path(file_path);
+        let path = match validate_relative(&normalized) {
+            Ok(p) => p,
+            Err(e) => {
+                warnings.push(format!("{}: {}", file_path, e));
+                continue;
             }
-            Err(e) => Err(format!("Reindex failed: {}", e)),
-        }
-    } else {
-        // Full shadow rebuild
-        let config = IndexConfig {
-            root: project_root.to_string(),
-            ..Default::default()
         };
-
-        match rebuild_project_database(db, &config) {
-            Ok(stats) => {
-                let mut out = format!(
-                    "## Reindex Complete\n\n**Mode:** full rebuild\n**Files indexed:** {}\n**Symbols found:** {}\n**Edges created:** {}\n**References resolved:** {}\n**Errors:** {}\n",
-                    stats.files, stats.nodes, stats.edges, stats.resolved_refs, stats.errors
-                );
-                if stats.parse_failures > 0 {
-                    out.push_str(&format!(
-                        "**Files with syntax errors:** {} (their symbols are incomplete)\n",
-                        stats.parse_failures
-                    ));
-                }
-                if stats.skipped_too_large > 0 {
-                    out.push_str(&format!(
-                        "**Files skipped as too large:** {}\n",
-                        stats.skipped_too_large
-                    ));
-                }
-                Ok(out)
-            }
-            Err(e) => Err(format!("Reindex failed: {}", e)),
+        if let Err(e) = db.delete_file(path) {
+            warnings.push(format!("{}: {}", path, e));
         }
     }
+
+    // Re-index only the named files, skipping global reference resolution —
+    // scoped resolution follows.
+    let config = IndexConfig {
+        root: project_root.to_string(),
+        skip_resolve: true,
+        only_files: Some(normalized.clone()),
+        ..Default::default()
+    };
+    let mut stats = index_codebase(db, &config).map_err(|e| format!("Reindex failed: {}", e))?;
+
+    match db.resolve_references_for_files(&normalized) {
+        Ok(resolved) => stats.resolved_refs = resolved as u64,
+        Err(e) => warnings.push(format!("resolve refs: {}", e)),
+    }
+
+    // Reclaim pages freed by the delete-and-reinsert above so the live index
+    // file does not grow with each incremental reindex.
+    if let Err(e) = db.compact() {
+        warnings.push(format!("compact: {}", e));
+    }
+
+    let mut result = ReindexResult::from_stats("files", &stats);
+    result.warnings = warnings;
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -143,8 +118,15 @@ mod tests {
         assert!(db.find_node_by_name("old_symbol").unwrap().is_some());
 
         write_file(&file_path, "pub fn new_symbol() {}\n");
-        let output =
-            handle_reindex(&mut db, &project_root, &ReindexRequest { files: None }).unwrap();
+        let output = handle_reindex(
+            &mut db,
+            &project_root,
+            &ReindexRequest {
+                files: None,
+                format: None,
+            },
+        )
+        .unwrap();
 
         assert!(output.contains("**Mode:** full rebuild"));
         assert!(db.find_node_by_name("old_symbol").unwrap().is_none());
@@ -173,11 +155,15 @@ mod tests {
             &project_root,
             &ReindexRequest {
                 files: Some(vec!["src/a.rs".to_string()]),
+                format: None,
             },
         )
         .unwrap();
 
-        assert!(output.contains("**Files reindexed:** 1"));
+        assert!(
+            output.contains("**Files indexed:** 1"),
+            "output was:\n{output}"
+        );
         assert!(db.find_node_by_name("old_a").unwrap().is_none());
         assert!(db.find_node_by_name("new_a").unwrap().is_some());
         assert!(db.find_node_by_name("stable_b").unwrap().is_some());
