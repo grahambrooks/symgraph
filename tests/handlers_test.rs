@@ -172,21 +172,13 @@ fn hierarchy_lists_a_struct_s_members() {
     );
 }
 
-/// Documents a gap rather than a feature: extraction emits no `implements` or
-/// `extends` edges for any language, so this tool has never returned anything.
-/// `impl Render for Engine` in the fixture is exactly the case it is supposed
-/// to find. Recorded as F8 in docs/review-2026-09-20.md.
-///
-/// Flip this assertion when trait/interface extraction lands.
+/// `impl Render for Engine` in the fixture. This tool returned nothing for
+/// every language until extraction learned to read inheritance clauses (F8).
 #[test]
-fn implementations_currently_finds_nothing_for_a_rust_impl() {
+fn implementations_finds_a_rust_trait_impl() {
     let (_dir, db) = fixture();
     let out = handlers::implementations::handle_implementations(&db, &symbol("Render")).unwrap();
-    assert!(
-        out.contains("No implementations"),
-        "extraction has started emitting implements edges — update this test \
-         and the F8 finding. Output was:\n{out}"
-    );
+    assert!(out.contains("Engine"), "output was:\n{out}");
 }
 
 #[test]

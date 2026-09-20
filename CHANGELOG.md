@@ -25,6 +25,12 @@ was neither; they now say what they know and what they do not.
   licenses, sources and bans.
 - **Declared MSRV** of 1.90, verified by a CI job that builds against exactly
   that toolchain.
+- **Inheritance extraction.** `symgraph-implementations` had never worked:
+  extraction emitted no `implements`/`extends` edges for any language, so the
+  tool always answered "none found". It now reads inheritance clauses across
+  Rust, Java, TypeScript, JavaScript, Python, C++, C#, Kotlin, Scala, Ruby and
+  Groovy. (Go has no declared inheritance to read.) Indexes built before this
+  are recognised as stale and rebuild automatically.
 - **Import-scoped symbol resolution.** A call now prefers a definition in a
   file the caller imports from over an arbitrary one. On symgraph's own
   codebase this cut arbitrary resolutions by a third.
@@ -93,9 +99,6 @@ was neither; they now say what they know and what they do not.
 
 ### Known limitations
 
-- `symgraph-implementations` returns nothing: extraction emits no
-  `implements`/`extends` edges for any language. Use `symgraph-hierarchy` for
-  now.
 - Symbol resolution is name-based. It is now deterministic and reports its own
   ambiguity, but it does not yet use imports to narrow candidates — on
   symgraph's own codebase 11.5% of names are shared by more than one
