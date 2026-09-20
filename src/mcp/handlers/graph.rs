@@ -29,7 +29,11 @@ pub fn handle_impact(
     let graph = Graph::new(db);
 
     let churn = if req.churn.unwrap_or(false) {
-        file_churn(project_root, req.days.unwrap_or(90), None).ok()
+        file_churn(project_root, req.days.unwrap_or(90), None)
+            .inspect_err(
+                |e| tracing::warn!(error = %e, "churn unavailable; impact omits volatility"),
+            )
+            .ok()
     } else {
         None
     };

@@ -85,10 +85,25 @@ pub fn handle_reindex(
         };
 
         match rebuild_project_database(db, &config) {
-            Ok(stats) => Ok(format!(
-                "## Reindex Complete\n\n**Mode:** full rebuild\n**Files indexed:** {}\n**Symbols found:** {}\n**Edges created:** {}\n**References resolved:** {}\n**Errors:** {}\n",
-                stats.files, stats.nodes, stats.edges, stats.resolved_refs, stats.errors
-            )),
+            Ok(stats) => {
+                let mut out = format!(
+                    "## Reindex Complete\n\n**Mode:** full rebuild\n**Files indexed:** {}\n**Symbols found:** {}\n**Edges created:** {}\n**References resolved:** {}\n**Errors:** {}\n",
+                    stats.files, stats.nodes, stats.edges, stats.resolved_refs, stats.errors
+                );
+                if stats.parse_failures > 0 {
+                    out.push_str(&format!(
+                        "**Files with syntax errors:** {} (their symbols are incomplete)\n",
+                        stats.parse_failures
+                    ));
+                }
+                if stats.skipped_too_large > 0 {
+                    out.push_str(&format!(
+                        "**Files skipped as too large:** {}\n",
+                        stats.skipped_too_large
+                    ));
+                }
+                Ok(out)
+            }
             Err(e) => Err(format!("Reindex failed: {}", e)),
         }
     }

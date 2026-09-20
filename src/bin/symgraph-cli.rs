@@ -393,6 +393,17 @@ fn index_incremental(path: &str, fmt: OutputFormat) -> Result<()> {
     let project_root = canonicalize_path(path)?;
     let mut db = open_project_database(&project_root)?;
 
+    // An incremental pass cannot migrate rows it does not revisit, so a stale
+    // index needs the full rebuild it would otherwise get only if the user
+    // happened to know to ask for one.
+    if let Some(stale) = db.staleness()? {
+        if !json {
+            println!("Index is out of date ({stale}); rebuilding from scratch.");
+        }
+        drop(db);
+        return index_command(path, fmt);
+    }
+
     let config = IndexConfig {
         root: project_root.clone(),
         show_progress: !json,
@@ -415,6 +426,7 @@ fn index_incremental(path: &str, fmt: OutputFormat) -> Result<()> {
     if stats.errors > 0 {
         println!("  Errors: {}", stats.errors);
     }
+    symgraph::cli::print_index_gaps(&stats);
     print_unsupported_types(&stats.unsupported_types);
     Ok(())
 }

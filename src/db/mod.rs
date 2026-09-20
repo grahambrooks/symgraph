@@ -14,6 +14,7 @@ use std::{
     fs,
     io::ErrorKind,
     path::{Path, PathBuf},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use crate::types::{
@@ -38,6 +39,79 @@ const CONNECTION_PRAGMAS: &str = "PRAGMA auto_vacuum = INCREMENTAL; \
              PRAGMA synchronous = NORMAL; \
              PRAGMA busy_timeout = 5000; \
              PRAGMA cache_size = -64000;";
+
+/// Why an existing index cannot be trusted as-is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Staleness {
+    /// Built before symgraph recorded provenance at all.
+    Unversioned,
+    /// The SQL schema has changed since this index was written.
+    Schema { found: u32, expected: u32 },
+    /// The schema still fits, but the extractor now produces different nodes
+    /// and edges for the same source. The rows read fine and mean something
+    /// else — the failure mode that makes this worth tracking separately.
+    Extractor { found: u32, expected: u32 },
+}
+
+impl std::fmt::Display for Staleness {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Staleness::Unversioned => {
+                write!(f, "index predates version tracking")
+            }
+            Staleness::Schema { found, expected } => write!(
+                f,
+                "index schema v{}, this symgraph expects v{}",
+                found, expected
+            ),
+            Staleness::Extractor { found, expected } => write!(
+                f,
+                "index built by extractor v{}, this symgraph expects v{}",
+                found, expected
+            ),
+        }
+    }
+}
+
+/// Provenance recorded when an index was built.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct IndexVersion {
+    pub schema: u32,
+    pub extractor: u32,
+    /// The `symgraph` crate version that built the index.
+    pub symgraph: String,
+    /// Unix seconds at which the build finished.
+    pub built_at: i64,
+}
+
+/// How far the index can be trusted, as opposed to how large it is.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct IndexHealth {
+    /// Set when the index was built by an incompatible symgraph.
+    pub staleness: Option<String>,
+    pub version: Option<IndexVersion>,
+    /// Symbol names carried by more than one definition.
+    pub ambiguous_names: u64,
+    /// Distinct symbol names in the index.
+    pub distinct_names: u64,
+    /// References that resolved to no definition (third-party calls, and
+    /// anything extraction failed to link).
+    pub unresolved_refs: u64,
+    /// The FTS index still agrees with the `nodes` table.
+    pub fts_ok: bool,
+}
+
+impl IndexHealth {
+    /// Share of names that more than one definition answers to, as a
+    /// percentage. The higher this is, the more of the call graph rests on a
+    /// guess.
+    pub fn ambiguous_percent(&self) -> f64 {
+        if self.distinct_names == 0 {
+            return 0.0;
+        }
+        self.ambiguous_names as f64 * 100.0 / self.distinct_names as f64
+    }
+}
 
 /// Deterministic preference order among definitions that share one name.
 ///
@@ -123,6 +197,143 @@ impl Database {
         let db = Self { conn, path };
         db.initialize()?;
         Ok(db)
+    }
+
+    /// Read a value from `index_meta`.
+    fn meta(&self, key: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn
+            .query_row(
+                "SELECT value FROM index_meta WHERE key = ?1",
+                params![key],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?)
+    }
+
+    fn meta_u32(&self, key: &str) -> Result<Option<u32>> {
+        Ok(self.meta(key)?.and_then(|v| v.parse().ok()))
+    }
+
+    /// The provenance recorded for this index, or `None` if it was built
+    /// before symgraph tracked it.
+    pub fn index_version(&self) -> Result<Option<IndexVersion>> {
+        let (Some(schema), Some(extractor)) = (
+            self.meta_u32("schema_version")?,
+            self.meta_u32("extractor_version")?,
+        ) else {
+            return Ok(None);
+        };
+        Ok(Some(IndexVersion {
+            schema,
+            extractor,
+            symgraph: self.meta("symgraph_version")?.unwrap_or_default(),
+            built_at: self
+                .meta("built_at")?
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(0),
+        }))
+    }
+
+    /// Stamp this index with the schema, extractor and crate versions that
+    /// built it. Called once a full build completes, so a half-written index
+    /// never looks current.
+    pub fn record_index_version(&self) -> Result<()> {
+        let built_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let entries: [(&str, String); 4] = [
+            ("schema_version", schema::SCHEMA_VERSION.to_string()),
+            ("extractor_version", schema::EXTRACTOR_VERSION.to_string()),
+            ("symgraph_version", env!("CARGO_PKG_VERSION").to_string()),
+            ("built_at", built_at.to_string()),
+        ];
+        let mut stmt = self.conn.prepare_cached(
+            "INSERT INTO index_meta (key, value) VALUES (?1, ?2) \
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        )?;
+        for (key, value) in entries {
+            stmt.execute(params![key, value])?;
+        }
+        Ok(())
+    }
+
+    /// Signals about how far the index can be trusted, independent of how big
+    /// it is.
+    ///
+    /// These are the numbers that answer "should I believe this result?" —
+    /// `get_stats` answers "how much is in here", which is a different
+    /// question and was the only one the status tool used to ask.
+    pub fn health(&self) -> Result<IndexHealth> {
+        // Names carried by more than one definition. Every one of these is a
+        // place where name-based resolution has to guess (see `resolve_symbol`),
+        // so the ratio is a direct read on how much of the graph is approximate.
+        let ambiguous_names: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM (SELECT name FROM nodes WHERE kind != 'file' \
+             GROUP BY name HAVING COUNT(*) > 1)",
+            [],
+            |row| row.get(0),
+        )?;
+        let distinct_names: i64 = self.conn.query_row(
+            "SELECT COUNT(DISTINCT name) FROM nodes WHERE kind != 'file'",
+            [],
+            |row| row.get(0),
+        )?;
+        // References the resolver could not attach to any definition — calls
+        // into third-party crates, but also anything extraction got wrong.
+        let unresolved_refs: i64 =
+            self.conn
+                .query_row("SELECT COUNT(*) FROM unresolved_refs", [], |row| row.get(0))?;
+
+        Ok(IndexHealth {
+            staleness: self.staleness()?.map(|s| s.to_string()),
+            version: self.index_version()?,
+            ambiguous_names: ambiguous_names as u64,
+            distinct_names: distinct_names as u64,
+            unresolved_refs: unresolved_refs as u64,
+            fts_ok: self.check_fts_integrity(),
+        })
+    }
+
+    /// Verify the external-content FTS index still agrees with `nodes`.
+    ///
+    /// `nodes_fts` is maintained by hand rather than by triggers, so a bug in
+    /// the insert or delete path desynchronises it and search silently starts
+    /// missing or inventing rows. FTS5 can check this for us.
+    fn check_fts_integrity(&self) -> bool {
+        self.conn
+            .execute_batch("INSERT INTO nodes_fts(nodes_fts) VALUES('integrity-check');")
+            .is_ok()
+    }
+
+    /// Why this index cannot be trusted, or `None` when it is current.
+    ///
+    /// An empty index is never stale — there is nothing in it to be wrong.
+    pub fn staleness(&self) -> Result<Option<Staleness>> {
+        let empty: i64 = self
+            .conn
+            .query_row("SELECT COUNT(*) FROM files", [], |row| row.get(0))?;
+        if empty == 0 {
+            return Ok(None);
+        }
+
+        let Some(version) = self.index_version()? else {
+            return Ok(Some(Staleness::Unversioned));
+        };
+        if version.schema != schema::SCHEMA_VERSION {
+            return Ok(Some(Staleness::Schema {
+                found: version.schema,
+                expected: schema::SCHEMA_VERSION,
+            }));
+        }
+        if version.extractor != schema::EXTRACTOR_VERSION {
+            return Ok(Some(Staleness::Extractor {
+                found: version.extractor,
+                expected: schema::EXTRACTOR_VERSION,
+            }));
+        }
+        Ok(None)
     }
 
     /// Path to the on-disk database, if this handle is file-backed.
@@ -370,9 +581,18 @@ impl Database {
                 Ok(nodes)
             })();
 
-            // If FTS succeeds, return results; otherwise fall through to LIKE
-            if let Ok(nodes) = result {
-                return Ok(nodes);
+            // If FTS succeeds, return results; otherwise fall through to LIKE.
+            // The fallback silently returns *different* (prefix-only) results,
+            // so a desynchronised or corrupt FTS index would degrade search
+            // quality with nothing anywhere to say why.
+            match result {
+                Ok(nodes) => return Ok(nodes),
+                Err(e) => tracing::warn!(
+                    query = query,
+                    error = %e,
+                    "FTS search failed; falling back to LIKE. Search quality is degraded — \
+                     run `symgraph-status` to check index integrity."
+                ),
             }
         }
 
@@ -1024,6 +1244,7 @@ impl Database {
         id_map: &std::collections::HashMap<i64, i64>,
     ) -> Result<u64> {
         let mut count: u64 = 0;
+        let mut dropped: usize = 0;
         let mut stmt = self.conn.prepare_cached(
             r#"
             INSERT INTO edges (source_id, target_id, kind, file_path, line, column, detail)
@@ -1045,7 +1266,19 @@ impl Database {
                     edge.detail,
                 ])?;
                 count += 1;
+            } else {
+                dropped += 1;
             }
+        }
+        if dropped > 0 {
+            // An unmappable endpoint means extraction emitted an edge to a node
+            // id that was never inserted — a bug, not a data condition. Losing
+            // edges is how a graph quietly under-reports impact.
+            tracing::warn!(
+                dropped,
+                total = edges.len(),
+                "dropped edges whose endpoints could not be mapped to inserted nodes"
+            );
         }
         Ok(count)
     }
@@ -1064,6 +1297,7 @@ impl Database {
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
             "#,
         )?;
+        let mut dropped: usize = 0;
         for uref in refs {
             // Bind the remapped source id directly rather than mutating the ref.
             if let Some(&new_source) = id_map.get(&uref.source_node_id) {
@@ -1076,7 +1310,16 @@ impl Database {
                     uref.column as i64,
                     uref.detail,
                 ])?;
+            } else {
+                dropped += 1;
             }
+        }
+        if dropped > 0 {
+            tracing::warn!(
+                dropped,
+                total = refs.len(),
+                "dropped unresolved refs whose source node could not be mapped"
+            );
         }
         Ok(())
     }
@@ -1641,8 +1884,90 @@ mod tests {
     }
 
     // Database initialization tests
-    /// Several processes share one index file, so a query must wait out a
-    /// concurrent writer instead of failing with SQLITE_BUSY straight away.
+
+    // --- index provenance ---------------------------------------------
+
+    /// An index with rows but no recorded provenance predates version
+    /// tracking, so it must read as stale rather than as current.
+    #[test]
+    fn test_unversioned_index_with_rows_is_stale() {
+        let db = Database::in_memory().unwrap();
+        db.insert_or_update_file(&mk_file("src/a.rs")).unwrap();
+        assert_eq!(db.staleness().unwrap(), Some(Staleness::Unversioned));
+    }
+
+    /// An empty index has nothing in it that could be wrong.
+    #[test]
+    fn test_empty_index_is_never_stale() {
+        let db = Database::in_memory().unwrap();
+        assert_eq!(db.staleness().unwrap(), None);
+    }
+
+    #[test]
+    fn test_recording_the_version_clears_staleness() {
+        let db = Database::in_memory().unwrap();
+        db.insert_or_update_file(&mk_file("src/a.rs")).unwrap();
+        db.record_index_version().unwrap();
+
+        assert_eq!(db.staleness().unwrap(), None);
+        let version = db.index_version().unwrap().unwrap();
+        assert_eq!(version.schema, schema::SCHEMA_VERSION);
+        assert_eq!(version.extractor, schema::EXTRACTOR_VERSION);
+        assert_eq!(version.symgraph, env!("CARGO_PKG_VERSION"));
+        assert!(version.built_at > 0);
+    }
+
+    /// The schema still fits, but extraction semantics moved on: the rows read
+    /// fine and mean something else, which is the case worth catching.
+    #[test]
+    fn test_extractor_version_mismatch_is_stale() {
+        let db = Database::in_memory().unwrap();
+        db.insert_or_update_file(&mk_file("src/a.rs")).unwrap();
+        db.record_index_version().unwrap();
+        db.conn
+            .execute(
+                "UPDATE index_meta SET value = ?1 WHERE key = 'extractor_version'",
+                params![(schema::EXTRACTOR_VERSION - 1).to_string()],
+            )
+            .unwrap();
+
+        assert_eq!(
+            db.staleness().unwrap(),
+            Some(Staleness::Extractor {
+                found: schema::EXTRACTOR_VERSION - 1,
+                expected: schema::EXTRACTOR_VERSION,
+            })
+        );
+    }
+
+    #[test]
+    fn test_schema_version_mismatch_is_stale() {
+        let db = Database::in_memory().unwrap();
+        db.insert_or_update_file(&mk_file("src/a.rs")).unwrap();
+        db.record_index_version().unwrap();
+        db.conn
+            .execute(
+                "UPDATE index_meta SET value = '999' WHERE key = 'schema_version'",
+                [],
+            )
+            .unwrap();
+
+        assert!(matches!(
+            db.staleness().unwrap(),
+            Some(Staleness::Schema { found: 999, .. })
+        ));
+    }
+
+    /// Recording the version twice updates in place rather than conflicting.
+    #[test]
+    fn test_recording_the_version_is_idempotent() {
+        let db = Database::in_memory().unwrap();
+        db.insert_or_update_file(&mk_file("src/a.rs")).unwrap();
+        db.record_index_version().unwrap();
+        db.record_index_version().unwrap();
+        assert_eq!(db.staleness().unwrap(), None);
+    }
+
     /// Two definitions of one name, one of them in a test file. Resolution
     /// must pick the production one and say that it had a choice — the old
     /// bare `LIMIT 1` did neither.
@@ -1834,6 +2159,8 @@ mod tests {
         assert_eq!(db.find_unused_symbols(2, 4).unwrap().len(), 1);
     }
 
+    /// Several processes share one index file, so a query must wait out a
+    /// concurrent writer instead of failing with SQLITE_BUSY straight away.
     #[test]
     fn test_busy_timeout_is_configured() {
         let db = Database::in_memory().unwrap();

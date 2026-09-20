@@ -22,7 +22,19 @@ fn maybe_churn(
     if !want {
         return None;
     }
-    file_churn(project_root, days, None).ok()
+    // Degrading to "no churn data" is right — coupling analysis is still
+    // useful without volatility — but doing it silently presents every module
+    // as churn-free, which is a different claim from "we could not measure".
+    match file_churn(project_root, days, None) {
+        Ok(churn) => Some(churn),
+        Err(e) => {
+            tracing::warn!(
+                error = %e,
+                "churn unavailable; volatility will be omitted from this report"
+            );
+            None
+        }
+    }
 }
 
 pub fn handle_module_graph(

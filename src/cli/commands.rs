@@ -2,17 +2,17 @@
 
 use anyhow::{Context, Result};
 use serde::Serialize;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::context::{format_context_markdown, ContextBuilder, ContextOptions};
-use crate::db::Database;
+use crate::db::{Database, IndexHealth};
 use crate::ops::constants::effective_limit;
 use crate::types::{IndexStats, Node};
 
 /// Default result count for `symgraph search`. Matches what the command has
 /// always shown; `--limit` raises it.
 const CLI_SEARCH_LIMIT: u32 = 20;
-use crate::IndexConfig;
+use crate::{IndexConfig, IndexingStats};
 
 use super::db_utils::{
     canonicalize_path, open_project_database, prune_cache, rebuild_project_database, resolve_db,
@@ -73,6 +73,9 @@ struct StatusReport {
     strategy: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     stats: Option<IndexStats>,
+    /// How far the index can be trusted, as opposed to how large it is.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    health: Option<IndexHealth>,
 }
 
 #[derive(Serialize)]
@@ -110,9 +113,28 @@ pub fn index_command(path: &str, fmt: OutputFormat) -> Result<()> {
     if stats.errors > 0 {
         println!("  Errors: {}", stats.errors);
     }
+    print_index_gaps(&stats);
     print_unsupported_types(&stats.unsupported_types);
 
     Ok(())
+}
+
+/// Print what indexing could not fully cover: files whose syntax defeated the
+/// parser, and files too large to attempt. Silent zeros here previously made a
+/// partial index look complete.
+pub fn print_index_gaps(stats: &IndexingStats) {
+    if stats.parse_failures > 0 {
+        println!(
+            "  Files with syntax errors: {} (symbols from these are incomplete)",
+            stats.parse_failures
+        );
+    }
+    if stats.skipped_too_large > 0 {
+        println!(
+            "  Files skipped as too large: {} (raise max_file_bytes to include them)",
+            stats.skipped_too_large
+        );
+    }
 }
 
 /// Print the source file types that were found during indexing but left out of
@@ -150,6 +172,7 @@ pub fn status_command(path: &str, fmt: OutputFormat) -> Result<()> {
                 database: db_path.display().to_string(),
                 strategy: resolved.label.to_string(),
                 stats: None,
+                health: None,
             });
         }
         println!(
@@ -163,6 +186,7 @@ pub fn status_command(path: &str, fmt: OutputFormat) -> Result<()> {
 
     let db = Database::open(&db_path)?;
     let stats = db.get_stats()?;
+    let health = db.health()?;
 
     if fmt.is_json() {
         return print_json(&StatusReport {
@@ -170,6 +194,7 @@ pub fn status_command(path: &str, fmt: OutputFormat) -> Result<()> {
             database: db_path.display().to_string(),
             strategy: resolved.label.to_string(),
             stats: Some(stats),
+            health: Some(health),
         });
     }
 
@@ -180,6 +205,8 @@ pub fn status_command(path: &str, fmt: OutputFormat) -> Result<()> {
     println!("Symbols: {}", stats.total_nodes);
     println!("Relationships: {}", stats.total_edges);
     println!("Size: {:.2} KB", stats.db_size_bytes as f64 / 1024.0);
+
+    print_health(&health);
 
     if !stats.languages.is_empty() {
         println!("\nLanguages:");
@@ -196,6 +223,44 @@ pub fn status_command(path: &str, fmt: OutputFormat) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Print the trust signals alongside the size ones: whether the index is
+/// current, whether search is intact, and how much of the graph rests on
+/// name resolution that had to guess.
+fn print_health(health: &IndexHealth) {
+    if let Some(stale) = &health.staleness {
+        println!("\nWARNING: index is out of date ({stale}).");
+        println!(
+            "         Results may reflect older extraction semantics — run 'symgraph reindex'."
+        );
+    }
+    if !health.fts_ok {
+        println!("\nWARNING: the full-text search index disagrees with the symbol table.");
+        println!("         Search results may be wrong; a full reindex rebuilds it.");
+    }
+
+    println!("\nIndex health:");
+    match &health.version {
+        Some(v) => println!(
+            "  Built by: symgraph {} (schema v{}, extractor v{})",
+            if v.symgraph.is_empty() {
+                "unknown"
+            } else {
+                &v.symgraph
+            },
+            v.schema,
+            v.extractor
+        ),
+        None => println!("  Built by: a symgraph that predates index provenance"),
+    }
+    println!(
+        "  Ambiguous names: {} of {} ({:.1}%)",
+        health.ambiguous_names,
+        health.distinct_names,
+        health.ambiguous_percent()
+    );
+    println!("  Unresolved references: {}", health.unresolved_refs);
 }
 
 /// Search for symbols by name
@@ -378,6 +443,13 @@ pub fn initialize_server_database(in_memory: bool) -> Result<(String, Database)>
         info!(
             "Index loaded: {} files, {} symbols",
             stats.total_files, stats.total_nodes
+        );
+    }
+    if let Some(stale) = db.staleness()? {
+        warn!(
+            "index is out of date ({}); answers may reflect older extraction \
+             semantics. Run `symgraph reindex` or call the symgraph-reindex tool.",
+            stale
         );
     }
 

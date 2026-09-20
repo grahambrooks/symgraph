@@ -826,3 +826,161 @@ fn test_incremental_index_codebase_periodic_checkpoint() {
     assert_eq!(stats.files, 250);
     assert!(stats.nodes >= 500);
 }
+
+// ===========================================================================
+// Index provenance and coverage (review findings C6, F5)
+// ===========================================================================
+
+fn write(path: &std::path::Path, content: &str) {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent).unwrap();
+    }
+    fs::write(path, content).unwrap();
+}
+
+/// A completed full build stamps its provenance, so the index reads as current
+/// rather than as one that predates version tracking.
+#[test]
+fn test_full_build_stamps_provenance() {
+    let dir = tempdir().unwrap();
+    write(&dir.path().join("src/lib.rs"), "pub fn hello() {}\n");
+
+    let mut db = open_project_database(&dir.path().display().to_string()).unwrap();
+    let config = IndexConfig {
+        root: dir.path().display().to_string(),
+        ..Default::default()
+    };
+    rebuild_project_database(&mut db, &config).unwrap();
+
+    assert!(
+        db.staleness().unwrap().is_none(),
+        "a freshly built index must not read as stale"
+    );
+    let version = db.index_version().unwrap().expect("provenance recorded");
+    assert!(version.built_at > 0);
+}
+
+/// An incremental pass only revisits changed files, so running one over a
+/// stale index would leave the untouched rows in their old semantics. It must
+/// refuse rather than produce a half-migrated index.
+#[test]
+fn test_incremental_index_refuses_a_stale_index() {
+    let dir = tempdir().unwrap();
+    write(&dir.path().join("src/lib.rs"), "pub fn hello() {}\n");
+    let root = dir.path().display().to_string();
+
+    // Stand in for an index written by an older symgraph: it has rows, but no
+    // recorded provenance, which is exactly what an upgrade finds on disk.
+    let mut db = open_project_database(&root).unwrap();
+    db.insert_or_update_file(&FileRecord {
+        path: "src/lib.rs".to_string(),
+        content_hash: "stale".to_string(),
+        language: Language::Rust,
+        size: 0,
+        modified_at: 0,
+        indexed_at: 0,
+        node_count: 0,
+    })
+    .unwrap();
+    assert!(db.staleness().unwrap().is_some());
+
+    let config = IndexConfig {
+        root: root.clone(),
+        ..Default::default()
+    };
+    let err = index_codebase(&mut db, &config).unwrap_err();
+    let msg = err.to_string();
+    assert!(msg.contains("stale"), "got: {msg}");
+    assert!(
+        msg.contains("reindex"),
+        "error should say how to fix it: {msg}"
+    );
+}
+
+/// A file past the size cap is skipped and counted, not silently absorbed.
+#[test]
+fn test_oversized_files_are_skipped_and_counted() {
+    let dir = tempdir().unwrap();
+    write(&dir.path().join("src/small.rs"), "pub fn small() {}\n");
+    // One long line, as a minified bundle would be.
+    let big = format!("pub fn big() {{ {} }}\n", "let _x = 1; ".repeat(20_000));
+    write(&dir.path().join("src/big.rs"), &big);
+
+    let mut db = Database::in_memory().unwrap();
+    let config = IndexConfig {
+        root: dir.path().display().to_string(),
+        max_file_bytes: 4096,
+        ..Default::default()
+    };
+    let stats = build_full_index(&mut db, &config).unwrap();
+
+    assert_eq!(stats.skipped_too_large, 1);
+    assert!(db.find_node_by_name("small").unwrap().is_some());
+    assert!(
+        db.find_node_by_name("big").unwrap().is_none(),
+        "the oversized file must not be indexed"
+    );
+}
+
+/// A cap of 0 disables the limit rather than skipping everything.
+#[test]
+fn test_zero_max_file_bytes_disables_the_cap() {
+    let dir = tempdir().unwrap();
+    write(&dir.path().join("src/lib.rs"), "pub fn hello() {}\n");
+
+    let mut db = Database::in_memory().unwrap();
+    let config = IndexConfig {
+        root: dir.path().display().to_string(),
+        max_file_bytes: 0,
+        ..Default::default()
+    };
+    let stats = build_full_index(&mut db, &config).unwrap();
+
+    assert_eq!(stats.skipped_too_large, 0);
+    assert!(db.find_node_by_name("hello").unwrap().is_some());
+}
+
+/// A file the parser could only partially understand still contributes the
+/// symbols it recovered, and is counted so the gap is visible.
+#[test]
+fn test_partial_parses_are_counted_but_still_indexed() {
+    let dir = tempdir().unwrap();
+    write(&dir.path().join("src/good.rs"), "pub fn good() {}\n");
+    write(
+        &dir.path().join("src/broken.rs"),
+        "pub fn recovered() {}\npub fn broken( {\n",
+    );
+
+    let mut db = Database::in_memory().unwrap();
+    let config = IndexConfig {
+        root: dir.path().display().to_string(),
+        ..Default::default()
+    };
+    let stats = build_full_index(&mut db, &config).unwrap();
+
+    assert_eq!(stats.parse_failures, 1, "the broken file should be counted");
+    assert!(
+        db.find_node_by_name("recovered").unwrap().is_some(),
+        "symbols recovered before the syntax error should still be indexed"
+    );
+    assert!(db.find_node_by_name("good").unwrap().is_some());
+}
+
+/// Clean sources produce no parse failures — the counter must not fire on
+/// ordinary code.
+#[test]
+fn test_clean_sources_report_no_parse_failures() {
+    let dir = tempdir().unwrap();
+    write(
+        &dir.path().join("src/lib.rs"),
+        "pub fn a() {}\npub fn b() {}\n",
+    );
+
+    let mut db = Database::in_memory().unwrap();
+    let config = IndexConfig {
+        root: dir.path().display().to_string(),
+        ..Default::default()
+    };
+    let stats = build_full_index(&mut db, &config).unwrap();
+    assert_eq!(stats.parse_failures, 0);
+}
