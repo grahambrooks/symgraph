@@ -1,0 +1,48 @@
+src/db/mod.rs
+  s_23236ed069bd33::t_960e201d6775a8 29-34,39
+  s_23236ed069bd33::t_2f5cf2b7907cd5 1486-1497
+src/git.rs
+  s_23236ed069bd33::t_2e36fb01dc835a 63,79
+  s_23236ed069bd33::t_10fbfc63158f59 1-62,64-78,80-139
+docs/review-2026-09-20.md
+  s_23236ed069bd33::t_81f51b8658071b 1-294
+src/mcp/mod.rs
+  s_23236ed069bd33::t_2f5cf2b7907cd5 438-454,459-474
+  s_23236ed069bd33::t_2e36fb01dc835a 455-458
+  s_23236ed069bd33::t_d71e03bc1e092f 108-119,124
+src/ops/constants.rs
+  s_23236ed069bd33::t_3e2ae4fc0af7d6 20-24
+src/mcp/handlers/churn.rs
+  s_23236ed069bd33::t_3e2ae4fc0af7d6 62-63
+  s_23236ed069bd33::t_11281032f11335 5,7,22-24,36-38,40,43,46
+src/cli/db_utils.rs
+  s_23236ed069bd33::t_2913de68d69a56 18
+  s_23236ed069bd33::t_3e2ae4fc0af7d6 23,121-125
+src/mcp/handlers/blame.rs
+  s_23236ed069bd33::t_1d95a1d4b1601f 4,25-28,31
+src/server.rs
+  s_23236ed069bd33::t_d71e03bc1e092f 91-93,98-104
+.github/workflows/release.yml
+  s_23236ed069bd33::t_f2793429cf33d8 95-135,138,210-211,214
+src/mcp/handlers/diff_impact.rs
+  s_23236ed069bd33::t_1d95a1d4b1601f 138-141,144
+  s_23236ed069bd33::t_d51026cf0973c7 4
+src/lib.rs
+  s_23236ed069bd33::t_31fe7a5f77a443 34
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d7b5a9e425a202aedf36a81f87222fc48b0b7f15",
+  "prompts": {},
+  "sessions": {
+    "s_23236ed069bd33": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b20a211f-f1f4-4830-b7b2-f1fc7b2e7699",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}
