@@ -29,7 +29,7 @@ use crate::types::{
 // file does not bloat as files are deleted and reindexed over time.
 //
 // `busy_timeout` matters because one index is routinely open in several
-// processes at once — the MCP server, a CLI query, and `symgraph-cli watch`
+// processes at once — the MCP server, a CLI query, and `symgraph watch`
 // all resolve to the same file. Without it SQLite returns `SQLITE_BUSY` the
 // instant a writer holds the lock, so a query fails rather than waiting out a
 // reindex that would have finished in milliseconds.
