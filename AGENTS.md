@@ -4,7 +4,7 @@ Quick reference for AI agents working in this Rust MCP server repository.
 
 ## Quick Commands
 
-**Build/Test**: `make build` | `make test` | `make check` | `make fmt` | `make lint`
+**Build/Test**: `make build` | `make test` | `make check` | `make fmt` | `make lint` | `make cli-only` (lean, no MCP server)
 **Run**: `cargo run -- index .` | `cargo run -- serve` | `cargo run -- serve --port 8080`
 **Test**: `cargo test --lib` | `cargo test module::` | `cargo test --test integration_test`
 **Release**: `make release` (date-based version YYYY.M.D) | `make release-dry-run` (preview)
@@ -22,8 +22,8 @@ Quick reference for AI agents working in this Rust MCP server repository.
 **Key Features**: Fast symbol search, impact analysis, call graph navigation, AI context building
 
 **Module Structure**:
-- `main.rs`: CLI entry, command routing (~126 lines)
-- `server.rs`: MCP server startup (stdio/HTTP)
+- `main.rs`: the single binary — command catalog, routing, `serve`, help/completions/man
+- `server.rs`: MCP server startup (stdio/HTTP), behind the `server` feature
 - `lib.rs`: Core indexing, file walking
 - `types.rs`: Node, Edge, Language enums
 - `cli/`: Command implementations, DB utilities
@@ -58,7 +58,7 @@ Add new: Edit `src/extraction/languages.rs`
 
 ## Development Guidelines
 
-**Workflow**: Test → Change → `make check` (format, lint, test) → Commit
+**Workflow**: Test → Change → `make check` (format, lint, test, lean build, supply chain) → Commit
 
 **Code Style**:
 - Descriptive names, small functions (<100 lines)

@@ -21,15 +21,15 @@ help:
 	@echo "  build            Build release binary"
 	@echo "  test             Run all tests"
 	@echo "  lint             Run clippy lints"
-	@echo "  cli-only         Lint + test the lean CLI-only feature combo"
+	@echo "  cli-only         Lint + test the lean build (no MCP server)"
 	@echo "  deny             Supply-chain check (advisories, licenses, sources)"
 	@echo "  fmt              Format code"
 	@echo "  fmt-check        Check formatting without modifying"
-	@echo "  check            Run all checks (format, lint, test)"
+	@echo "  check            All gates: format, lint, test, lean build, supply chain"
 	@echo "  doc              Generate and open documentation"
 	@echo ""
 	@echo "Installation:"
-	@echo "  install          Build and install to /usr/local/bin"
+	@echo "  install          Build and install symgraph to /usr/local/bin"
 	@echo "  uninstall        Remove from /usr/local/bin"
 	@echo ""
 	@echo "Release:"
@@ -63,10 +63,13 @@ fmt:
 fmt-check:
 	cargo fmt --all -- --check
 
-# Lint and test the lean CLI-only feature combo. CI gates on this, so `check`
-# has to cover it or a green local run can still push a tag that CI rejects.
+# Lint and test the lean feature combo: the same `symgraph` binary without the
+# MCP server (no rmcp/axum/tokio), which is every command except `serve`.
+# Nothing else exercises the `#[cfg(feature = "server")]` gates, so a missing
+# one would only surface here. CI gates on this, so `check` has to cover it or
+# a green local run can still push a tag that CI rejects.
 cli-only:
-	cargo clippy --bin symgraph-cli --no-default-features --features sqlite -- -D warnings
+	cargo clippy --bin symgraph --no-default-features --features sqlite -- -D warnings
 	cargo test --no-default-features --features sqlite
 
 # Supply-chain gate: advisories, licenses, sources, bans (see deny.toml).
@@ -76,15 +79,18 @@ deny:
 # Run all checks (format, lint, test, lean build, supply chain)
 check: fmt-check lint test cli-only deny
 
-# Install to /usr/local/bin
+# Install to /usr/local/bin. One binary: `symgraph serve` is the MCP server.
 install: build
 	install -d /usr/local/bin
 	install -m 755 target/release/symgraph /usr/local/bin/symgraph
+	@# Builds before the binaries were merged also installed `symgraph-cli`.
+	@# Remove a leftover so it cannot shadow the real binary on PATH.
+	@rm -f /usr/local/bin/symgraph-cli
 	@echo "Installed symgraph to /usr/local/bin/symgraph"
 
 # Uninstall from /usr/local/bin
 uninstall:
-	rm -f /usr/local/bin/symgraph
+	rm -f /usr/local/bin/symgraph /usr/local/bin/symgraph-cli
 	@echo "Removed /usr/local/bin/symgraph"
 
 # Clean build artifacts
