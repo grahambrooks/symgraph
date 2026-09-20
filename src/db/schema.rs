@@ -106,7 +106,12 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// Schema compatibility and extraction compatibility are tracked separately
 /// because they fail differently: a schema mismatch cannot be read at all, an
 /// extractor mismatch reads fine and quietly answers with the old semantics.
-pub const EXTRACTOR_VERSION: u32 = 1;
+/// History:
+/// - v1: initial.
+/// - v2: extraction emits `implements`/`extends` edges (F8). Indexes built
+///   before this have none, so `symgraph-implementations` would keep
+///   answering "none found" against them.
+pub const EXTRACTOR_VERSION: u32 = 2;
 
 /// Additive schema migrations applied after CREATE TABLE IF NOT EXISTS.
 ///

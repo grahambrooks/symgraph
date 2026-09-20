@@ -207,6 +207,12 @@ impl<'a> ExtractionContext<'a> {
                         let container_id = self.node_stack.last().copied().unwrap_or(1);
                         self.find_import_target(&node, container_id);
                     }
+                    // Rust puts inheritance on the impl block rather than on
+                    // the type declaration, so it is matched here rather than
+                    // through the clause scan.
+                    if self.language == Language::Rust && node_type == "impl_item" {
+                        self.find_rust_impl(&node);
+                    }
                     if let Some(kind) = self.config.node_type_to_kind(node_type) {
                         let name = self.extract_name(&node, kind);
                         if name.is_empty() {
@@ -264,6 +270,19 @@ impl<'a> ExtractionContext<'a> {
         // `&mut T` parameters are an intrusive/common-coupling signal.
         if matches!(kind, NodeKind::Function | NodeKind::Method) {
             self.find_mut_params(&node, symbol_id);
+        }
+
+        // What this type inherits from: base classes and implemented
+        // interfaces, read off the declaration's inheritance clauses.
+        if matches!(
+            kind,
+            NodeKind::Class
+                | NodeKind::Struct
+                | NodeKind::Interface
+                | NodeKind::Trait
+                | NodeKind::Enum
+        ) {
+            self.find_supertypes(&node, symbol_id);
         }
 
         self.node_stack.push(symbol_id);
@@ -510,6 +529,125 @@ impl<'a> ExtractionContext<'a> {
         }
         parts.push(name.to_string());
         Some(parts.join("::"))
+    }
+
+    /// Emit `Extends` / `Implements` edges for a type declaration.
+    ///
+    /// Walks the declaration's inheritance clauses — `extends Animal`,
+    /// `implements Pet`, `(Animal, Pet)`, `: public Animal` — and records one
+    /// edge per named supertype, pointing from the declaring type to the type
+    /// it inherits. `symgraph-implementations` reads these edges; before they
+    /// existed the tool returned nothing for every language.
+    fn find_supertypes(&mut self, node: &tree_sitter::Node, source_id: i64) {
+        let config = self.config;
+        if config.extends_clause_types.is_empty() && config.implements_clause_types.is_empty() {
+            return;
+        }
+
+        // The declaration's body holds members, not supertypes; descending
+        // into it would turn every field type into a base class.
+        let body = node.child_by_field_name("body").map(|b| b.id());
+
+        let mut cursor = node.walk();
+        let children: Vec<_> = node.children(&mut cursor).collect();
+        for child in children {
+            if Some(child.id()) == body {
+                continue;
+            }
+            self.scan_inheritance_clause(&child, source_id, body);
+        }
+    }
+
+    /// Recurse through a declaration's non-body children looking for
+    /// inheritance clauses, then collect the type names inside one.
+    ///
+    /// Recursive rather than direct-children-only because some grammars wrap
+    /// the clauses — TypeScript nests `extends_clause` and
+    /// `implements_clause` inside a `class_heritage`.
+    fn scan_inheritance_clause(
+        &mut self,
+        node: &tree_sitter::Node,
+        source_id: i64,
+        body: Option<usize>,
+    ) {
+        if Some(node.id()) == body {
+            return;
+        }
+        let kind = node.kind();
+
+        if self.config.implements_clause_types.contains(&kind) {
+            self.collect_supertype_names(node, source_id, EdgeKind::Implements);
+            return;
+        }
+        if self.config.extends_clause_types.contains(&kind) {
+            self.collect_supertype_names(node, source_id, EdgeKind::Extends);
+            return;
+        }
+
+        let mut cursor = node.walk();
+        let children: Vec<_> = node.children(&mut cursor).collect();
+        for child in children {
+            self.scan_inheritance_clause(&child, source_id, body);
+        }
+    }
+
+    /// Collect every type name inside an inheritance clause and emit one edge
+    /// per name.
+    ///
+    /// Descent stops at the first node that names a type, so a wrapper such as
+    /// Kotlin's `user_type` contributes one name rather than also contributing
+    /// the `type_identifier` nested inside it.
+    fn collect_supertype_names(
+        &mut self,
+        node: &tree_sitter::Node,
+        source_id: i64,
+        kind: EdgeKind,
+    ) {
+        if languages::SUPERTYPE_NAME_TYPES.contains(&node.kind()) {
+            if let Some(name) = self.type_base_name(node) {
+                self.push_ref(source_id, name, kind, node, None);
+            }
+            return;
+        }
+        let mut cursor = node.walk();
+        let children: Vec<_> = node.children(&mut cursor).collect();
+        for child in children {
+            self.collect_supertype_names(&child, source_id, kind);
+        }
+    }
+
+    /// Rust records inheritance on the `impl` block rather than the type, so
+    /// `impl Render for Engine` has to be matched back to `Engine`.
+    ///
+    /// The type is looked up among the symbols already extracted from this
+    /// file. An impl for a type declared elsewhere is skipped: there is no
+    /// node here to hang the edge on, and guessing would attribute it to
+    /// whatever else shares the name.
+    fn find_rust_impl(&mut self, node: &tree_sitter::Node) {
+        let Some(trait_node) = node.child_by_field_name("trait") else {
+            return; // an inherent `impl Type`, which implements nothing
+        };
+        let Some(type_node) = node.child_by_field_name("type") else {
+            return;
+        };
+        let (Some(trait_name), Some(type_name)) = (
+            self.type_base_name(&trait_node),
+            self.type_base_name(&type_node),
+        ) else {
+            return;
+        };
+
+        let implementor = self.result.nodes.iter().find(|n| {
+            n.name == type_name
+                && matches!(
+                    n.kind,
+                    NodeKind::Struct | NodeKind::Enum | NodeKind::Class | NodeKind::TypeAlias
+                )
+        });
+        if let Some(implementor) = implementor {
+            let id = implementor.id;
+            self.push_ref(id, trait_name, EdgeKind::Implements, &trait_node, None);
+        }
     }
 
     /// Walk a symbol's body iteratively (stack-safe on deeply nested ASTs) and
@@ -1385,6 +1523,252 @@ class Person(val name: String, val age: Int) {
             .nodes
             .iter()
             .any(|n| n.name == "Person" && n.kind == NodeKind::Class));
+    }
+
+    // Inheritance extraction (review finding F8)
+    //
+    // One case per language with declared inheritance. These read the
+    // grammars' own clause shapes, which differ enough that a per-language
+    // test is the only way to know a grammar update has not moved them.
+
+    /// Collect the inheritance edges an extraction produced, as
+    /// `("Child", "extends"|"implements", "Parent")`.
+    fn inheritance(result: &crate::types::ExtractionResult) -> Vec<(String, String, String)> {
+        result
+            .unresolved_refs
+            .iter()
+            .filter(|u| matches!(u.kind, EdgeKind::Extends | EdgeKind::Implements))
+            .map(|u| {
+                let from = result
+                    .nodes
+                    .iter()
+                    .find(|n| n.id == u.source_node_id)
+                    .map(|n| n.name.clone())
+                    .unwrap_or_default();
+                (from, u.kind.as_str().to_string(), u.reference_name.clone())
+            })
+            .collect()
+    }
+
+    fn extract(file: &str, code: &str) -> crate::types::ExtractionResult {
+        Extractor::new().extract_file(file, code)
+    }
+
+    #[test]
+    fn test_inheritance_rust_impl_block() {
+        // Rust records the relationship on the impl block, not the type, so
+        // it has to be matched back to the struct declared in the same file.
+        let r = extract(
+            "t.rs",
+            "pub trait Render {}\npub struct Engine;\nimpl Render for Engine {}\n",
+        );
+        assert_eq!(
+            inheritance(&r),
+            vec![(
+                "Engine".to_string(),
+                "implements".to_string(),
+                "Render".to_string()
+            )]
+        );
+    }
+
+    /// An inherent `impl Engine { .. }` implements nothing and must emit no edge.
+    #[test]
+    fn test_inheritance_rust_inherent_impl_emits_nothing() {
+        let r = extract(
+            "t.rs",
+            "pub struct Engine;\nimpl Engine { fn go(&self) {} }\n",
+        );
+        assert!(inheritance(&r).is_empty(), "{:?}", inheritance(&r));
+    }
+
+    #[test]
+    fn test_inheritance_java_separates_extends_from_implements() {
+        let r = extract(
+            "t.java",
+            "class Dog extends Animal implements Pet, Loud {}\ninterface Pet extends Thing {}\n",
+        );
+        let got = inheritance(&r);
+        assert!(
+            got.contains(&("Dog".into(), "extends".into(), "Animal".into())),
+            "{got:?}"
+        );
+        assert!(
+            got.contains(&("Dog".into(), "implements".into(), "Pet".into())),
+            "{got:?}"
+        );
+        assert!(
+            got.contains(&("Dog".into(), "implements".into(), "Loud".into())),
+            "{got:?}"
+        );
+        assert!(
+            got.contains(&("Pet".into(), "extends".into(), "Thing".into())),
+            "{got:?}"
+        );
+    }
+
+    /// TypeScript nests the class clauses inside `class_heritage` but gives
+    /// interfaces an `extends_type_clause` — two shapes, one language.
+    #[test]
+    fn test_inheritance_typescript_class_and_interface() {
+        let r = extract(
+            "t.ts",
+            "class Dog extends Animal implements Pet {}\ninterface Pet extends Thing {}\n",
+        );
+        let got = inheritance(&r);
+        assert!(
+            got.contains(&("Dog".into(), "extends".into(), "Animal".into())),
+            "{got:?}"
+        );
+        assert!(
+            got.contains(&("Dog".into(), "implements".into(), "Pet".into())),
+            "{got:?}"
+        );
+        assert!(
+            got.contains(&("Pet".into(), "extends".into(), "Thing".into())),
+            "{got:?}"
+        );
+    }
+
+    #[test]
+    fn test_inheritance_javascript_class_heritage() {
+        let r = extract("t.js", "class Dog extends Animal {}\n");
+        assert_eq!(
+            inheritance(&r),
+            vec![("Dog".into(), "extends".into(), "Animal".into())]
+        );
+    }
+
+    /// Python has no `implements`, so both bases are `extends`.
+    #[test]
+    fn test_inheritance_python_multiple_bases() {
+        let r = extract("t.py", "class Dog(Animal, Pet):\n    pass\n");
+        let got = inheritance(&r);
+        assert!(
+            got.contains(&("Dog".into(), "extends".into(), "Animal".into())),
+            "{got:?}"
+        );
+        assert!(
+            got.contains(&("Dog".into(), "extends".into(), "Pet".into())),
+            "{got:?}"
+        );
+    }
+
+    /// The access specifiers in a C++ base clause must not be mistaken for
+    /// base classes.
+    #[test]
+    fn test_inheritance_cpp_skips_access_specifiers() {
+        let r = extract("t.cpp", "class Dog : public Animal, private Pet {};\n");
+        let got = inheritance(&r);
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert!(
+            got.contains(&("Dog".into(), "extends".into(), "Animal".into())),
+            "{got:?}"
+        );
+        assert!(
+            got.contains(&("Dog".into(), "extends".into(), "Pet".into())),
+            "{got:?}"
+        );
+    }
+
+    #[test]
+    fn test_inheritance_csharp_base_list() {
+        let r = extract("t.cs", "class Dog : Animal, IPet {}\n");
+        let got = inheritance(&r);
+        assert!(
+            got.contains(&("Dog".into(), "extends".into(), "Animal".into())),
+            "{got:?}"
+        );
+        assert!(
+            got.contains(&("Dog".into(), "extends".into(), "IPet".into())),
+            "{got:?}"
+        );
+    }
+
+    /// Kotlin wraps a superclass in `constructor_invocation`; the name has to
+    /// come out of that without also yielding a duplicate.
+    #[test]
+    fn test_inheritance_kotlin_unwraps_constructor_invocation() {
+        let r = extract("t.kt", "class Dog : Animal(), Pet {}\n");
+        let got = inheritance(&r);
+        assert_eq!(got.len(), 2, "{got:?}");
+        assert!(
+            got.contains(&("Dog".into(), "extends".into(), "Animal".into())),
+            "{got:?}"
+        );
+        assert!(
+            got.contains(&("Dog".into(), "extends".into(), "Pet".into())),
+            "{got:?}"
+        );
+    }
+
+    /// Scala puts both the superclass and the mixins in one `extends_clause`.
+    #[test]
+    fn test_inheritance_scala_extends_with() {
+        let r = extract("t.scala", "class Dog extends Animal with Pet {}\n");
+        let got = inheritance(&r);
+        assert!(
+            got.contains(&("Dog".into(), "extends".into(), "Animal".into())),
+            "{got:?}"
+        );
+        assert!(
+            got.contains(&("Dog".into(), "extends".into(), "Pet".into())),
+            "{got:?}"
+        );
+    }
+
+    #[test]
+    fn test_inheritance_ruby_superclass() {
+        let r = extract("t.rb", "class Dog < Animal\nend\n");
+        assert_eq!(
+            inheritance(&r),
+            vec![("Dog".into(), "extends".into(), "Animal".into())]
+        );
+    }
+
+    #[test]
+    fn test_inheritance_groovy_like_java() {
+        let r = extract("t.groovy", "class Dog extends Animal implements Pet {}\n");
+        let got = inheritance(&r);
+        assert!(
+            got.contains(&("Dog".into(), "extends".into(), "Animal".into())),
+            "{got:?}"
+        );
+        assert!(
+            got.contains(&("Dog".into(), "implements".into(), "Pet".into())),
+            "{got:?}"
+        );
+    }
+
+    /// Go has no declared inheritance: embedding is structural and interface
+    /// satisfaction is implicit, so there is nothing in the syntax to record.
+    #[test]
+    fn test_inheritance_go_emits_nothing() {
+        let r = extract(
+            "t.go",
+            "type Reader interface { Read() }\ntype F struct { Reader }\n",
+        );
+        assert!(inheritance(&r).is_empty(), "{:?}", inheritance(&r));
+    }
+
+    /// A class body must not be mistaken for an inheritance clause — field
+    /// and method types are not base classes.
+    #[test]
+    fn test_inheritance_ignores_the_class_body() {
+        let r = extract(
+            "t.java",
+            "class Dog extends Animal { private Collar collar; void walk(Leash l) {} }\n",
+        );
+        let got = inheritance(&r);
+        assert_eq!(
+            got,
+            vec![(
+                "Dog".to_string(),
+                "extends".to_string(),
+                "Animal".to_string()
+            )],
+            "only the extends clause should contribute: {got:?}"
+        );
     }
 
     // Groovy extraction tests

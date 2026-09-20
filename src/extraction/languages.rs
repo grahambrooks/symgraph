@@ -47,7 +47,34 @@ pub struct LanguageConfig {
     pub field_types: &'static [&'static str],
     /// Node types that map to enum variants/members
     pub enum_member_types: &'static [&'static str],
+    /// Child node types of a type declaration that name supertypes it
+    /// *extends* — base classes and superinterfaces. Searched recursively
+    /// within the declaration (skipping its body), so wrappers like
+    /// TypeScript's `class_heritage` need no special handling.
+    pub extends_clause_types: &'static [&'static str],
+    /// Child node types that name interfaces the type *implements*.
+    ///
+    /// Only languages that draw the distinction syntactically populate this;
+    /// elsewhere everything is an `extends` edge, because the grammar gives
+    /// no basis to say otherwise.
+    pub implements_clause_types: &'static [&'static str],
 }
+
+/// Node kinds that name a type inside an inheritance clause.
+///
+/// Collection stops at the first match on any path, so a wrapper such as
+/// Kotlin's `user_type` yields one name rather than also yielding the
+/// `type_identifier` nested inside it.
+pub const SUPERTYPE_NAME_TYPES: &[&str] = &[
+    "type_identifier",
+    "identifier",
+    "constant",
+    "user_type",
+    "scoped_type_identifier",
+    "qualified_type",
+    "generic_type",
+    "simple_identifier",
+];
 
 impl LanguageConfig {
     /// Convert a tree-sitter node type to our NodeKind
@@ -179,6 +206,9 @@ static DEFAULT_CONFIG: LanguageConfig = LanguageConfig {
     enum_match_types: &[],
     field_types: &[],
     enum_member_types: &[],
+    // no grammar, so nothing to read
+    extends_clause_types: &[],
+    implements_clause_types: &[],
 };
 
 static RUST_CONFIG: LanguageConfig = LanguageConfig {
@@ -200,6 +230,9 @@ static RUST_CONFIG: LanguageConfig = LanguageConfig {
     enum_match_types: &["match_expression"],
     field_types: &["field_declaration"],
     enum_member_types: &["enum_variant"],
+    // handled via impl_item
+    extends_clause_types: &[],
+    implements_clause_types: &[],
 };
 
 static TYPESCRIPT_CONFIG: LanguageConfig = LanguageConfig {
@@ -226,6 +259,11 @@ static TYPESCRIPT_CONFIG: LanguageConfig = LanguageConfig {
     enum_match_types: &["switch_statement"],
     field_types: &["public_field_definition", "property_signature"],
     enum_member_types: &["enum_assignment"],
+    // Classes nest `extends_clause` inside `class_heritage`; interfaces
+    // use `extends_type_clause` instead. The clause scan recurses, so the
+    // wrapper needs no entry of its own.
+    extends_clause_types: &["extends_clause", "extends_type_clause"],
+    implements_clause_types: &["implements_clause"],
 };
 
 static JAVASCRIPT_CONFIG: LanguageConfig = LanguageConfig {
@@ -252,6 +290,10 @@ static JAVASCRIPT_CONFIG: LanguageConfig = LanguageConfig {
     enum_match_types: &["switch_statement"],
     field_types: &[],
     enum_member_types: &[],
+    // JS has no `extends_clause`: `class_heritage` holds the base name
+    // directly. And no interfaces, so nothing ever implements.
+    extends_clause_types: &["class_heritage"],
+    implements_clause_types: &[],
 };
 
 static PYTHON_CONFIG: LanguageConfig = LanguageConfig {
@@ -273,6 +315,11 @@ static PYTHON_CONFIG: LanguageConfig = LanguageConfig {
     enum_match_types: &["match_statement"],
     field_types: &[],
     enum_member_types: &[],
+    // The bases live in an `argument_list` under the `superclasses`
+    // field — matched on node kind, which is why it is not "superclasses".
+    // Safe because only a declaration's non-body children are scanned.
+    extends_clause_types: &["argument_list"],
+    implements_clause_types: &[],
 };
 
 static GO_CONFIG: LanguageConfig = LanguageConfig {
@@ -294,6 +341,9 @@ static GO_CONFIG: LanguageConfig = LanguageConfig {
     enum_match_types: &[],
     field_types: &[],
     enum_member_types: &[],
+    // implicit interface satisfaction
+    extends_clause_types: &[],
+    implements_clause_types: &[],
 };
 
 static JAVA_CONFIG: LanguageConfig = LanguageConfig {
@@ -315,6 +365,8 @@ static JAVA_CONFIG: LanguageConfig = LanguageConfig {
     enum_match_types: &[],
     field_types: &[],
     enum_member_types: &[],
+    extends_clause_types: &["superclass", "extends_interfaces"],
+    implements_clause_types: &["super_interfaces"],
 };
 
 static C_CONFIG: LanguageConfig = LanguageConfig {
@@ -336,6 +388,9 @@ static C_CONFIG: LanguageConfig = LanguageConfig {
     enum_match_types: &[],
     field_types: &[],
     enum_member_types: &[],
+    // C has no inheritance
+    extends_clause_types: &[],
+    implements_clause_types: &[],
 };
 
 static CPP_CONFIG: LanguageConfig = LanguageConfig {
@@ -357,6 +412,9 @@ static CPP_CONFIG: LanguageConfig = LanguageConfig {
     enum_match_types: &[],
     field_types: &[],
     enum_member_types: &[],
+    // access specifiers are skipped by the name filter
+    extends_clause_types: &["base_class_clause"],
+    implements_clause_types: &[],
 };
 
 static CSHARP_CONFIG: LanguageConfig = LanguageConfig {
@@ -384,6 +442,9 @@ static CSHARP_CONFIG: LanguageConfig = LanguageConfig {
     enum_match_types: &[],
     field_types: &[],
     enum_member_types: &[],
+    // C# does not separate the base class from interfaces syntactically
+    extends_clause_types: &["base_list"],
+    implements_clause_types: &[],
 };
 
 static KOTLIN_CONFIG: LanguageConfig = LanguageConfig {
@@ -405,6 +466,9 @@ static KOTLIN_CONFIG: LanguageConfig = LanguageConfig {
     enum_match_types: &[],
     field_types: &[],
     enum_member_types: &[],
+    // constructor_invocation unwraps to user_type
+    extends_clause_types: &["delegation_specifiers"],
+    implements_clause_types: &[],
 };
 
 static SCALA_CONFIG: LanguageConfig = LanguageConfig {
@@ -426,6 +490,9 @@ static SCALA_CONFIG: LanguageConfig = LanguageConfig {
     enum_match_types: &[],
     field_types: &[],
     enum_member_types: &[],
+    // covers both extends and with
+    extends_clause_types: &["extends_clause"],
+    implements_clause_types: &[],
 };
 
 static RUBY_CONFIG: LanguageConfig = LanguageConfig {
@@ -447,6 +514,8 @@ static RUBY_CONFIG: LanguageConfig = LanguageConfig {
     enum_match_types: &[],
     field_types: &[],
     enum_member_types: &[],
+    extends_clause_types: &["superclass"],
+    implements_clause_types: &[],
 };
 
 static GROOVY_CONFIG: LanguageConfig = LanguageConfig {
@@ -472,4 +541,7 @@ static GROOVY_CONFIG: LanguageConfig = LanguageConfig {
     enum_match_types: &[],
     field_types: &[],
     enum_member_types: &[],
+    // same shape as Java
+    extends_clause_types: &["superclass", "extends_interfaces"],
+    implements_clause_types: &["super_interfaces"],
 };
