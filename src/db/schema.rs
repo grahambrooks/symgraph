@@ -98,10 +98,11 @@ CREATE TABLE IF NOT EXISTS index_meta (
 /// in a way that makes rows written by an older symgraph unusable.
 pub const SCHEMA_VERSION: u32 = 1;
 
-/// Version of the extraction semantics. Bump when the extractor starts
-/// producing different nodes or edges for the same source — a new edge kind, a
-/// changed `is_test` heuristic, a new language — so that indexes built before
-/// the change are recognised as stale even though the schema still fits.
+/// Version of the extraction semantics. Bump when indexing starts producing
+/// different nodes or edges for the same source — a new edge kind, a changed
+/// `is_test` heuristic, a new language, a change to how references resolve —
+/// so that indexes built before the change are recognised as stale even though
+/// the schema still fits.
 ///
 /// Schema compatibility and extraction compatibility are tracked separately
 /// because they fail differently: a schema mismatch cannot be read at all, an
@@ -111,7 +112,10 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// - v2: extraction emits `implements`/`extends` edges (F8). Indexes built
 ///   before this have none, so `symgraph-implementations` would keep
 ///   answering "none found" against them.
-pub const EXTRACTOR_VERSION: u32 = 2;
+/// - v3: reference resolution rejects a candidate whose kind the reference
+///   could not denote — a `calls` landing on a field, say. Indexes built
+///   before this carry those edges, and they read as ordinary dependencies.
+pub const EXTRACTOR_VERSION: u32 = 3;
 
 /// Additive schema migrations applied after CREATE TABLE IF NOT EXISTS.
 ///

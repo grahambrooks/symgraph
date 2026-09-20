@@ -131,6 +131,27 @@ pub enum EdgeKind {
 }
 
 impl EdgeKind {
+    /// Every variant, so code that must handle the whole set — the SQL
+    /// resolution filter in particular — is a compile error away from
+    /// forgetting one.
+    pub const ALL: &'static [EdgeKind] = &[
+        EdgeKind::Contains,
+        EdgeKind::Calls,
+        EdgeKind::Imports,
+        EdgeKind::Exports,
+        EdgeKind::Extends,
+        EdgeKind::Implements,
+        EdgeKind::References,
+        EdgeKind::TypeOf,
+        EdgeKind::Returns,
+        EdgeKind::Instantiates,
+        EdgeKind::Overrides,
+        EdgeKind::Decorates,
+        EdgeKind::Tests,
+        EdgeKind::Accesses,
+        EdgeKind::Mutates,
+    ];
+
     pub fn as_str(&self) -> &'static str {
         match self {
             EdgeKind::Contains => "contains",
@@ -164,6 +185,65 @@ impl EdgeKind {
             EdgeKind::Accesses | EdgeKind::Imports | EdgeKind::TypeOf | EdgeKind::Returns => 2,
             EdgeKind::Mutates => 3,
             _ => 0,
+        }
+    }
+
+    /// The node kinds a reference of this kind may legitimately resolve to,
+    /// or `None` when the kind carries no constraint worth enforcing.
+    ///
+    /// Resolution is name-based: a reference is matched to a definition by
+    /// name alone. That is workable for picking *which* `new` was meant, but
+    /// nothing stopped it picking something the reference could not possibly
+    /// denote — a call landing on a *field* that happens to share the name.
+    /// On symgraph's own index 603 of 3777 `calls` edges (16%) pointed at a
+    /// field, module, import, constant or enum member. Those edges then fed
+    /// fan-in/fan-out, the coupling score and cycle detection as though they
+    /// were real dependencies.
+    ///
+    /// The constraint is deliberately generous, because it is applied across
+    /// 13 languages whose grammars disagree about what a name denotes:
+    ///
+    /// - `Calls` admits types as well as functions, since `Foo()` constructs
+    ///   in Python, Ruby and JavaScript and `Foo { .. }` does not exist there.
+    /// - `Mutates` admits types, because `&mut Foo` mutates through a type.
+    /// - `Implements`/`Extends` admit `Module`, since a Ruby mixin is a module.
+    /// - `References` and `Imports` are unconstrained on purpose: a reference
+    ///   is the catch-all kind, and an import may legally name anything a
+    ///   module exports.
+    ///
+    /// A reference with no compatible candidate stays in `unresolved_refs`
+    /// rather than resolving to something wrong. Unresolved is a signal the
+    /// health report already counts; a wrong edge is silent.
+    pub fn resolvable_target_kinds(&self) -> Option<&'static [NodeKind]> {
+        use NodeKind::*;
+        match self {
+            // Callable, plus the type kinds whose name is the constructor.
+            EdgeKind::Calls | EdgeKind::Overrides => Some(&[
+                Function, Method, Class, Struct, Interface, Trait, Protocol, Component,
+            ]),
+            // A field read lands on the member, never on the code around it.
+            EdgeKind::Accesses => {
+                Some(&[Field, Property, Constant, EnumMember, Variable, Parameter])
+            }
+            // As `Accesses`, plus the types reached through a `&mut` borrow.
+            EdgeKind::Mutates => Some(&[
+                Field, Property, Constant, EnumMember, Variable, Parameter, Class, Struct,
+            ]),
+            // Supertypes: a type, or a Ruby-style module used as a mixin.
+            EdgeKind::Implements | EdgeKind::Extends => Some(&[
+                Class, Struct, Interface, Trait, Protocol, Enum, TypeAlias, Module,
+            ]),
+            EdgeKind::Instantiates => Some(&[Class, Struct, Enum, TypeAlias]),
+            EdgeKind::TypeOf | EdgeKind::Returns => Some(&[
+                Class, Struct, Interface, Trait, Protocol, Enum, TypeAlias, Module,
+            ]),
+            // Structural or deliberately unconstrained.
+            EdgeKind::Contains
+            | EdgeKind::Imports
+            | EdgeKind::Exports
+            | EdgeKind::References
+            | EdgeKind::Decorates
+            | EdgeKind::Tests => None,
         }
     }
 
@@ -849,5 +929,107 @@ mod tests {
 
         let parsed: Language = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, Language::TypeScript);
+    }
+
+    /// The defect this table exists to prevent: on symgraph's own index, 434
+    /// `calls` edges pointed at a *field* that shared the callee's name.
+    #[test]
+    fn a_call_cannot_resolve_to_a_field_or_a_module() {
+        let allowed = EdgeKind::Calls.resolvable_target_kinds().unwrap();
+        for rejected in [
+            NodeKind::Field,
+            NodeKind::Module,
+            NodeKind::Import,
+            NodeKind::Constant,
+            NodeKind::EnumMember,
+            NodeKind::File,
+        ] {
+            assert!(
+                !allowed.contains(&rejected),
+                "{:?} must not be a call target",
+                rejected
+            );
+        }
+        for accepted in [NodeKind::Function, NodeKind::Method] {
+            assert!(allowed.contains(&accepted));
+        }
+    }
+
+    /// `Foo()` constructs in Python, Ruby and JavaScript, so a type has to
+    /// stay a legal call target even though it is not a function.
+    #[test]
+    fn a_call_may_resolve_to_a_constructor_type() {
+        let allowed = EdgeKind::Calls.resolvable_target_kinds().unwrap();
+        for accepted in [NodeKind::Class, NodeKind::Struct] {
+            assert!(allowed.contains(&accepted));
+        }
+    }
+
+    #[test]
+    fn a_field_read_cannot_resolve_to_a_function() {
+        let allowed = EdgeKind::Accesses.resolvable_target_kinds().unwrap();
+        assert!(allowed.contains(&NodeKind::Field));
+        assert!(!allowed.contains(&NodeKind::Function));
+        assert!(!allowed.contains(&NodeKind::Module));
+    }
+
+    /// A Ruby mixin is a module, so supertype edges must admit one.
+    #[test]
+    fn a_supertype_may_be_a_module() {
+        for kind in [EdgeKind::Implements, EdgeKind::Extends] {
+            let allowed = kind.resolvable_target_kinds().unwrap();
+            assert!(allowed.contains(&NodeKind::Module));
+            assert!(allowed.contains(&NodeKind::Interface));
+            assert!(!allowed.contains(&NodeKind::Field));
+        }
+    }
+
+    /// The catch-all kinds stay unconstrained on purpose: an import may name
+    /// anything a module exports, and `references` is deliberately vague.
+    #[test]
+    fn the_catch_all_kinds_carry_no_constraint() {
+        for kind in [EdgeKind::References, EdgeKind::Imports, EdgeKind::Contains] {
+            assert!(kind.resolvable_target_kinds().is_none(), "{:?}", kind);
+        }
+    }
+
+    /// `EdgeKind::ALL` drives the generated SQL filter, so a variant missing
+    /// from it would silently lose its constraint.
+    #[test]
+    fn all_lists_every_variant() {
+        for kind in EdgeKind::ALL {
+            assert!(EdgeKind::parse(kind.as_str()) == Some(*kind));
+        }
+        let mut seen: Vec<&str> = EdgeKind::ALL.iter().map(|k| k.as_str()).collect();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(
+            seen.len(),
+            EdgeKind::ALL.len(),
+            "duplicate in EdgeKind::ALL"
+        );
+        // Every kind the parser knows must appear in ALL.
+        for name in [
+            "contains",
+            "calls",
+            "imports",
+            "exports",
+            "extends",
+            "implements",
+            "references",
+            "type_of",
+            "returns",
+            "instantiates",
+            "overrides",
+            "decorates",
+            "tests",
+            "accesses",
+            "mutates",
+        ] {
+            assert!(
+                EdgeKind::ALL.iter().any(|k| k.as_str() == name),
+                "{name} missing from EdgeKind::ALL"
+            );
+        }
     }
 }

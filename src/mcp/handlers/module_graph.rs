@@ -12,6 +12,17 @@ use crate::mcp::types::{wants_json, ModuleGraphRequest};
 const DEFAULT_DAYS: u32 = 90;
 const DEFAULT_LIMIT: usize = 30;
 
+/// One line saying whether test code was counted, so the report states its own
+/// scope. A coupling report that silently includes tests and one that silently
+/// excludes them look identical and mean different things.
+fn scope_note(include_tests: bool) -> &'static str {
+    if include_tests {
+        "Scope: all code, tests included.\n\n"
+    } else {
+        "Scope: production code. Test code is excluded — pass include_tests to count it.\n\n"
+    }
+}
+
 /// Resolve churn best-effort: returns None (with no error) when churn wasn't
 /// requested or git is unavailable, so analysis degrades gracefully.
 fn maybe_churn(
@@ -43,7 +54,10 @@ pub fn handle_module_graph(
     req: &ModuleGraphRequest,
 ) -> Result<String, String> {
     let g = Granularity::parse(req.granularity.as_deref().unwrap_or("module"));
-    let endpoints = db.get_edge_endpoints().map_err(|e| e.to_string())?;
+    let include_tests = req.include_tests.unwrap_or(false);
+    let endpoints = db
+        .get_edge_endpoints(include_tests)
+        .map_err(|e| e.to_string())?;
     let churn = maybe_churn(
         project_root,
         req.churn.unwrap_or(false),
@@ -57,11 +71,12 @@ pub fn handle_module_graph(
 
     let limit = req.limit.unwrap_or(DEFAULT_LIMIT as u32) as usize;
     let mut out = format!(
-        "# Module graph ({} granularity)\n\n{} nodes, {} edges, {} cycle(s).\n\n",
+        "# Module graph ({} granularity)\n\n{} nodes, {} edges, {} cycle(s).\n\n{}",
         graph.granularity,
         graph.nodes.len(),
         graph.edges.len(),
-        graph.cycles.len()
+        graph.cycles.len(),
+        scope_note(include_tests)
     );
 
     out.push_str("## Hubs (by fan-in)\n\n");
@@ -109,7 +124,10 @@ pub fn handle_coupling_score(
     req: &ModuleGraphRequest,
 ) -> Result<String, String> {
     let g = Granularity::parse(req.granularity.as_deref().unwrap_or("module"));
-    let endpoints = db.get_edge_endpoints().map_err(|e| e.to_string())?;
+    let include_tests = req.include_tests.unwrap_or(false);
+    let endpoints = db
+        .get_edge_endpoints(include_tests)
+        .map_err(|e| e.to_string())?;
     // Volatility is one of the three dimensions, so coupling-score uses churn
     // by default (best-effort: omitted if git is unavailable).
     let want_churn = req.churn.unwrap_or(true);
@@ -130,8 +148,8 @@ pub fn handle_coupling_score(
     let mut out = format!(
         "# Coupling score ({} granularity)\n\nimpact = strength × distance × volatility ({}).\n\
         Strength: 1 contract (calls), 2 model (field reads / imports), 3 intrusive (field writes / &mut).\n\
-        Note: edges are heuristic (name-based resolution), best for ranking.\n\n",
-        graph.granularity, volatility_note
+        Note: edges are heuristic (name-based resolution), best for ranking.\n\n{}",
+        graph.granularity, volatility_note, scope_note(include_tests)
     );
     out.push_str("| Impact | From | To | Str | Dist | Vol | Edges | Kinds |\n");
     out.push_str("|---:|---|---|---:|---:|---:|---:|---|\n");

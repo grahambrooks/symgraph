@@ -107,7 +107,7 @@ fn bench_edge_endpoints(c: &mut Criterion) {
 
         group.throughput(Throughput::Elements(files as u64));
         group.bench_with_input(BenchmarkId::from_parameter(files), &db, |b, db| {
-            b.iter(|| db.get_edge_endpoints().unwrap())
+            b.iter(|| db.get_edge_endpoints(false).unwrap())
         });
     }
     group.finish();

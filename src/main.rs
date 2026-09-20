@@ -94,7 +94,7 @@ const GROUPS: &[Group] = &[
             Command { name: "implementations", args: "<SYMBOL>", help: "Implementations of an interface/trait" },
             Command { name: "file", args: "<PATH>", help: "List symbols defined in a file" },
             Command { name: "path", args: "<FROM> <TO>", help: "Call path(s) from FROM to TO" },
-            Command { name: "unused", args: "[--limit N] [--offset N]", help: "Symbols with no incoming references (dead code)" },
+            Command { name: "unused", args: "[--limit N] [--offset N] [--ignore-test-callers]", help: "Symbols with no incoming references (dead code)" },
         ],
     },
     Group {
@@ -104,9 +104,9 @@ const GROUPS: &[Group] = &[
             Command { name: "diff-impact", args: "[--file F --start N --end N --git-ref REF]", help: "Impact of a region/diff" },
             Command { name: "blame", args: "<SYMBOL>", help: "git blame over a symbol's definition lines" },
             Command { name: "churn", args: "[PATH] [--days N] [--limit N]", help: "File change frequency (volatility)" },
-            Command { name: "module-graph", args: "[--granularity file|dir|module] [--churn] [--limit N]", help: "Module dependency graph: fan-in/out + cycles" },
-            Command { name: "coupling-score", args: "[--granularity ...] [--churn] [--limit N]", help: "Rank coupling by strength × distance × volatility" },
-            Command { name: "god-struct", args: "[--churn] [--limit N]", help: "Structs ranked by architectural debt" },
+            Command { name: "module-graph", args: "[--granularity file|dir|module] [--churn] [--include-tests] [--limit N]", help: "Module dependency graph: fan-in/out + cycles (tests excluded)" },
+            Command { name: "coupling-score", args: "[--granularity ...] [--churn] [--include-tests] [--limit N]", help: "Rank coupling by strength × distance × volatility (tests excluded)" },
+            Command { name: "god-struct", args: "[--churn] [--include-tests] [--limit N]", help: "Structs ranked by architectural debt (tests excluded)" },
             Command { name: "dispatch-sites", args: "<ENUM>", help: "Files that match/switch on an enum's members" },
         ],
     },
@@ -391,6 +391,7 @@ fn main() -> Result<()> {
                 ".",
                 flag_u32(&args, "--limit"),
                 flag_u32(&args, "--offset"),
+                has_flag(&args, "--ignore-test-callers"),
                 format,
             )?;
         }
@@ -450,6 +451,7 @@ fn main() -> Result<()> {
                 flag_value(&args, "--granularity"),
                 has_flag(&args, "--churn"),
                 flag_u32(&args, "--days"),
+                has_flag(&args, "--include-tests"),
                 flag_u32(&args, "--limit"),
                 format,
             )?;
@@ -460,6 +462,7 @@ fn main() -> Result<()> {
                 flag_value(&args, "--granularity"),
                 has_flag(&args, "--churn"),
                 flag_u32(&args, "--days"),
+                has_flag(&args, "--include-tests"),
                 flag_u32(&args, "--limit"),
                 format,
             )?;
@@ -469,6 +472,7 @@ fn main() -> Result<()> {
                 ".",
                 has_flag(&args, "--churn"),
                 flag_u32(&args, "--days"),
+                has_flag(&args, "--include-tests"),
                 flag_u32(&args, "--limit"),
                 format,
             )?;
