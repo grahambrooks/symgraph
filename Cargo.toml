@@ -5,7 +5,7 @@ edition = "2021"
 # Set by tree-sitter 0.27 / tree-sitter-language 0.1.8, the highest MSRV in the
 # dependency tree. The `msrv` CI job builds against exactly this toolchain, so
 # the number is checked rather than asserted.
-rust-version = "1.90"
+rust-version = "1.98.1"
 description = "Semantic code intelligence library and MCP server - build knowledge graphs of codebases"
 license = "MIT"
 authors = ["Graham Brooks"]
