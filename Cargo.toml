@@ -87,7 +87,7 @@ server = ["sqlite", "dep:rmcp", "dep:axum", "dep:tokio", "dep:tokio-util"]
 
 [dev-dependencies]
 tempfile = "3"
-criterion = { version = "0.7", features = ["html_reports"] }
+criterion = { version = "0.8", features = ["html_reports"] }
 
 # Performance guard for the operations that scale with codebase size:
 # full index build, no-op incremental pass, and graph folding.
