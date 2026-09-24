@@ -3,10 +3,9 @@
 - **Status:** accepted
 - **Date:** 2026-09-23
 - **Decision:** keep SQLite; fix the algorithms that are actually quadratic.
-- **Follow-up:** work items 1–3 are done. Resolution went from O(n^2.02) to
-  O(n^1.41), 12.9× faster at 8,000 files, with a byte-identical edge set — see
-  [ADR 0002](0002-tiered-reference-resolution.md). `god-struct` went from
-  98.6 s to 0.76 s at 4,000 files. Items 4–6 remain open.
+- **Follow-up:** work items 1–4 are done; see *Outcome* below. Indexing went
+  from O(n^2.02) to O(n^1.27), `god-struct` from 98.6 s to 0.14 s, and the
+  revisit trigger is **not** met — this decision stands. Items 5–6 remain open.
 
 ## Question
 
@@ -151,7 +150,12 @@ Work items, in the order they pay:
    well as a 98-second one. *Done: 98.6 s → 0.76 s at 4,000 files (130×), and
    the name-collision misattribution is gone. 8,000 files now runs in 1.0 s.*
 4. **Covering index on `nodes(name, kind, file_path)`** so candidate scans stay
-   in the index.
+   in the index. *Done, but not in that shape — the guess above was wrong.
+   `(name, kind, file_path)` measured no better than no index at all, because
+   it cannot seek on `file_path`, which is what tiers 1 and 2 join on. The
+   shape that works is `(name, file_path, is_test, is_generated, start_line)`:
+   the three tier queries went from 35.2 s to 1.0 s on an 8,000-file index.
+   `idx_nodes_name` became a strict prefix of it and was dropped.*
 5. **Recursive CTEs** for `traverse`/`path`, replacing the per-node query loop
    in `graph/mod.rs`. Not urgent — these read paths measure 20–40 ms — but it
    removes the N+1 before a deeper traversal is ever added.
@@ -212,6 +216,53 @@ model fit than the status quo.
 
 Keep SQLite. Fix items 1–4 above, then re-measure the scaling curve on the same
 corpus before considering any engine change.
+
+## Outcome (2026-09-24)
+
+Items 1–4 landed. The scaling curve, same corpus throughout:
+
+| files | original | + tiered resolution | + resolution index |
+|---:|---:|---:|---:|
+| 500 | 1.9 s | 0.8 s | 1.3 s |
+| 1,000 | 7.1 s | 2.6 s | 2.5 s |
+| 2,000 | 24.7 s | 5.8 s | 5.2 s |
+| 4,000 | 97.3 s | 12.8 s | 11.4 s |
+| 8,000 | 511.1 s | 39.6 s | **35.2 s** |
+
+Fitted exponent **2.02 → 1.41 → 1.19**. That last figure flatters the index:
+it is anchored on the 500-file point, which the index makes *worse* (0.8 s →
+1.3 s), because at that size resolution is trivial and the index is pure write
+overhead. Fitted from 1,000 files upward — the more honest read — it is
+**2.06 → 1.31 → 1.27**. The index is a real but modest end-to-end win (11 % at
+8,000 files) on top of a large one; almost all the gain came from item 1.
+
+Read latency at 4,000 files, best of three, against the table above:
+
+| command | before | after |
+|---|---:|---:|
+| `search`, `callers`, `node`, `impact` | 23–55 ms | 23–35 ms |
+| `unused` | 255 ms | 206 ms |
+| `module-graph`, `coupling-score` | ~400 ms | ~400 ms |
+| `god-struct` | 98,603 ms | **139 ms** |
+
+Projected at k=1.27 from the 8,000-file anchor: 16,000 files ~1.4 min, 50,000
+~6 min, 100,000 ~15 min. Against the original ~23 hours at 100,000.
+
+### Revisit trigger, evaluated
+
+The trigger was "fitted exponent above ~1.3 after items 1–4 land". Measured
+**1.19** (500-anchored) and **1.27** (1,000-anchored) — below it either way.
+**The storage decision stands: SQLite, not a different engine.** The remaining
+aggregation reads are ~400 ms, far from the 2 s that would make DuckDB's
+columnar execution worth its cost.
+
+### Next, if more is wanted
+
+Resolution runs once after every chunk is stored, so the resolution index is
+maintained through the entire bulk insert and only read at the end. Building it
+after the bulk load instead would remove the small-corpus regression outright
+and take a further bite out of the large-corpus time. That is a change to the
+indexing pipeline rather than to the schema, so it was left out of this pass.
 
 ## When to revisit
 

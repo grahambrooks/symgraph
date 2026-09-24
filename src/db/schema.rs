@@ -63,7 +63,19 @@ CREATE TABLE IF NOT EXISTS unresolved_refs (
 );
 
 -- Indexes for efficient queries
-CREATE INDEX IF NOT EXISTS idx_nodes_name ON nodes(name);
+-- Reference resolution's working index. Tiers 1 and 2 seek on (name,
+-- file_path); the trailing columns are the resolution tiebreak, so the whole
+-- candidate row is read from the index and the table is never touched. On an
+-- 8,000-file index this took the three tier queries from 35.2s to 1.0s.
+--
+-- The column order matters more than the width: `(name, kind, file_path)` --
+-- the shape first guessed for this -- measured no better than no index at all,
+-- because it cannot seek on file_path.
+CREATE INDEX IF NOT EXISTS idx_nodes_name_file ON nodes(name, file_path, is_test, is_generated, start_line);
+-- `idx_nodes_name` is a strict prefix of the index above, so SQLite serves
+-- every bare `name = ?` seek from it instead. Dropped rather than left behind:
+-- on an 8,000-file index the redundant copy cost 13 MB and slowed indexing.
+DROP INDEX IF EXISTS idx_nodes_name;
 CREATE INDEX IF NOT EXISTS idx_nodes_name_lower ON nodes(LOWER(name));
 CREATE INDEX IF NOT EXISTS idx_nodes_file_path ON nodes(file_path);
 CREATE INDEX IF NOT EXISTS idx_nodes_kind ON nodes(kind);

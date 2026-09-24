@@ -178,6 +178,14 @@ release-pipeline follow-ups to the release-kit v2 adoption in 2026.9.2.
   [ADR 0002](docs/adr/0002-tiered-reference-resolution.md), and
   [ADR 0001](docs/adr/0001-storage-engine.md) for why the storage engine was
   not the problem.
+- **A resolution index on `nodes(name, file_path, is_test, is_generated,
+  start_line)`.** Reference resolution's three tier queries went from 35.2 s
+  to 1.0 s on an 8,000-file index; end to end that is 39.6 s → 35.2 s, and the
+  fitted scaling exponent drops from 1.41 to 1.27. It costs a little at small
+  repositories, where resolution is trivial and the index is pure write
+  overhead (500 files: 0.8 s → 1.3 s). `idx_nodes_name` became a strict prefix
+  of the new index and is dropped, which existing indexes pick up on open —
+  13 MB back on an 8,000-file index.
 - **`symgraph-god-struct` was quadratic too, for a different reason.** It
   looped over every struct issuing a field lookup plus one incoming-edge query
   per struct and per field. One aggregate query replaces the loop: **98.6 s →
