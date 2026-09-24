@@ -148,6 +148,27 @@ release-pipeline follow-ups to the release-kit v2 adoption in 2026.9.2.
 
 ### Performance
 
+- **Indexing was quadratic; it no longer is.** Reference resolution ranked
+  every definition sharing a name for *every* reference to that name, so its
+  cost grew with the product of the two — and the query was written out three
+  times, so SQLite evaluated it three times per reference. At 4,000 files of
+  real Rust, `new` had 1,482 definitions and a reference to it cost 1,050 µs
+  against 1.6 µs for a unique name. The preference ladder is now resolved as
+  three materialised tiers, the last of which is keyed on `(name, kind)` and
+  computed once for the whole index rather than once per reference.
+
+  | files | before | after |
+  |---:|---:|---:|
+  | 2,000 | 24.7 s | 5.8 s |
+  | 4,000 | 97.3 s | 12.8 s |
+  | 8,000 | 511.1 s | 39.6 s |
+
+  O(n^2.02) → O(n^1.41). Projected at 100,000 files: ~23 hours → ~23 minutes.
+  The resolved edge set is byte-identical, verified by diffing the full edge
+  dump at 2,000 and 4,000 files. See
+  [ADR 0002](docs/adr/0002-tiered-reference-resolution.md), and
+  [ADR 0001](docs/adr/0001-storage-engine.md) for why the storage engine was
+  not the problem.
 - Indexing streams in chunks rather than holding the whole repository in
   memory.
 - A no-op incremental pass skips reading and hashing files whose size and mtime

@@ -98,29 +98,31 @@ enum Phase {
 /// Built once from [`EdgeKind::resolvable_target_kinds`] so the rule lives in
 /// one place rather than being restated in SQL. Kinds with no constraint fall
 /// through to the `ELSE 1`, as does any kind string the enum does not know.
-fn kind_compatible_sql() -> &'static str {
-    static SQL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-        let mut sql = String::from("CASE u.kind");
-        for edge in EdgeKind::ALL {
-            let Some(kinds) = edge.resolvable_target_kinds() else {
-                continue;
-            };
-            let list = kinds
-                .iter()
-                .map(|k| format!("'{}'", k.as_str()))
-                .collect::<Vec<_>>()
-                .join(",");
-            sql.push_str(&format!(
-                " WHEN '{}' THEN n.kind IN ({})",
-                edge.as_str(),
-                list
-            ));
-        }
-        sql.push_str(" ELSE 1 END");
-        sql
-    });
-    SQL.as_str()
+fn kind_compatible_sql(ref_alias: &str) -> String {
+    let mut sql = format!("CASE {ref_alias}.kind");
+    for edge in EdgeKind::ALL {
+        let Some(kinds) = edge.resolvable_target_kinds() else {
+            continue;
+        };
+        let list = kinds
+            .iter()
+            .map(|k| format!("'{}'", k.as_str()))
+            .collect::<Vec<_>>()
+            .join(",");
+        sql.push_str(&format!(
+            " WHEN '{}' THEN n.kind IN ({})",
+            edge.as_str(),
+            list
+        ));
+    }
+    sql.push_str(" ELSE 1 END");
+    sql
 }
+
+/// The tiebreak shared by every resolution tier and by [`Database::resolve_symbol`],
+/// so a name resolves the same way whichever path reaches it.
+const RESOLUTION_TIEBREAK: &str =
+    "n.is_test ASC, n.is_generated ASC, n.file_path ASC, n.start_line ASC, n.id ASC";
 
 /// How far the index can be trusted, as opposed to how large it is.
 #[derive(Debug, Clone, serde::Serialize)]
@@ -1181,33 +1183,120 @@ impl Database {
             Phase::Rest => " AND u.kind <> 'imports'",
         };
 
-        // The chosen target for each reference, as a correlated subquery. The
-        // first CASE rejects candidates the reference could not denote (a call
-        // landing on a field); the second is the preference ladder; the
-        // remaining columns are the same stable tiebreak `resolve_symbol`
-        // uses, so a name resolves the same way whether it is reached through
-        // an edge or a lookup.
-        let pick_target = format!(
-            "\
-            SELECT n.id FROM nodes n \
-            WHERE n.name = u.reference_name \
-              AND ({kind_compatible}) \
-            ORDER BY \
-                CASE \
-                    WHEN n.file_path = u.file_path THEN 0 \
-                    WHEN EXISTS ( \
-                        SELECT 1 FROM import_scope i \
-                        WHERE i.source_file = u.file_path \
-                          AND i.target_file = n.file_path \
-                    ) THEN 1 \
-                    ELSE 2 \
-                END, \
-                n.is_test ASC, n.is_generated ASC, \
-                n.file_path ASC, n.start_line ASC, n.id ASC \
-            LIMIT 1",
-            kind_compatible = kind_compatible_sql()
-        );
-        let pick_target = pick_target.as_str();
+        // Resolution is expressed as three tiers materialised in turn, rather
+        // than as one correlated subquery evaluated per reference.
+        //
+        // The old shape asked, for every reference, "scan every definition
+        // sharing this name, rank them by the preference ladder, take the
+        // first". Its cost was O(candidates for that name), and in a growing
+        // codebase the reference count and the candidates-per-name both grow
+        // linearly — so indexing was quadratic. Measured at 4,000 files, a
+        // reference to `new` (1,482 definitions) cost 1,050us against 1.6us
+        // for a unique name, and the subquery was written out three times, so
+        // SQLite evaluated it three times per reference.
+        //
+        // Splitting the ladder removes the per-reference ranking:
+        //
+        //   tier 1  a definition in the referencing file
+        //   tier 2  a definition in a file the referencing file imports from
+        //   tier 3  the global preference winner for the name
+        //
+        // Tier 3 is what carried the quadratic, and it does not depend on the
+        // referencing file at all — only on (name, kind). Computing it once
+        // per distinct (name, kind) instead of once per reference is the whole
+        // fix. Tiers 1 and 2 are indexed joins bounded by one file's contents
+        // and by the files it actually imports.
+        //
+        // `COALESCE(tier1, tier2, tier3)` reproduces the ladder exactly, and
+        // every tier carries the same tiebreak, so the chosen definition is
+        // identical to what the correlated subquery chose.
+        let kind_compatible = kind_compatible_sql("r");
+        let tiebreak = RESOLUTION_TIEBREAK;
+
+        // The picker reads only (reference_name, kind, file_path), so
+        // resolving one row per distinct triple and joining the answer back is
+        // equivalent — and on real corpora that is roughly three references
+        // per triple.
+        self.conn.execute_batch(&format!(
+            "DROP TABLE IF EXISTS resolve_refs; \
+             DROP TABLE IF EXISTS pick_same; \
+             DROP TABLE IF EXISTS pick_import; \
+             DROP TABLE IF EXISTS pick_global; \
+             DROP TABLE IF EXISTS pick_final; \
+             CREATE TEMP TABLE resolve_refs AS \
+                 SELECT DISTINCT u.reference_name, u.kind, u.file_path \
+                 FROM unresolved_refs u WHERE 1=1{kind}{files}; \
+             CREATE INDEX idx_resolve_refs ON resolve_refs(reference_name, kind, file_path);",
+            kind = kind_filter,
+            files = file_filter
+        ))?;
+
+        // Tier 1 — same file.
+        self.conn.execute_batch(&format!(
+            "CREATE TEMP TABLE pick_same AS \
+             SELECT reference_name, kind, file_path, id FROM ( \
+                 SELECT r.reference_name, r.kind, r.file_path, n.id, \
+                        ROW_NUMBER() OVER ( \
+                            PARTITION BY r.reference_name, r.kind, r.file_path \
+                            ORDER BY {tiebreak}) AS rn \
+                 FROM resolve_refs r \
+                 JOIN nodes n ON n.name = r.reference_name \
+                              AND n.file_path = r.file_path \
+                              AND ({kind_compatible}) \
+             ) WHERE rn = 1; \
+             CREATE INDEX idx_pick_same ON pick_same(reference_name, kind, file_path);"
+        ))?;
+
+        // Tier 2 — a file the referencing file imports from. `import_scope`
+        // never pairs a file with itself, so this cannot re-offer a tier 1
+        // candidate.
+        self.conn.execute_batch(&format!(
+            "CREATE TEMP TABLE pick_import AS \
+             SELECT reference_name, kind, file_path, id FROM ( \
+                 SELECT r.reference_name, r.kind, r.file_path, n.id, \
+                        ROW_NUMBER() OVER ( \
+                            PARTITION BY r.reference_name, r.kind, r.file_path \
+                            ORDER BY {tiebreak}) AS rn \
+                 FROM resolve_refs r \
+                 JOIN import_scope i ON i.source_file = r.file_path \
+                 JOIN nodes n ON n.name = r.reference_name \
+                              AND n.file_path = i.target_file \
+                              AND ({kind_compatible}) \
+             ) WHERE rn = 1; \
+             CREATE INDEX idx_pick_import ON pick_import(reference_name, kind, file_path);"
+        ))?;
+
+        // Tier 3 — the global winner per (name, kind). Keyed on the pair
+        // rather than the triple: this is the tier that used to be re-ranked
+        // for every reference.
+        self.conn.execute_batch(&format!(
+            "CREATE TEMP TABLE pick_global AS \
+             SELECT reference_name, kind, id FROM ( \
+                 SELECT r.reference_name, r.kind, n.id, \
+                        ROW_NUMBER() OVER ( \
+                            PARTITION BY r.reference_name, r.kind \
+                            ORDER BY {tiebreak}) AS rn \
+                 FROM (SELECT DISTINCT reference_name, kind FROM resolve_refs) r \
+                 JOIN nodes n ON n.name = r.reference_name AND ({kind_compatible}) \
+             ) WHERE rn = 1; \
+             CREATE INDEX idx_pick_global ON pick_global(reference_name, kind);"
+        ))?;
+
+        // The ladder.
+        self.conn.execute_batch(
+            "CREATE TEMP TABLE pick_final AS \
+             SELECT r.reference_name, r.kind, r.file_path, \
+                    COALESCE(s.id, m.id, g.id) AS target_id \
+             FROM resolve_refs r \
+             LEFT JOIN pick_same s ON s.reference_name = r.reference_name \
+                                  AND s.kind = r.kind AND s.file_path = r.file_path \
+             LEFT JOIN pick_import m ON m.reference_name = r.reference_name \
+                                    AND m.kind = r.kind AND m.file_path = r.file_path \
+             LEFT JOIN pick_global g ON g.reference_name = r.reference_name \
+                                    AND g.kind = r.kind \
+             WHERE COALESCE(s.id, m.id, g.id) IS NOT NULL; \
+             CREATE INDEX idx_pick_final ON pick_final(reference_name, kind, file_path);",
+        )?;
 
         let before: i64 =
             self.conn
@@ -1216,10 +1305,12 @@ impl Database {
         let inserted = self.conn.execute(
             &format!(
                 "INSERT INTO edges (source_id, target_id, kind, file_path, line, column, detail) \
-                 SELECT u.source_node_id, ({pick}), u.kind, u.file_path, u.line, u.column, u.detail \
+                 SELECT u.source_node_id, p.target_id, u.kind, u.file_path, u.line, u.column, \
+                        u.detail \
                  FROM unresolved_refs u \
-                 WHERE ({pick}) IS NOT NULL{kind}{files}",
-                pick = pick_target,
+                 JOIN pick_final p ON p.reference_name = u.reference_name \
+                                  AND p.kind = u.kind AND p.file_path = u.file_path \
+                 WHERE 1=1{kind}{files}",
                 kind = kind_filter,
                 files = file_filter
             ),
@@ -1245,8 +1336,11 @@ impl Database {
         // the lot, as this used to, made that number permanently zero.
         self.conn.execute(
             &format!(
-                "DELETE FROM unresolved_refs AS u WHERE ({pick}) IS NOT NULL{kind}{files}",
-                pick = pick_target,
+                "DELETE FROM unresolved_refs WHERE id IN ( \
+                     SELECT u.id FROM unresolved_refs u \
+                     JOIN pick_final p ON p.reference_name = u.reference_name \
+                                      AND p.kind = u.kind AND p.file_path = u.file_path \
+                     WHERE 1=1{kind}{files})",
                 kind = kind_filter,
                 files = file_filter
             ),
@@ -3613,6 +3707,120 @@ mod language_tests_2 {
 
         let hits = db.semantic_search("dashboard", 10).unwrap();
         assert!(hits.iter().any(|n| n.name == "renderUserDashboard"));
+    }
+
+    /// The three tiers, exercised in order against one set of candidates.
+    ///
+    /// Resolution is materialised per tier rather than ranked per reference
+    /// (see `resolve_phase`), so the ladder is now an assembly of three joins
+    /// and a `COALESCE`. These pin that the assembly still means what the
+    /// single correlated subquery meant.
+    fn tiered_fixture() -> Database {
+        let db = Database::in_memory().unwrap();
+        for f in ["caller.rs", "imported.rs", "elsewhere.rs"] {
+            db.insert_or_update_file(&mk_file(f)).unwrap();
+        }
+        db
+    }
+
+    fn call_ref(db: &Database, source: i64, name: &str, from_file: &str) {
+        db.insert_unresolved_ref(&UnresolvedReference {
+            source_node_id: source,
+            reference_name: name.to_string(),
+            kind: EdgeKind::Calls,
+            file_path: from_file.to_string(),
+            line: 1,
+            column: 0,
+            detail: None,
+        })
+        .unwrap();
+    }
+
+    /// Tier 1 outranks tier 2: a same-file definition wins even when an
+    /// imported file also defines the name.
+    #[test]
+    fn resolution_prefers_the_same_file_over_an_imported_one() {
+        let db = tiered_fixture();
+        let caller = db.insert_node(&mk_node("caller", "caller.rs")).unwrap();
+        let local = db.insert_node(&mk_node("helper", "caller.rs")).unwrap();
+        let imported = db.insert_node(&mk_node("helper", "imported.rs")).unwrap();
+
+        db.insert_edge(&Edge {
+            id: 0,
+            source_id: caller,
+            target_id: imported,
+            kind: EdgeKind::Imports,
+            file_path: Some("caller.rs".to_string()),
+            line: Some(1),
+            column: Some(0),
+            detail: None,
+        })
+        .unwrap();
+
+        call_ref(&db, caller, "helper", "caller.rs");
+        db.resolve_references().unwrap();
+
+        let calls: Vec<_> = db
+            .get_outgoing_edges(caller)
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.kind == EdgeKind::Calls)
+            .collect();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].target_id, local);
+    }
+
+    /// Tier 3 is keyed on (name, kind) rather than on the referencing file —
+    /// the change that removed the quadratic. Two references from *different*
+    /// files, neither of which imports anything, must still both land on the
+    /// one global winner.
+    #[test]
+    fn the_global_tier_is_shared_across_referencing_files() {
+        let db = tiered_fixture();
+        let a = db.insert_node(&mk_node("a", "caller.rs")).unwrap();
+        let b = db.insert_node(&mk_node("b", "elsewhere.rs")).unwrap();
+        // Two candidates; `elsewhere.rs` sorts before `imported.rs`.
+        let winner = db.insert_node(&mk_node("shared", "elsewhere.rs")).unwrap();
+        let _loser = db.insert_node(&mk_node("shared", "imported.rs")).unwrap();
+
+        call_ref(&db, a, "shared", "caller.rs");
+        call_ref(&db, b, "shared", "elsewhere.rs");
+        db.resolve_references().unwrap();
+
+        for source in [a, b] {
+            let calls: Vec<_> = db
+                .get_outgoing_edges(source)
+                .unwrap()
+                .into_iter()
+                .filter(|e| e.kind == EdgeKind::Calls)
+                .collect();
+            assert_eq!(calls.len(), 1, "source {source} resolved {calls:?}");
+            assert_eq!(calls[0].target_id, winner);
+        }
+    }
+
+    /// Several references sharing one (name, kind, file) triple are resolved
+    /// once and joined back, so every one of them must still get an edge.
+    #[test]
+    fn every_reference_gets_an_edge_even_when_the_pick_is_deduplicated() {
+        let db = tiered_fixture();
+        let caller = db.insert_node(&mk_node("caller", "caller.rs")).unwrap();
+        let target = db.insert_node(&mk_node("helper", "elsewhere.rs")).unwrap();
+
+        for _ in 0..5 {
+            call_ref(&db, caller, "helper", "caller.rs");
+        }
+        assert_eq!(db.resolve_references().unwrap(), 5);
+
+        let calls: Vec<_> = db
+            .get_outgoing_edges(caller)
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.kind == EdgeKind::Calls)
+            .collect();
+        assert_eq!(calls.len(), 5, "deduplicating the pick must not drop edges");
+        assert!(calls.iter().all(|e| e.target_id == target));
+        assert_eq!(db.get_unresolved_refs().unwrap().len(), 0);
     }
 
     #[test]

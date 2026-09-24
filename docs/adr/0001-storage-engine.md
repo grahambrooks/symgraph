@@ -1,8 +1,12 @@
 # ADR 0001 — Storage engine for the symbol index
 
-- **Status:** proposed
+- **Status:** accepted
 - **Date:** 2026-09-23
 - **Decision:** keep SQLite; fix the algorithms that are actually quadratic.
+- **Follow-up:** work item 1 is done — see
+  [ADR 0002](0002-tiered-reference-resolution.md). Indexing went from
+  O(n^2.02) to O(n^1.41), 12.9× faster at 8,000 files, with a byte-identical
+  edge set. Items 2–6 remain open.
 
 ## Question
 
@@ -99,10 +103,13 @@ import-scope tier is bounded by the imports a file actually has rather than by
 hot-name fan-out. It is the only one of the three whose cost is not driven by
 candidate count, so it is the one that changes the asymptote.
 
-**Caveat:** C is a prototype measured in `sqlite3`, not a port of the
+**Caveat:** C was a prototype measured in `sqlite3`, not a port of the
 production semantics — it resolved 88,937 references against B's 94,241, so it
-is not yet equivalent. Treat ~19× as the shape of the available win, not a
-promise.
+was not equivalent. ~19× was the shape of the available win, not a promise.
+
+*Outcome:* the ported version is equivalent — a byte-identical edge set — and
+delivered 7.6× at this corpus size and 12.9× at 8,000 files. See
+[ADR 0002](0002-tiered-reference-resolution.md).
 
 `god-struct`'s 98 seconds is a separate, simpler fault: it loops over 7,239
 structs issuing per-struct and per-field queries. `get_struct_fields` also
@@ -129,9 +136,10 @@ healthiest dependency in the tree (`rusqlite` 0.40.2, released 2026-08-08,
 Work items, in the order they pay:
 
 1. **Tiered resolution** (option C above), replacing the per-reference sort.
-   The asymptote fix.
+   The asymptote fix. *Done — [ADR 0002](0002-tiered-reference-resolution.md).*
 2. **Evaluate the picker once**, materialised into a temp table used by both
    the insert and the delete. ~3× on its own; do it as part of 1.
+   *Done, with item 1.*
 3. **Rewrite `god-struct` as one aggregate query**, and fix `get_struct_fields`
    to key on the struct's node id rather than its name — a correctness fix as
    well as a 98-second one.
