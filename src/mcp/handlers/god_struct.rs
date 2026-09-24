@@ -4,14 +4,11 @@
 //! inbound-reference count × churn. The widest, most-referenced, most-volatile
 //! types float to the top — the first place a coupling reviewer should look.
 
-use std::collections::HashSet;
-
 use serde::Serialize;
 
 use crate::db::Database;
 use crate::mcp::handlers::churn::file_churn;
 use crate::mcp::types::{wants_json, GodStructRequest};
-use crate::types::{EdgeKind, NodeKind, Visibility};
 
 const DEFAULT_DAYS: u32 = 90;
 const DEFAULT_LIMIT: usize = 20;
@@ -47,59 +44,39 @@ pub fn handle_god_struct(
     // depending on this type.
     let include_tests = req.include_tests.unwrap_or(false);
 
-    let mut structs = db
-        .get_nodes_by_kind(NodeKind::Struct, include_tests)
+    // One query for the whole report. This used to be a loop over every
+    // struct issuing a field lookup plus an incoming-edge query per struct
+    // and per field — 98 seconds on a 4,000-file index, and wrong besides,
+    // because the field lookup matched on the struct's name.
+    let rows = db
+        .god_struct_rows(include_tests)
         .map_err(|e| e.to_string())?;
-    structs.extend(
-        db.get_nodes_by_kind(NodeKind::Class, include_tests)
-            .map_err(|e| e.to_string())?,
-    );
 
-    let mut ranked: Vec<GodStruct> = Vec::new();
-    for s in &structs {
-        let fields = db.get_struct_fields(&s.name).map_err(|e| e.to_string())?;
-        let pub_fields = fields
-            .iter()
-            .filter(|f| f.visibility == Visibility::Public)
-            .count();
+    let mut ranked: Vec<GodStruct> = rows
+        .into_iter()
+        .map(|r| {
+            let churn_n = churn
+                .as_ref()
+                .and_then(|c| c.get(&r.file_path).copied())
+                .unwrap_or(0);
 
-        // Inbound coupling = distinct source files with a non-structural edge
-        // into the struct itself or any of its fields.
-        let mut files: HashSet<String> = HashSet::new();
-        for node in std::iter::once(s).chain(fields.iter()) {
-            let incoming = db
-                .incoming_edges(node.id, include_tests)
-                .map_err(|e| e.to_string())?;
-            for e in incoming {
-                if e.kind == EdgeKind::Contains {
-                    continue;
-                }
-                if let Some(fp) = e.file_path {
-                    files.insert(fp);
-                }
+            // Score multiplies the dimensions, treating absent churn as
+            // neutral (1) so structs aren't all zeroed when churn isn't
+            // requested.
+            let vol = churn_n.max(1) as u64;
+            let score = r.pub_fields.max(1) as u64 * r.inbound_files.max(1) as u64 * vol;
+
+            GodStruct {
+                name: r.name,
+                file: r.file_path,
+                pub_fields: r.pub_fields,
+                total_fields: r.total_fields,
+                inbound_refs: r.inbound_files,
+                churn: churn_n,
+                score,
             }
-        }
-        let inbound_refs = files.len();
-        let churn_n = churn
-            .as_ref()
-            .and_then(|c| c.get(&s.file_path).copied())
-            .unwrap_or(0);
-
-        // Score multiplies the dimensions, treating absent churn as neutral (1)
-        // so structs aren't all zeroed when churn isn't requested.
-        let vol = churn_n.max(1) as u64;
-        let score = pub_fields.max(1) as u64 * inbound_refs.max(1) as u64 * vol;
-
-        ranked.push(GodStruct {
-            name: s.name.clone(),
-            file: s.file_path.clone(),
-            pub_fields,
-            total_fields: fields.len(),
-            inbound_refs,
-            churn: churn_n,
-            score,
-        });
-    }
+        })
+        .collect();
 
     ranked.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.name.cmp(&b.name)));
     let limit = req.limit.unwrap_or(DEFAULT_LIMIT as u32) as usize;

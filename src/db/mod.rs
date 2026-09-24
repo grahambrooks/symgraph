@@ -214,6 +214,18 @@ pub struct Database {
 /// Aggregated rather than one row per edge because the consumers only ever
 /// count by `(source_file, target_file, kind)`. On symgraph's own index that
 /// is 559 rows instead of 7246, and the ratio grows with the codebase.
+/// One struct/class in the god-struct report, with its dimensions already
+/// aggregated by SQL rather than by a per-struct query loop.
+#[derive(Debug, Clone)]
+pub struct GodStructRow {
+    pub name: String,
+    pub file_path: String,
+    pub pub_fields: usize,
+    pub total_fields: usize,
+    /// Distinct files with a non-structural edge into the struct or a field.
+    pub inbound_files: usize,
+}
+
 #[derive(Debug, Clone)]
 pub struct EdgeEndpoint {
     pub source_file: String,
@@ -789,20 +801,100 @@ impl Database {
     }
 
     /// Fields/properties contained by the named struct/class/interface.
-    pub fn get_struct_fields(&self, struct_name: &str) -> Result<Vec<Node>> {
+    pub fn get_struct_fields(&self, struct_id: i64) -> Result<Vec<Node>> {
         let mut stmt = self.conn.prepare(
             "SELECT t.* FROM nodes t \
              JOIN edges e ON e.target_id = t.id AND e.kind = 'contains' \
-             JOIN nodes s ON e.source_id = s.id \
-             WHERE s.name = ?1 AND s.kind IN ('struct','class','interface','trait','protocol') \
-             AND t.kind IN ('field','property')",
+             WHERE e.source_id = ?1 AND t.kind IN ('field','property') \
+             ORDER BY t.start_line, t.id",
         )?;
-        let rows = stmt.query_map(params![struct_name], Self::row_to_node)?;
+        let rows = stmt.query_map(params![struct_id], Self::row_to_node)?;
         let mut nodes = Vec::new();
         for row in rows {
             nodes.push(row?);
         }
         Ok(nodes)
+    }
+
+    /// One row per struct/class, with its field counts and how many distinct
+    /// files reach into it — the whole god-struct report in a single query.
+    ///
+    /// This replaced a loop that, for each of 7,239 structs, fetched its
+    /// fields and then issued one incoming-edge query per struct and per
+    /// field. At 4,000 files that took 98 seconds.
+    ///
+    /// It also replaced a correctness bug. The field lookup keyed on the
+    /// struct's **name**, so in a corpus with 80 types called `Struct` every
+    /// one of them was credited with all 80 types' fields — 80× the work and
+    /// the wrong answer. Fields are now reached through the `contains` edge
+    /// from a specific node id.
+    ///
+    /// `inbound_files` counts distinct `edges.file_path` values on
+    /// non-structural edges into the struct *or any of its fields*, which is
+    /// what the loop counted.
+    pub fn god_struct_rows(&self, include_tests: bool) -> Result<Vec<GodStructRow>> {
+        let struct_filter = if include_tests {
+            ""
+        } else {
+            " AND s.is_test = 0"
+        };
+        let caller_filter = if include_tests {
+            ""
+        } else {
+            " AND EXISTS (SELECT 1 FROM nodes src WHERE src.id = e.source_id AND src.is_test = 0)"
+        };
+
+        let sql = format!(
+            "WITH s AS ( \
+                 SELECT id, name, file_path FROM nodes s \
+                 WHERE s.kind IN ('struct','class'){struct_filter} \
+             ), \
+             fields AS ( \
+                 SELECT s.id AS sid, t.id AS fid, t.visibility AS vis \
+                 FROM s \
+                 JOIN edges c ON c.source_id = s.id AND c.kind = 'contains' \
+                 JOIN nodes t ON c.target_id = t.id AND t.kind IN ('field','property') \
+             ), \
+             field_counts AS ( \
+                 SELECT sid, COUNT(*) AS total, \
+                        SUM(CASE WHEN vis = 'public' THEN 1 ELSE 0 END) AS pub_count \
+                 FROM fields GROUP BY sid \
+             ), \
+             targets AS ( \
+                 SELECT id AS sid, id AS nid FROM s \
+                 UNION ALL \
+                 SELECT sid, fid FROM fields \
+             ), \
+             inbound AS ( \
+                 SELECT g.sid, COUNT(DISTINCT e.file_path) AS files \
+                 FROM targets g \
+                 JOIN edges e ON e.target_id = g.nid \
+                 WHERE e.kind <> 'contains' AND e.file_path IS NOT NULL{caller_filter} \
+                 GROUP BY g.sid \
+             ) \
+             SELECT s.name, s.file_path, \
+                    COALESCE(fc.pub_count, 0), COALESCE(fc.total, 0), \
+                    COALESCE(i.files, 0) \
+             FROM s \
+             LEFT JOIN field_counts fc ON fc.sid = s.id \
+             LEFT JOIN inbound i ON i.sid = s.id"
+        );
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map([], |row| {
+            Ok(GodStructRow {
+                name: row.get(0)?,
+                file_path: row.get(1)?,
+                pub_fields: row.get::<_, i64>(2)? as usize,
+                total_fields: row.get::<_, i64>(3)? as usize,
+                inbound_files: row.get::<_, i64>(4)? as usize,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
     }
 
     /// Files that dispatch on a member of the named enum (control coupling).
@@ -3734,6 +3826,165 @@ mod language_tests_2 {
             detail: None,
         })
         .unwrap();
+    }
+
+    // --- god-struct aggregation ---------------------------------------
+
+    /// Attach `count` fields to `struct_id`, `pub_count` of them public.
+    fn add_fields(db: &Database, struct_id: i64, file: &str, count: usize, pub_count: usize) {
+        for i in 0..count {
+            let mut f = mk_node(&format!("f{struct_id}_{i}"), file);
+            f.kind = NodeKind::Field;
+            f.visibility = if i < pub_count {
+                Visibility::Public
+            } else {
+                Visibility::Private
+            };
+            let fid = db.insert_node(&f).unwrap();
+            db.insert_edge(&Edge {
+                id: 0,
+                source_id: struct_id,
+                target_id: fid,
+                kind: EdgeKind::Contains,
+                file_path: Some(file.to_string()),
+                line: Some(1),
+                column: Some(0),
+                detail: None,
+            })
+            .unwrap();
+        }
+    }
+
+    /// The bug this query replaced: field lookup keyed on the struct's *name*,
+    /// so two unrelated types sharing a name were each credited with the
+    /// other's fields. On a 2,000-file corpus that reported `Build` as having
+    /// 467 fields when it had 40.
+    #[test]
+    fn same_named_structs_do_not_share_each_others_fields() {
+        let db = Database::in_memory().unwrap();
+        db.insert_or_update_file(&mk_file("a.rs")).unwrap();
+        db.insert_or_update_file(&mk_file("b.rs")).unwrap();
+
+        let mut a = mk_node("Config", "a.rs");
+        a.kind = NodeKind::Struct;
+        let a_id = db.insert_node(&a).unwrap();
+        let mut b = mk_node("Config", "b.rs");
+        b.kind = NodeKind::Struct;
+        let b_id = db.insert_node(&b).unwrap();
+
+        add_fields(&db, a_id, "a.rs", 3, 2);
+        add_fields(&db, b_id, "b.rs", 5, 1);
+
+        let rows = db.god_struct_rows(true).unwrap();
+        let by_file = |f: &str| {
+            rows.iter()
+                .find(|r| r.file_path == f)
+                .unwrap_or_else(|| panic!("no row for {f}"))
+                .clone()
+        };
+
+        let a_row = by_file("a.rs");
+        assert_eq!(a_row.total_fields, 3, "a.rs picked up b.rs's fields");
+        assert_eq!(a_row.pub_fields, 2);
+
+        let b_row = by_file("b.rs");
+        assert_eq!(b_row.total_fields, 5, "b.rs picked up a.rs's fields");
+        assert_eq!(b_row.pub_fields, 1);
+    }
+
+    /// Inbound coupling counts *distinct files* with a non-structural edge
+    /// into the struct or any of its fields — `contains` does not count, and
+    /// two edges from one file count once.
+    #[test]
+    fn inbound_files_counts_distinct_files_across_struct_and_fields() {
+        let db = Database::in_memory().unwrap();
+        for f in ["s.rs", "one.rs", "two.rs"] {
+            db.insert_or_update_file(&mk_file(f)).unwrap();
+        }
+        let mut st = mk_node("Widget", "s.rs");
+        st.kind = NodeKind::Struct;
+        let sid = db.insert_node(&st).unwrap();
+        add_fields(&db, sid, "s.rs", 2, 2);
+        let field_id = db.get_struct_fields(sid).unwrap()[0].id;
+
+        let caller_one = db.insert_node(&mk_node("c1", "one.rs")).unwrap();
+        let caller_two = db.insert_node(&mk_node("c2", "two.rs")).unwrap();
+        let edge = |src: i64, tgt: i64, file: &str, kind: EdgeKind| {
+            db.insert_edge(&Edge {
+                id: 0,
+                source_id: src,
+                target_id: tgt,
+                kind,
+                file_path: Some(file.to_string()),
+                line: Some(1),
+                column: Some(0),
+                detail: None,
+            })
+            .unwrap();
+        };
+        // Two edges from one.rs — one into the struct, one into a field.
+        edge(caller_one, sid, "one.rs", EdgeKind::References);
+        edge(caller_one, field_id, "one.rs", EdgeKind::Accesses);
+        // One from two.rs.
+        edge(caller_two, sid, "two.rs", EdgeKind::References);
+
+        let row = db
+            .god_struct_rows(true)
+            .unwrap()
+            .into_iter()
+            .find(|r| r.name == "Widget")
+            .unwrap();
+        assert_eq!(row.inbound_files, 2, "one.rs must count once, not twice");
+        assert_eq!(row.total_fields, 2);
+    }
+
+    /// `include_tests` gates both sides: which structs are listed, and whose
+    /// references count towards inbound coupling.
+    #[test]
+    fn god_struct_rows_honour_the_test_scope() {
+        let db = Database::in_memory().unwrap();
+        db.insert_or_update_file(&mk_file("src/lib.rs")).unwrap();
+        db.insert_or_update_file(&mk_file("tests/it.rs")).unwrap();
+
+        let mut prod = mk_node("Prod", "src/lib.rs");
+        prod.kind = NodeKind::Struct;
+        let prod_id = db.insert_node(&prod).unwrap();
+        let mut fixture = mk_node("Fixture", "tests/it.rs");
+        fixture.kind = NodeKind::Struct;
+        fixture.is_test = true;
+        db.insert_node(&fixture).unwrap();
+
+        let mut tester = mk_node("it_works", "tests/it.rs");
+        tester.is_test = true;
+        let tester_id = db.insert_node(&tester).unwrap();
+        db.insert_edge(&Edge {
+            id: 0,
+            source_id: tester_id,
+            target_id: prod_id,
+            kind: EdgeKind::References,
+            file_path: Some("tests/it.rs".to_string()),
+            line: Some(1),
+            column: Some(0),
+            detail: None,
+        })
+        .unwrap();
+
+        let production = db.god_struct_rows(false).unwrap();
+        assert_eq!(
+            production.len(),
+            1,
+            "a test fixture is not architectural debt"
+        );
+        assert_eq!(production[0].name, "Prod");
+        assert_eq!(
+            production[0].inbound_files, 0,
+            "a reference from a test is not a module depending on this type"
+        );
+
+        let everything = db.god_struct_rows(true).unwrap();
+        assert_eq!(everything.len(), 2);
+        let prod_row = everything.iter().find(|r| r.name == "Prod").unwrap();
+        assert_eq!(prod_row.inbound_files, 1);
     }
 
     /// Tier 1 outranks tier 2: a same-file definition wins even when an

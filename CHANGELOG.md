@@ -61,6 +61,15 @@ release-pipeline follow-ups to the release-kit v2 adoption in 2026.9.2.
   have, and `status` needed its health block written twice. All three now call
   the same functions, and a test runs the binary against the handler to keep
   it that way.
+- **`symgraph-god-struct` credited every struct with its namesakes' fields.**
+  The field lookup keyed on the struct's *name*, so in a codebase with 80
+  types called `Struct` each of them was reported with all 80 types' fields.
+  On a 2,000-file corpus this moved 2,857 of 4,548 rows — `Build` was listed
+  with 467 fields against an actual 40 — which put whichever name was most
+  duplicated at the top of a report meant to rank architectural debt. Fields
+  are now reached through the `contains` edge from a specific struct, so every
+  changed row is one that shares its name with another, and no uniquely-named
+  struct changed at all.
 - **Calls resolved to things that cannot be called.** Name-based resolution
   matched a reference to a definition by name alone, with no check that the
   two were compatible, so a call could land on a *field*, module, import or
@@ -169,6 +178,10 @@ release-pipeline follow-ups to the release-kit v2 adoption in 2026.9.2.
   [ADR 0002](docs/adr/0002-tiered-reference-resolution.md), and
   [ADR 0001](docs/adr/0001-storage-engine.md) for why the storage engine was
   not the problem.
+- **`symgraph-god-struct` was quadratic too, for a different reason.** It
+  looped over every struct issuing a field lookup plus one incoming-edge query
+  per struct and per field. One aggregate query replaces the loop: **98.6 s →
+  0.76 s** at 4,000 files (130×), and 8,000 files now answers in 1.0 s.
 - Indexing streams in chunks rather than holding the whole repository in
   memory.
 - A no-op incremental pass skips reading and hashing files whose size and mtime

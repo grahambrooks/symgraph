@@ -3,10 +3,10 @@
 - **Status:** accepted
 - **Date:** 2026-09-23
 - **Decision:** keep SQLite; fix the algorithms that are actually quadratic.
-- **Follow-up:** work item 1 is done — see
-  [ADR 0002](0002-tiered-reference-resolution.md). Indexing went from
-  O(n^2.02) to O(n^1.41), 12.9× faster at 8,000 files, with a byte-identical
-  edge set. Items 2–6 remain open.
+- **Follow-up:** work items 1–3 are done. Resolution went from O(n^2.02) to
+  O(n^1.41), 12.9× faster at 8,000 files, with a byte-identical edge set — see
+  [ADR 0002](0002-tiered-reference-resolution.md). `god-struct` went from
+  98.6 s to 0.76 s at 4,000 files. Items 4–6 remain open.
 
 ## Question
 
@@ -117,6 +117,12 @@ matches **by name**, so with 80 structs called `Struct` each iteration pulls
 all 80 structs' fields — quadratic work *and* misattributed fields. One
 `GROUP BY` replaces the whole loop.
 
+*Fixed.* 98.6 s → 0.76 s at 4,000 files. On a 2,000-file corpus the
+misattribution moved 2,857 of 4,548 rows, every one of them a struct sharing
+its name with another and every change a decrease — `Build` was reported with
+467 fields against an actual 40. No uniquely-named struct changed at all,
+which is the signature the fix should have.
+
 ## Options considered
 
 ### 1. Keep SQLite, fix the algorithms — *chosen*
@@ -142,7 +148,8 @@ Work items, in the order they pay:
    *Done, with item 1.*
 3. **Rewrite `god-struct` as one aggregate query**, and fix `get_struct_fields`
    to key on the struct's node id rather than its name — a correctness fix as
-   well as a 98-second one.
+   well as a 98-second one. *Done: 98.6 s → 0.76 s at 4,000 files (130×), and
+   the name-collision misattribution is gone. 8,000 files now runs in 1.0 s.*
 4. **Covering index on `nodes(name, kind, file_path)`** so candidate scans stay
    in the index.
 5. **Recursive CTEs** for `traverse`/`path`, replacing the per-node query loop

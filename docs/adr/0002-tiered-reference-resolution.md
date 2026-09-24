@@ -137,11 +137,11 @@ definition, 26% of production cross-file calls still land outside the caller's
 imports, and `module-graph` SCC membership is still not trustworthy. This ADR
 made resolution *fast*; it did not make it *right*.
 
-The other items from ADR 0001 remain open — `god-struct` is still 98 s at
-4,000 files (N+1, plus `get_struct_fields` matching by name rather than node
-id), the covering index is not added, traversal still uses per-node queries
-rather than recursive CTEs, and `Mutex<Database>` still serialises reads.
+Of the other items in ADR 0001, `god-struct` has since been fixed (98.6 s →
+0.76 s at 4,000 files, and the name-collision misattribution with it). The
+covering index is not added, traversal still uses per-node queries rather than
+recursive CTEs, and `Mutex<Database>` still serialises reads.
 
 ADR 0001's revisit trigger was "fitted exponent above ~1.3 after items 1–4
-land". At 1.41 with three of those four items still outstanding, the storage
-decision stands and should be re-tested once they do.
+land". At 1.41 with item 4 still outstanding, the storage decision stands and
+should be re-tested once it does.
