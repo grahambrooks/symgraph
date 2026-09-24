@@ -1,0 +1,28 @@
+src/db/mod.rs
+  s_2a3a5cdcb907e9::t_eba886538bb6de 3712-3825
+  s_2a3a5cdcb907e9::t_bb25eff900587f 101-119,122-125
+  s_2a3a5cdcb907e9::t_ed694213dd11d7 1186-1299,1308-1309,1311-1313,1339-1343
+  s_2a3a5cdcb907e9::t_09224e87a12310 126
+docs/adr/0001-storage-engine.md
+  s_2a3a5cdcb907e9::t_5edcdc2c4acece 3,6-9,106,108-112,139,142
+docs/adr/0002-tiered-reference-resolution.md
+  s_2a3a5cdcb907e9::t_82a64fef78e972 1-147
+CHANGELOG.md
+  s_2a3a5cdcb907e9::t_0f18096e6cedc6 151-171
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "80062d57a38b90151205e291886bfffe29c9a43f",
+  "prompts": {},
+  "sessions": {
+    "s_2a3a5cdcb907e9": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "863e2dbc-2c6a-4667-951c-e284f4e32919",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}
