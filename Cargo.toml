@@ -1,6 +1,6 @@
 [package]
 name = "symgraph"
-version = "2026.9.2"
+version = "2026.10.1"
 edition = "2021"
 # Set by tree-sitter 0.27 / tree-sitter-language 0.1.8, the highest MSRV in the
 # dependency tree. The `msrv` CI job builds against exactly this toolchain, so
