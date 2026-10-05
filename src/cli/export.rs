@@ -22,7 +22,7 @@
 //! (sent, but not confirmed by the caller). Record ids name the commit, so a
 //! re-sent export is idempotent.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -31,7 +31,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
 
-use crate::coupling::{build_module_graph, score_coupling, Granularity};
+use crate::coupling::{boundary_of, build_module_graph, score_coupling, Granularity};
 use crate::db::Database;
 use crate::mcp::handlers::churn::file_churn;
 use crate::mcp::handlers::god_struct::rank_god_structs;
@@ -81,6 +81,10 @@ struct State {
 struct Exported {
     commit: String,
     seq: u64,
+    /// The commit exported before this one: where this export's
+    /// `change_impact` range starts, so a re-send covers the same commits.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    previous: Option<String>,
 }
 
 /// Export every mirror's records to `out`. A repository that fails is
@@ -105,19 +109,19 @@ pub fn export(opts: &ExportOptions, out: &mut impl Write) -> Result<ExportSummar
                 continue;
             }
         };
-        let seq = match state.repositories.get(&repo) {
+        let (seq, previous) = match state.repositories.get(&repo) {
             Some(prev) if prev.commit == commit && prev.seq <= opts.since => {
                 summary.unchanged += 1;
                 continue;
             }
             // Sent before but not confirmed: the same records again.
-            Some(prev) if prev.commit == commit => prev.seq,
-            _ => {
+            Some(prev) if prev.commit == commit => (prev.seq, prev.previous.clone()),
+            prev => {
                 state.next_seq += 1;
-                state.next_seq
+                (state.next_seq, prev.map(|p| p.commit.clone()))
             }
         };
-        match repository_records(&repo, &path, &commit, seq, opts) {
+        match repository_records(&repo, &path, &commit, previous.as_deref(), seq, opts) {
             Ok(records) => {
                 for r in &records {
                     serde_json::to_writer(&mut *out, r)?;
@@ -125,7 +129,14 @@ pub fn export(opts: &ExportOptions, out: &mut impl Write) -> Result<ExportSummar
                 }
                 summary.records += records.len();
                 summary.exported += 1;
-                state.repositories.insert(repo, Exported { commit, seq });
+                state.repositories.insert(
+                    repo,
+                    Exported {
+                        commit,
+                        seq,
+                        previous,
+                    },
+                );
             }
             Err(e) => {
                 eprintln!("symgraph export: {repo}: {e:#}");
@@ -202,6 +213,7 @@ fn repository_records(
     repo: &str,
     path: &Path,
     commit: &str,
+    previous: Option<&str>,
     seq: u64,
     opts: &ExportOptions,
 ) -> Result<Vec<Value>> {
@@ -240,6 +252,17 @@ fn repository_records(
     let in_cycle: std::collections::HashSet<&str> =
         graph.cycles.iter().flatten().map(String::as_str).collect();
 
+    // Who depends on each directory (the graph's edges reversed).
+    let mut dependents: HashMap<&str, Vec<&str>> = HashMap::new();
+    for e in &graph.edges {
+        dependents
+            .entry(e.to.as_str())
+            .or_default()
+            .push(e.from.as_str());
+    }
+    let nodes: std::collections::HashSet<&str> =
+        graph.nodes.iter().map(|n| n.id.as_str()).collect();
+
     let mut records = Vec::new();
     records.push(snapshot(&common, &db, &stats, &graph, &gods, &in_cycle)?);
     for n in &graph.nodes {
@@ -276,6 +299,48 @@ fn repository_records(
             }),
         ));
     }
+    for change in changes(path, previous, opts.churn_days)? {
+        let touched: BTreeSet<String> = change
+            .files
+            .iter()
+            .map(|f| boundary_of(f, Granularity::Dir))
+            .filter(|d| dependents.contains_key(d.as_str()) || nodes.contains(d.as_str()))
+            .collect();
+        let (direct, transitive) = reach(&touched, &dependents);
+        records.push(Value::Object({
+            let mut r = common
+                .record(
+                    "change_impact",
+                    &format!("change:{}", change.sha),
+                    json!({
+                        "sha": change.sha,
+                        "files_changed": change.files.len(),
+                        "directories_touched": touched.len(),
+                        "direct_dependents": direct,
+                        "transitive_dependents": transitive,
+                        // Share of the repository's directories a change can
+                        // reach: 1.0 means everything depends on it.
+                        "reach_share": (!nodes.is_empty())
+                            .then(|| transitive as f64 / nodes.len() as f64),
+                        "touches_cycle": touched.iter().any(|d| in_cycle.contains(d.as_str())),
+                        // Impact is read off the graph at the exported commit,
+                        // not at each change's own commit.
+                        "graph_commit": commit,
+                    }),
+                )
+                .as_object()
+                .cloned()
+                .unwrap_or_default();
+            // A change is dated, and identified, by its own commit.
+            r.insert(
+                "id".into(),
+                json!(format!("symgraph:{repo}@{}:change", change.sha)),
+            );
+            r.insert("commit".into(), json!(change.sha));
+            r.insert("changed_at".into(), json!(change.committed_at));
+            r
+        }));
+    }
     for (rank, g) in gods.iter().take(opts.top).enumerate() {
         records.push(common.record(
             "god_struct",
@@ -293,6 +358,81 @@ fn repository_records(
         ));
     }
     Ok(records)
+}
+
+/// One commit's changed files.
+struct Change {
+    sha: String,
+    committed_at: String,
+    files: Vec<String>,
+}
+
+/// Most commits one export reads per repository.
+const MAX_CHANGES: usize = 1_000;
+
+/// The non-merge commits since `previous` (exclusive), or within the last
+/// `days` on a first export, with their changed files, oldest first.
+fn changes(path: &Path, previous: Option<&str>, days: u32) -> Result<Vec<Change>> {
+    let max = format!("--max-count={MAX_CHANGES}");
+    let since = format!("--since={days}.days");
+    let range = previous.map(|p| format!("{p}..HEAD"));
+    let mut args = vec![
+        "log",
+        "--no-merges",
+        "--reverse",
+        "--format=%x00%H%x09%cI",
+        "--name-only",
+        &max,
+    ];
+    match &range {
+        Some(r) => args.push(r),
+        None => {
+            args.push(&since);
+            args.push("HEAD");
+        }
+    }
+    let text = match git(path, &args) {
+        Ok(t) => t,
+        // The previous commit is gone (a force-push): fall back to the window.
+        Err(_) if previous.is_some() => return changes(path, None, days),
+        Err(e) => return Err(e),
+    };
+    Ok(text
+        .split('\0')
+        .filter_map(|block| {
+            let mut lines = block.lines();
+            let (sha, at) = lines.next()?.split_once('\t')?;
+            Some(Change {
+                sha: sha.to_string(),
+                committed_at: at.to_string(),
+                files: lines
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .map(str::to_string)
+                    .collect(),
+            })
+        })
+        .collect())
+}
+
+/// How many directories depend on `touched` directly, and how many can
+/// reach it through any chain of dependencies, not counting `touched`.
+fn reach(touched: &BTreeSet<String>, dependents: &HashMap<&str, Vec<&str>>) -> (usize, usize) {
+    let direct: BTreeSet<&str> = touched
+        .iter()
+        .flat_map(|d| dependents.get(d.as_str()).into_iter().flatten().copied())
+        .filter(|d| !touched.contains(*d))
+        .collect();
+    let mut seen: BTreeSet<&str> = touched.iter().map(String::as_str).collect();
+    let mut queue: Vec<&str> = seen.iter().copied().collect();
+    while let Some(d) = queue.pop() {
+        for &up in dependents.get(d).into_iter().flatten() {
+            if seen.insert(up) {
+                queue.push(up);
+            }
+        }
+    }
+    (direct.len(), seen.len() - touched.len())
 }
 
 fn snapshot(
@@ -399,6 +539,19 @@ fn rfc3339(secs: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reach_counts_direct_and_transitive_dependents() {
+        // api -> core -> util, and cli -> util.
+        let mut dependents: HashMap<&str, Vec<&str>> = HashMap::new();
+        dependents.insert("core", vec!["api"]);
+        dependents.insert("util", vec!["core", "cli"]);
+        let touched = |d: &[&str]| d.iter().map(|s| s.to_string()).collect::<BTreeSet<_>>();
+        assert_eq!(reach(&touched(&["util"]), &dependents), (2, 3));
+        assert_eq!(reach(&touched(&["core"]), &dependents), (1, 1));
+        assert_eq!(reach(&touched(&["api"]), &dependents), (0, 0));
+        assert_eq!(reach(&touched(&["core", "util"]), &dependents), (2, 2));
+    }
 
     #[test]
     fn formats_utc_timestamps() {
@@ -520,5 +673,17 @@ mod tests {
         let (changed, newer) = run(&mirrors, &state, 1);
         assert_eq!(changed.exported, 1);
         assert!(newer.iter().all(|r| r["source_seq"] == 2));
+        let head = head_commit(&repo).unwrap();
+        let impacts: Vec<&Value> = newer
+            .iter()
+            .filter(|r| r["record_type"] == "change_impact")
+            .collect();
+        assert_eq!(impacts.len(), 1, "only the commit since the last export");
+        assert_eq!(impacts[0]["sha"], head.as_str());
+        assert_eq!(
+            impacts[0]["id"],
+            format!("symgraph:acme/app@{head}:change").as_str()
+        );
+        assert_eq!(impacts[0]["directories_touched"], 1);
     }
 }

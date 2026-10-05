@@ -197,9 +197,11 @@ symgraph export --mirrors ~/workspace --state ~/.symgraph-export --since 0
 | `directory_coupling` | directory | fan-in, fan-out, instability, in a cycle, churn |
 | `coupling_edge` | top `--top` directory pairs (default 50) | strength, distance, volatility, impact, edge kinds |
 | `god_struct` | top `--top` structs | public and total fields, inbound references, churn, score |
+| `change_impact` | commit since the last export (the last `--days` on the first) | files changed, directories touched, direct and transitive dependent directories, reach share, touches a cycle |
 
 The graph is folded to directories, which works the same in every language. Records name the
-checked-out commit, so re-sending them is idempotent.
+checked-out commit, so re-sending them is idempotent. A `change_impact` reads its reach off the graph
+at the exported commit (`graph_commit`), not at the change's own commit.
 
 Each commit gets a sequence number (`source_seq`), kept in `--state`. A repository is exported
 again only when its commit changes, or when its last export is newer than the `--since` cursor:

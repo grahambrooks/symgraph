@@ -16,6 +16,9 @@ release-pipeline follow-ups to the release-kit v2 adoption in 2026.9.2.
   (`coupling_snapshot`, `directory_coupling`, `coupling_edge`, `god_struct`),
   folded to directories. Each commit gets a sequence number, kept in the
   export's state directory, so a caller's cursor decides what is sent again.
+  `change_impact` records each commit since the last export: the directories
+  it touched and how many depend on them, directly and through any chain of
+  dependencies (its blast radius).
 
 - **Ambiguity reporting.** Every single-symbol result says how many definitions
   shared the name and where the others are. `file` / `qualified_name` (CLI:
