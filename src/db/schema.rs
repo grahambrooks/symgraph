@@ -127,7 +127,10 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// - v3: reference resolution rejects a candidate whose kind the reference
 ///   could not denote — a `calls` landing on a field, say. Indexes built
 ///   before this carry those edges, and they read as ordinary dependencies.
-pub const EXTRACTOR_VERSION: u32 = 3;
+/// - v4: minified files (`.min.js`, a first line over 2,000 characters) are
+///   marked generated, and the dependency graph leaves generated code out. A
+///   vendored `mermaid.min.js` had been the top fan-in node of a project.
+pub const EXTRACTOR_VERSION: u32 = 4;
 
 /// Additive schema migrations applied after CREATE TABLE IF NOT EXISTS.
 ///

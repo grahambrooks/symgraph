@@ -50,6 +50,13 @@ release-pipeline follow-ups to the release-kit v2 adoption in 2026.9.2.
 
 ### Fixed
 
+- **Generated code no longer shapes the architecture.** Minified and bundled
+  files (`.min.js`, `.bundle.js`, or a first line over 2,000 characters) are
+  now marked generated, and `module-graph`, `coupling-score` and `god-struct`
+  leave generated code out, as they already left out tests. A vendored
+  `mermaid.min.js` had been the most depended-on module in a project.
+  Indexes rebuild once (extractor v4).
+
 - **Targeted reindex always failed.** `delete_file` dropped `nodes` before
   `unresolved_refs`, which holds a foreign key to it, so every
   `symgraph-reindex` with a file list returned "FOREIGN KEY constraint failed"

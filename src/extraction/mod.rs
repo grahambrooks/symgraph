@@ -951,6 +951,9 @@ fn is_test_path(file_path: &str) -> bool {
         || p.ends_with("_test.rb")
 }
 
+/// A first line longer than this marks a file as minified, hence generated.
+const MINIFIED_LINE: usize = 2_000;
+
 /// Heuristic: does this file path look like generated code?
 fn is_generated_path(file_path: &str) -> bool {
     let p = file_path.replace('\\', "/").to_lowercase();
@@ -963,10 +966,24 @@ fn is_generated_path(file_path: &str) -> bool {
         || p.ends_with("_pb2.py")
         || p.ends_with(".g.dart")
         || p.ends_with(".freezed.dart")
+        // Minified or bundled JavaScript: vendored, not written here.
+        || p.ends_with(".min.js")
+        || p.ends_with(".min.mjs")
+        || p.ends_with(".min.cjs")
+        || p.ends_with(".bundle.js")
 }
 
 /// Heuristic: does the file content begin with a generated-code marker?
 fn is_generated_content(content: &str) -> bool {
+    // Minified code: the first line alone runs to thousands of characters.
+    // Hand-written source of any style doesn't.
+    if content
+        .lines()
+        .next()
+        .is_some_and(|l| l.len() > MINIFIED_LINE)
+    {
+        return true;
+    }
     let head: String = content.chars().take(512).collect();
     let lower = head.to_lowercase();
     lower.contains("do not edit")
@@ -979,6 +996,18 @@ fn is_generated_content(content: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn minified_and_bundled_files_are_generated() {
+        assert!(is_generated_path("static/vendor-ish/mermaid.min.js"));
+        assert!(is_generated_path("web/app.bundle.js"));
+        assert!(!is_generated_path("src/minimal.js"));
+        let minified = format!("!function(e,t){{{}}}", "var a=1;".repeat(400));
+        assert!(is_generated_content(&minified));
+        assert!(!is_generated_content(
+            "fn main() {\n    println!(\"hi\");\n}\n"
+        ));
+    }
 
     #[test]
     fn test_extractor_creation() {

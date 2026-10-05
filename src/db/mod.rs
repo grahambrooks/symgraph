@@ -752,10 +752,13 @@ impl Database {
         // makes a test file look like a module every production module
         // depends on — which is backwards, and enough on its own to merge
         // unrelated modules into one enormous cycle.
+        // Generated code (protobuf stubs, minified bundles) is left out
+        // always: it isn't architecture anyone chose, and a vendored bundle
+        // otherwise ranks as the most depended-on module.
         let test_filter = if include_tests {
-            ""
+            " WHERE s.is_generated = 0 AND t.is_generated = 0"
         } else {
-            " WHERE s.is_test = 0 AND t.is_test = 0"
+            " WHERE s.is_test = 0 AND t.is_test = 0 AND s.is_generated = 0 AND t.is_generated = 0"
         };
         let mut stmt = self.conn.prepare(&format!(
             "SELECT s.file_path, t.file_path, e.kind, e.detail, COUNT(*) \
@@ -834,9 +837,9 @@ impl Database {
     /// what the loop counted.
     pub fn god_struct_rows(&self, include_tests: bool) -> Result<Vec<GodStructRow>> {
         let struct_filter = if include_tests {
-            ""
+            " AND s.is_generated = 0"
         } else {
-            " AND s.is_test = 0"
+            " AND s.is_test = 0 AND s.is_generated = 0"
         };
         let caller_filter = if include_tests {
             ""
