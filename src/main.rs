@@ -111,6 +111,12 @@ const GROUPS: &[Group] = &[
         ],
     },
     Group {
+        title: "COLLECTION",
+        commands: &[
+            Command { name: "export", args: "--mirrors DIR --state DIR [--since N] [--top N] [--days N]", help: "Code-structure records (JSON Lines) for every mirror under DIR/<owner>/<name>" },
+        ],
+    },
+    Group {
         title: "TOOLING",
         commands: &[
             Command { name: "completions", args: "<bash|zsh|fish>", help: "Print a shell completion script" },
@@ -442,6 +448,32 @@ fn main() -> Result<()> {
                 flag_u32(&args, "--limit"),
                 format,
             )?;
+        }
+
+        // ---- collection ----
+        "export" => {
+            let (Some(mirrors), Some(state)) =
+                (flag_value(&args, "--mirrors"), flag_value(&args, "--state"))
+            else {
+                eprintln!(
+                    "Usage: {BIN} export --mirrors DIR --state DIR [--since N] [--top N] [--days N]"
+                );
+                std::process::exit(2);
+            };
+            let opts = symgraph::cli::export::ExportOptions {
+                mirrors: mirrors.into(),
+                state: state.into(),
+                since: flag_u64(&args, "--since").unwrap_or(0),
+                top: flag_u32(&args, "--top").unwrap_or(50) as usize,
+                churn_days: flag_u32(&args, "--days").unwrap_or(90),
+            };
+            let stdout = std::io::stdout();
+            let mut out = std::io::BufWriter::new(stdout.lock());
+            let s = symgraph::cli::export::export(&opts, &mut out)?;
+            eprintln!(
+                "symgraph export: {} repositories, {} exported, {} unchanged, {} failed, {} records",
+                s.repositories, s.exported, s.unchanged, s.failed, s.records
+            );
         }
 
         // ---- coupling & architecture ----

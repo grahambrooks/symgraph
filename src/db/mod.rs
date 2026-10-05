@@ -1996,6 +1996,22 @@ impl Database {
         Ok(nodes)
     }
 
+    /// Unused symbols that nothing outside the project could be using: not
+    /// public and not exported. Public API with no callers here is often
+    /// used by another crate or service, so it isn't counted as dead.
+    pub fn count_unused_internal(&self) -> Result<usize> {
+        let n: i64 = self.conn.query_row(
+            &format!(
+                "SELECT COUNT(*) FROM nodes n WHERE {} \
+                 AND COALESCE(n.visibility, '') <> 'public' AND n.is_exported = 0",
+                Self::unused_predicate(true)
+            ),
+            [],
+            |row| row.get(0),
+        )?;
+        Ok(n as usize)
+    }
+
     /// How many unused symbols exist in total. On a large codebase this is
     /// routinely in the thousands, which is exactly why the listing is paged.
     pub fn count_unused_symbols(&self, ignore_test_callers: bool) -> Result<usize> {

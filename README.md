@@ -174,11 +174,37 @@ symgraph god-struct [--churn]         # Structs ranked by architectural debt
 symgraph dispatch-sites <enum>        # Files that match/switch on an enum
 ```
 
-Add `--format json` for machine-readable output (supported by every command
-except `blame`, `churn`, and `diff-impact`), and `--db <path>` to point at a
+Add `--format json` for machine-readable output (supported by every command),
+and `--db <path>` to point at a
 specific index database. The MCP tools accept the same `format: "json"`
 argument — both surfaces render through one shared `ops` layer, so CLI and
 server output match.
+
+### Export for software analytics
+
+`symgraph export` writes code-structure records as JSON Lines on stdout, for
+every git checkout under a directory laid out `<owner>/<name>`. The records follow the
+[software-analytics](https://github.com/grahambrooks/software-analytics) delivery schema,
+and insight-collect streams them into insight after each sync:
+
+```sh
+symgraph export --mirrors ~/workspace --state ~/.symgraph-export --since 0
+```
+
+| Record | One per | Fields |
+|---|---|---|
+| `coupling_snapshot` | repository | directories, dependencies, cycles, largest cycle and its share, god-structs, dead internal symbols, parse coverage |
+| `directory_coupling` | directory | fan-in, fan-out, instability, in a cycle, churn |
+| `coupling_edge` | top `--top` directory pairs (default 50) | strength, distance, volatility, impact, edge kinds |
+| `god_struct` | top `--top` structs | public and total fields, inbound references, churn, score |
+
+The graph is folded to directories, which works the same in every language. Records name the
+checked-out commit, so re-sending them is idempotent.
+
+Each commit gets a sequence number (`source_seq`), kept in `--state`. A repository is exported
+again only when its commit changes, or when its last export is newer than the `--since` cursor:
+sent, but not yet confirmed by the caller. Index the checkout you want measured. insight-collect
+keeps its mirrors at `origin/HEAD`.
 
 ## MCP Tools
 

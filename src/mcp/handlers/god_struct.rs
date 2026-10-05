@@ -13,37 +13,26 @@ use crate::mcp::types::{wants_json, GodStructRequest};
 const DEFAULT_DAYS: u32 = 90;
 const DEFAULT_LIMIT: usize = 20;
 
-#[derive(Debug, Serialize)]
-struct GodStruct {
-    name: String,
-    file: String,
-    pub_fields: usize,
-    total_fields: usize,
-    inbound_refs: usize,
-    churn: u32,
-    score: u64,
+/// One struct's debt ranking.
+#[derive(Debug, Clone, Serialize)]
+pub struct GodStruct {
+    pub name: String,
+    pub file: String,
+    pub pub_fields: usize,
+    pub total_fields: usize,
+    pub inbound_refs: usize,
+    pub churn: u32,
+    pub score: u64,
 }
 
-pub fn handle_god_struct(
+/// Every struct/class ranked by score = public fields × inbound references ×
+/// churn (each floored at 1), highest first. `churn` is file → commits;
+/// without it volatility is neutral.
+pub fn rank_god_structs(
     db: &Database,
-    project_root: &str,
-    req: &GodStructRequest,
-) -> Result<String, String> {
-    let churn = if req.churn.unwrap_or(false) {
-        file_churn(project_root, req.days.unwrap_or(DEFAULT_DAYS), None)
-            .inspect_err(
-                |e| tracing::warn!(error = %e, "churn unavailable; debt score omits volatility"),
-            )
-            .ok()
-    } else {
-        None
-    };
-
-    // Test code is out of scope by default, on both sides: a fixture struct
-    // is not architectural debt, and a reference from a test is not a module
-    // depending on this type.
-    let include_tests = req.include_tests.unwrap_or(false);
-
+    churn: Option<&std::collections::HashMap<String, u32>>,
+    include_tests: bool,
+) -> Result<Vec<GodStruct>, String> {
     // One query for the whole report. This used to be a loop over every
     // struct issuing a field lookup plus an incoming-edge query per struct
     // and per field — 98 seconds on a 4,000-file index, and wrong besides,
@@ -56,7 +45,6 @@ pub fn handle_god_struct(
         .into_iter()
         .map(|r| {
             let churn_n = churn
-                .as_ref()
                 .and_then(|c| c.get(&r.file_path).copied())
                 .unwrap_or(0);
 
@@ -79,6 +67,30 @@ pub fn handle_god_struct(
         .collect();
 
     ranked.sort_by(|a, b| b.score.cmp(&a.score).then_with(|| a.name.cmp(&b.name)));
+    Ok(ranked)
+}
+
+pub fn handle_god_struct(
+    db: &Database,
+    project_root: &str,
+    req: &GodStructRequest,
+) -> Result<String, String> {
+    let churn = if req.churn.unwrap_or(false) {
+        file_churn(project_root, req.days.unwrap_or(DEFAULT_DAYS), None)
+            .inspect_err(
+                |e| tracing::warn!(error = %e, "churn unavailable; debt score omits volatility"),
+            )
+            .ok()
+    } else {
+        None
+    };
+
+    // Test code is out of scope by default, on both sides: a fixture struct
+    // is not architectural debt, and a reference from a test is not a module
+    // depending on this type.
+    let include_tests = req.include_tests.unwrap_or(false);
+
+    let mut ranked = rank_god_structs(db, churn.as_ref(), include_tests)?;
     let limit = req.limit.unwrap_or(DEFAULT_LIMIT as u32) as usize;
     ranked.truncate(limit);
 
