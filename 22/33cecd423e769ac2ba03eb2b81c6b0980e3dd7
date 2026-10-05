@@ -1,0 +1,23 @@
+CHANGELOG.md
+  s_6c8864d1d71304::t_2420d673b48e6d 19-21
+README.md
+  s_6c8864d1d71304::t_c644e7671e17f4 200,203-204
+src/cli/export.rs
+  s_6c8864d1d71304::t_53ed6c52503bd2 25,34,84-87,112,118-119,121,124,132-139,216,255-265,302-343,363-437,543-555,676-687
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "2233cecd423e769ac2ba03eb2b81c6b0980e3dd7",
+  "prompts": {},
+  "sessions": {
+    "s_6c8864d1d71304": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "376d933a-1b6e-458c-a29f-4f695ab3e7be",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}
