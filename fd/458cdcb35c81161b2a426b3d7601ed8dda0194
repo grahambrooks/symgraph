@@ -1,0 +1,32 @@
+src/cli/export.rs
+  s_6c8864d1d71304::t_c160237539cf88 1-521
+  s_6c8864d1d71304::t_30ac9adf93f4ff 522-524
+CHANGELOG.md
+  s_6c8864d1d71304::t_aab09ef932f750 14-19
+README.md
+  s_6c8864d1d71304::t_35d9f48ea28c06 177-178,183-208
+src/cli/mod.rs
+  s_6c8864d1d71304::t_65f82721e22432 5,11
+src/db/mod.rs
+  s_6c8864d1d71304::t_a18514a2ff8173 1999-2014
+src/main.rs
+  s_6c8864d1d71304::t_91233bb21c9a9a 113-118,453-478
+src/mcp/handlers/god_struct.rs
+  s_6c8864d1d71304::t_649ad55f27820a 16-25,28-31,33-35,70-93
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "fd458cdcb35c81161b2a426b3d7601ed8dda0194",
+  "prompts": {},
+  "sessions": {
+    "s_6c8864d1d71304": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "376d933a-1b6e-458c-a29f-4f695ab3e7be",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}
