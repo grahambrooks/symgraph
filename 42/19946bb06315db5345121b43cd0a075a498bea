@@ -1,0 +1,16 @@
+Cargo.toml
+  h_37b3b27dede911 3
+manifest.json
+  h_37b3b27dede911 4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "4219946bb06315db5345121b43cd0a075a498bea",
+  "prompts": {},
+  "humans": {
+    "h_37b3b27dede911": {
+      "author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}
