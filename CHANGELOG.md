@@ -142,6 +142,11 @@ release-pipeline follow-ups to the release-kit v2 adoption in 2026.9.2.
 
 ### Changed
 
+- **rmcp 3.** The MCP server is built on rmcp 3.7 (from 2.2). Tools, the
+  stdio and HTTP transports, and the advertised capabilities are unchanged;
+  rmcp 3 adds support for the 2026-07-28 protocol version, which it serves
+  statelessly over HTTP (older versions still get sessions).
+
 - **Breaking: one binary instead of two.** `symgraph-cli` is gone; everything
   it did is in `symgraph`, and `symgraph serve` runs the MCP server. The two
   had drifted — `serve` existed only in `symgraph`, while `reindex`, `watch`,

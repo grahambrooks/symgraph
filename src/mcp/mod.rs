@@ -41,7 +41,7 @@ use std::sync::{Arc, Mutex};
 #[cfg(feature = "server")]
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{ServerCapabilities, ServerInfo},
+    model::{ServerCapabilities, ServerConfig},
     tool, tool_handler, tool_router, ServerHandler,
 };
 
@@ -497,8 +497,8 @@ impl SymgraphHandler {
 #[cfg(feature = "server")]
 #[tool_handler]
 impl ServerHandler for SymgraphHandler {
-    fn get_info(&self) -> ServerInfo {
-        let mut info = ServerInfo::new(ServerCapabilities::builder().enable_tools().build());
+    fn get_info(&self) -> ServerConfig {
+        let mut info = ServerConfig::new(ServerCapabilities::builder().enable_tools().build());
         info.instructions = Some(
             "symgraph provides semantic code intelligence for exploring codebases. \
             Use symgraph-context to build task-focused context, symgraph-search for quick lookups, \
@@ -562,15 +562,29 @@ mod tests {
     #[test]
     fn tool_failure_becomes_an_mcp_error_result() {
         use rmcp::handler::server::tool::IntoCallToolResult;
+        use rmcp::model::{CallToolResponse, CallToolResult};
 
-        let ok = Ok::<String, String>("fine".to_string())
-            .into_call_tool_result()
-            .unwrap();
+        // Since rmcp 3 a tool call can also yield an input-required or task
+        // response; a plain `Result` must always complete.
+        fn completed(response: CallToolResponse) -> CallToolResult {
+            match response {
+                CallToolResponse::Complete(result) => result,
+                other => panic!("expected a completed tool result, got {other:?}"),
+            }
+        }
+
+        let ok = completed(
+            Ok::<String, String>("fine".to_string())
+                .into_call_tool_result()
+                .unwrap(),
+        );
         assert_ne!(ok.is_error, Some(true));
 
-        let err = Err::<String, String>("boom".to_string())
-            .into_call_tool_result()
-            .unwrap();
+        let err = completed(
+            Err::<String, String>("boom".to_string())
+                .into_call_tool_result()
+                .unwrap(),
+        );
         assert_eq!(
             err.is_error,
             Some(true),
