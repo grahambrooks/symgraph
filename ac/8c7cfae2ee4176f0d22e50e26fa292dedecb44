@@ -1,0 +1,23 @@
+CHANGELOG.md
+  s_c7db583e01ac64::t_0242980777ee2f 145-149
+Cargo.toml
+  s_c7db583e01ac64::t_d31540bafe4dd7 28
+src/mcp/mod.rs
+  s_c7db583e01ac64::t_a92c042f271ee7 44,500-501,565-574,576-580,583-587
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "ac8c7cfae2ee4176f0d22e50e26fa292dedecb44",
+  "prompts": {},
+  "sessions": {
+    "s_c7db583e01ac64": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a64f563f-ca61-4776-97cf-501db44bb230",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}
