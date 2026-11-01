@@ -39,7 +39,7 @@ TAG_RE = re.compile(r"^v(\d{4})\.(\d{1,2})\.(\d+)$")
 
 # Every tool ships these four; bx and the formula both rely on it.
 BASE_TARGETS = [
-    ("aarch64-apple-darwin", "macos-14"),
+    ("aarch64-apple-darwin", "macos-15"),  # macos-14 retired 2026-11-02
     # Native Intel runner: cross-compiling from Apple Silicon fails for any tool
     # that links a -sys crate (openssl-sys via git2/libssh2), since the runner
     # only has arm64 libraries.
@@ -69,7 +69,7 @@ def load_config() -> dict[str, str]:
     if not ENV_FILE.exists():
         fail(".release.env not found — stamp the repo with release-kit/stamp.sh")
     cfg = {}
-    for line in ENV_FILE.read_text().splitlines():
+    for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
         m = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)=(.*)$", line.strip())
         if m:
             cfg[m.group(1)] = m.group(2).strip().strip("'\"")
@@ -92,7 +92,7 @@ def output(**values: str) -> None:
     out = os.environ.get("GITHUB_OUTPUT")
     lines = [f"{k}={v}" for k, v in values.items()]
     if out:
-        with open(out, "a") as f:
+        with open(out, "a", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
     print("\n".join(lines))
 
@@ -126,7 +126,7 @@ def cmd_plan(tag: str) -> None:
 
 def set_toml_version(path: Path, section: str, version: str) -> bool:
     """Set `version = "..."` inside [section] of a Cargo.toml; False if it has none there."""
-    text = path.read_text()
+    text = path.read_text(encoding="utf-8")
     head = re.search(rf"^\[{re.escape(section)}\][ \t]*$", text, re.M)
     if not head:
         return False
@@ -135,7 +135,7 @@ def set_toml_version(path: Path, section: str, version: str) -> bool:
     body = text[head.end():end]
     new_body, n = re.subn(r'^(version\s*=\s*)"[^"]*"', rf'\g<1>"{version}"', body, count=1, flags=re.M)
     if n:
-        path.write_text(text[:head.end()] + new_body + text[end:])
+        path.write_text(text[:head.end()] + new_body + text[end:], encoding="utf-8")
     return bool(n)
 
 
@@ -221,7 +221,7 @@ def cmd_formula(tag: str, sums_file: str) -> None:
     cfg = load_config()
     repo = os.environ.get("GITHUB_REPOSITORY") or fail("GITHUB_REPOSITORY is not set")
     sums = {}
-    for line in Path(sums_file).read_text().splitlines():
+    for line in Path(sums_file).read_text(encoding="utf-8").splitlines():
         if line.strip():
             digest, name = line.split(maxsplit=1)
             sums[name.strip()] = digest
@@ -242,7 +242,7 @@ def cmd_formula(tag: str, sums_file: str) -> None:
         install="\n".join(f'    bin.install "{b}"' for b in names),
         test="\n".join(f'    assert_path_exists bin/"{b}"' for b in names),
         **values,
-    ))
+    ), encoding="utf-8")
     print(f"wrote {out}")
 
 
