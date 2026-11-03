@@ -4,10 +4,10 @@ Quick reference for AI agents working in this Rust MCP server repository.
 
 ## Quick Commands
 
-**Build/Test**: `make build` | `make test` | `make check` | `make fmt` | `make lint` | `make cli-only` (lean, no MCP server)
+**Build/Test**: `make build` | `make test` | `make check` | `make fmt` | `make lint` | `make cli-only` (lean, no MCP server) | `make check-all` (check + cli-only + deny) | `make hooks` (install prek git hooks)
 **Run**: `cargo run -- index .` | `cargo run -- serve` | `cargo run -- serve --port 8080`
 **Test**: `cargo test --lib` | `cargo test module::` | `cargo test --test integration_test`
-**Release**: `make release` (date-based version YYYY.M.D) | `make release-dry-run` (preview)
+**Release**: `make release` (tags origin/main with the next YYYY.M.D) | `make release-dry` (preview) | `make release-version`
 **Maintenance**: `make update` | `make outdated` | `make clean`
 
 ## Project Overview
@@ -58,7 +58,7 @@ Add new: Edit `src/extraction/languages.rs`
 
 ## Development Guidelines
 
-**Workflow**: Test → Change → `make check` (format, lint, test, lean build, supply chain) → Commit
+**Workflow**: Test → Change → `make check` (format, lint, test — the CI check job; `make check-all` adds lean build and supply chain) → Commit
 
 **Code Style**:
 - Descriptive names, small functions (<100 lines)
@@ -88,7 +88,7 @@ Add new: Edit `src/extraction/languages.rs`
 - `cargo test test_name -- --nocapture`
 - `sqlite3 .symgraph/index.db "SELECT COUNT(*) FROM nodes"`
 
-**Release**: `make release` bumps version to today's date (YYYY.M.D), updates Cargo.toml and manifest.json, commits, tags, and pushes. GitHub Actions builds and publishes artifacts. Use `make release-dry-run` to preview.
+**Release**: `make release` tags origin/main with today's date (YYYY.M.D, incremented if taken) and pushes only the tag; nothing is bumped or committed locally. The release workflow stamps the version, builds and publishes artifacts, and merges a PR bumping Cargo.toml and the formula (release-extras stamps the bundle manifest.json). Use `make release-dry` to preview.
 
 **Problems**:
 - Test fails: `make clean && make test`

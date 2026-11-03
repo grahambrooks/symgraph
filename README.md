@@ -498,7 +498,8 @@ symgraph/
 ```bash
 make build           # Release build
 make test            # Run tests
-make check           # Format, lint, and test
+make check           # Format, lint, and test (the CI check job)
+make hooks           # Install the git hooks (prek)
 make install         # Build and install to /usr/local/bin
 ```
 

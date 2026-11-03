@@ -1,86 +1,52 @@
-.PHONY: build test lint fmt check cli-only deny clean install uninstall release release-dry-run update outdated doc help
+# symgraph — semantic code intelligence MCP server.
+#
+# `make check` is the pre-push gate and runs exactly what the CI `check` job runs
+# (.github/workflows/ci.yml); `make hooks` wires it into git. `make check-all` adds
+# CI's other Linux gates (the lean CLI-only build and cargo-deny). Releases come
+# from release.mk (release-kit): `make release` tags origin/main and pushes the tag.
+.DEFAULT_GOAL := help
 
-# Date-based version: YYYY.M.D (semver-compatible)
-VERSION := $(shell date +%Y.%-m.%-d)
-TAG := v$(VERSION)
+.PHONY: help build test lint fmt fmt-check check check-all cli-only deny hooks clean install uninstall update outdated doc
 
-# In-place sed differs between BSD (macOS, needs an explicit empty suffix) and
-# GNU (Linux, rejects one). Detect once so `make release` works on either.
-SED_INPLACE := $(shell sed --version >/dev/null 2>&1 && echo "sed -i" || echo "sed -i ''")
+help: ## List targets
+	@grep -hE '^[a-zA-Z0-9_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{ printf "  %-16s %s\n", $$1, $$2 }'
 
-# Default target
-all: help
+check: fmt-check lint test ## The pre-push gate: the CI check job (fmt, clippy, test)
 
-# Show help
-help:
-	@echo "symgraph — Semantic code intelligence MCP server"
-	@echo ""
-	@echo "Usage: make [target]"
-	@echo ""
-	@echo "Development:"
-	@echo "  build            Build release binary"
-	@echo "  test             Run all tests"
-	@echo "  lint             Run clippy lints"
-	@echo "  cli-only         Lint + test the lean build (no MCP server)"
-	@echo "  deny             Supply-chain check (advisories, licenses, sources)"
-	@echo "  fmt              Format code"
-	@echo "  fmt-check        Check formatting without modifying"
-	@echo "  check            All gates: format, lint, test, lean build, supply chain"
-	@echo "  doc              Generate and open documentation"
-	@echo ""
-	@echo "Installation:"
-	@echo "  install          Build and install symgraph to /usr/local/bin"
-	@echo "  uninstall        Remove from /usr/local/bin"
-	@echo ""
-	@echo "Release:"
-	@echo "  release          Create and push a date-based release ($(TAG))"
-	@echo "  release-dry-run  Preview what a release would do"
-	@echo ""
-	@echo "Maintenance:"
-	@echo "  update           Update dependencies"
-	@echo "  outdated         Show outdated dependencies"
-	@echo "  clean            Remove build artifacts"
-	@echo ""
-	@echo "  help             Show this help"
+check-all: check cli-only deny ## check plus the lean build and supply-chain gates CI also runs
 
-# Build the project
-build: check
+build: check ## Build the release binary
 	cargo build --release
 
-# Run tests
-test:
-	cargo test --all-features
+test: ## Tests, as CI runs them
+	cargo test --all-features --locked
 
-# Run clippy lints
-lint:
-	cargo clippy --all-features -- -D warnings
+lint: ## Clippy with warnings denied, as CI runs it
+	cargo clippy --all-targets --all-features --locked -- -D warnings
 
-# Format code
-fmt:
+fmt: ## Format the code
 	cargo fmt --all
 
-# Check formatting without modifying
-fmt-check:
-	cargo fmt --all -- --check
+fmt-check: ## Fail if the code is not formatted
+	cargo fmt --all --check
 
 # Lint and test the lean feature combo: the same `symgraph` binary without the
 # MCP server (no rmcp/axum/tokio), which is every command except `serve`.
 # Nothing else exercises the `#[cfg(feature = "server")]` gates, so a missing
-# one would only surface here. CI gates on this, so `check` has to cover it or
-# a green local run can still push a tag that CI rejects.
-cli-only:
-	cargo clippy --bin symgraph --no-default-features --features sqlite -- -D warnings
-	cargo test --no-default-features --features sqlite
+# one would only surface here. CI's cli-only job runs exactly these.
+cli-only: ## Lint + test the lean build (no MCP server)
+	cargo clippy --bin symgraph --no-default-features --features sqlite --locked -- -D warnings
+	cargo test --no-default-features --features sqlite --locked
 
 # Supply-chain gate: advisories, licenses, sources, bans (see deny.toml).
-deny:
+deny: ## Supply-chain check (advisories, licenses, sources)
 	cargo deny check
 
-# Run all checks (format, lint, test, lean build, supply chain)
-check: fmt-check lint test cli-only deny
+hooks: ## Install the prek git hooks (pre-commit and pre-push)
+	prek install
 
 # Install to /usr/local/bin. One binary: `symgraph serve` is the MCP server.
-install: build
+install: build ## Build and install symgraph to /usr/local/bin
 	install -d /usr/local/bin
 	install -m 755 target/release/symgraph /usr/local/bin/symgraph
 	@# Builds before the binaries were merged also installed `symgraph-cli`.
@@ -88,54 +54,20 @@ install: build
 	@rm -f /usr/local/bin/symgraph-cli
 	@echo "Installed symgraph to /usr/local/bin/symgraph"
 
-# Uninstall from /usr/local/bin
-uninstall:
+uninstall: ## Remove from /usr/local/bin
 	rm -f /usr/local/bin/symgraph /usr/local/bin/symgraph-cli
 	@echo "Removed /usr/local/bin/symgraph"
 
-# Clean build artifacts
-clean:
+clean: ## Remove build artifacts
 	cargo clean
 
-# Show outdated dependencies
-outdated:
+outdated: ## Show outdated dependencies
 	cargo outdated
 
-# Update dependencies
-update:
+update: ## Update dependencies
 	cargo update
 
-# Generate documentation
-doc:
+doc: ## Generate and open documentation
 	cargo doc --no-deps --open
 
-# Show what a release would do without making changes
-release-dry-run:
-	@echo "Version: $(VERSION)"
-	@echo "Tag:     $(TAG)"
-	@echo ""
-	@echo "Files to update:"
-	@echo "  Cargo.toml         (version = \"$(VERSION)\")"
-	@echo "  manifest.json       (version: \"$(VERSION)\")"
-	@echo "  Formula/symgraph.rb  (regenerated by the release workflow after the build)"
-	@echo ""
-	@echo "Git operations:"
-	@echo "  git commit -am 'release $(TAG)'"
-	@echo "  git tag $(TAG)"
-	@echo "  git push origin main --tags"
-
-# Create and push a release with date-based versioning
-release: check
-	@if [ -n "$$(git status --porcelain)" ]; then \
-		echo "Error: working directory is not clean. Commit or stash changes first."; \
-		exit 1; \
-	fi
-	@echo "Releasing $(TAG)..."
-	$(SED_INPLACE) 's/^version = ".*"/version = "$(VERSION)"/' Cargo.toml
-	cargo check --quiet 2>/dev/null || (echo "Cargo.toml version update failed"; exit 1)
-	jq --arg v "$(VERSION)" '.version = $$v' manifest.json > manifest.json.tmp && mv manifest.json.tmp manifest.json
-	git add Cargo.toml manifest.json
-	git commit -m "release $(TAG)"
-	git tag "$(TAG)"
-	git push origin main --tags
-	@echo "Released $(TAG) — GitHub Actions will build and publish artifacts."
+include release.mk

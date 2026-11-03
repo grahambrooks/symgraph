@@ -1,6 +1,8 @@
-# Configuration file for `prek`, a git hook framework written in Rust.
-# See https://prek.j178.dev for more information.
+# Git hooks via prek (https://prek.j178.dev). Install once: make hooks
+# Fast checks on every commit; the full gate (`make check`, the same as CI) before push.
 #:schema https://www.schemastore.org/prek.json
+
+default_install_hook_types = ["pre-commit", "pre-push"]
 
 [[repos]]
 repo = "https://github.com/pre-commit/pre-commit-hooks"
@@ -8,20 +10,16 @@ rev = "v6.0.0"
 hooks = [
   { id = "trailing-whitespace" },
   { id = "end-of-file-fixer" },
-  { id = "check-yaml" },
+  # catalog-info.yaml holds several Backstage entities, one YAML document each.
+  { id = "check-yaml", args = ["--allow-multiple-documents"] },
   { id = "check-toml" },
-  { id = "check-added-large-files" }
+  { id = "check-added-large-files" },
 ]
 
 [[repos]]
 repo = "https://github.com/rhysd/actionlint"
 rev = "v1.7.12"
-hooks = [
-  # Uses the system-installed actionlint (Homebrew) rather than building the Go
-  # source or pulling a Docker image. Swap to id = "actionlint" if you'd rather
-  # prek build a pinned binary for contributors without actionlint installed.
-  { id = "actionlint-system" }
-]
+hooks = [{ id = "actionlint-system" }]
 
 [[repos]]
 repo = "https://github.com/gitleaks/gitleaks"
@@ -30,20 +28,15 @@ hooks = [
   {
     id = "gitleaks",
     name = "Detect hardcoded secrets",
-    description = "Detect hardcoded secrets using Gitleaks",
     entry = "gitleaks git --pre-commit --redact --staged --verbose",
     language = "golang",
-    pass_filenames = false
-  }
+    pass_filenames = false,
+  },
 ]
 
 [[repos]]
-repo = "https://github.com/betterleaks/betterleaks"
-rev = "v1.5.0"
+repo = "local"
 hooks = [
-  {
-    id = "betterleaks",
-    name = "Detect secrets",
-    entry = "betterleaks git --pre-commit --redact --staged --verbose"
-  }
+  { id = "cargo-fmt", name = "cargo fmt --check", entry = "cargo fmt --all --check", language = "system", pass_filenames = false, types = ["rust"] },
+  { id = "make-check", name = "make check", entry = "make check", language = "system", pass_filenames = false, stages = ["pre-push"] },
 ]
