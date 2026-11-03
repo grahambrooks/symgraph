@@ -1,0 +1,21 @@
+.github/workflows/release.yml
+  s_3af201839d09d6::t_ed846815d8fd81 10-12,58,101-109,124
+scripts/release.py
+  s_3af201839d09d6::t_371d7487d278e7 15,20-21,101-112,137-138,158-166,172-175,192-197,216,251-317,338
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "b5cdc7d430b206fee5910c573956e204136eea2e",
+  "prompts": {},
+  "sessions": {
+    "s_3af201839d09d6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ca62a504-f3e7-484c-9e2d-47cfc6cd0491",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}
