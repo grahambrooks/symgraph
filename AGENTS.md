@@ -90,6 +90,17 @@ Add new: Edit `src/extraction/languages.rs`
 
 **Release**: `make release` tags origin/main with today's date (YYYY.M.D, incremented if taken) and pushes only the tag; nothing is bumped or committed locally. The release workflow stamps the version, builds and publishes artifacts, and merges a PR bumping Cargo.toml and the formula (release-extras stamps the bundle manifest.json). Use `make release-dry` to preview.
 
+**crates.io is manual**: the release workflow does not publish (`PUBLISH_CRATE=false` in `.release.env`), because a crates.io version can never be deleted or reused. After the release workflow succeeds, publish from a clean checkout of the tag. The tag's `Cargo.toml` still has the previous version (the workflow stamps it at build time and its PR bumps `main` later), so stamp it the way the workflow does:
+
+```sh
+v=2026.11.3                                   # the released tag, without the "v"
+git worktree add --detach "../symgraph-v$v" "v$v" && cd "../symgraph-v$v"
+python3 scripts/release.py set-version "$v"   # Cargo.toml + symgraph's entry in Cargo.lock
+cargo publish --locked --allow-dirty --dry-run
+cargo publish --locked --allow-dirty          # only the stamped version differs
+cd - && git worktree remove --force "../symgraph-v$v"
+```
+
 **Problems**:
 - Test fails: `make clean && make test`
 - Build errors: `make update && make build`
