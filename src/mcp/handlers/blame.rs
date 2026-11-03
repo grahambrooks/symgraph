@@ -3,7 +3,7 @@
 use crate::db::Database;
 use crate::git::run_git;
 use crate::mcp::types::BlameRequest;
-use crate::ops::{self, present, Format, NotFound};
+use crate::ops::{self, Format, NotFound, present};
 use crate::security::safe_join;
 
 pub fn handle_blame(

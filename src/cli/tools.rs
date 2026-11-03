@@ -5,7 +5,7 @@
 //! server's. `--format json` is routed through each request's `format` field;
 //! `blame`, `churn`, and `diff-impact` are markdown-only for now.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 
 use crate::db::Database;
 use crate::mcp::handlers;
@@ -111,11 +111,7 @@ fn churn_opt(flag: bool) -> Option<bool> {
 /// "unset", so the handler's documented default is what applies rather than
 /// the CLI asserting `false` on its behalf.
 fn flag_opt(flag: bool) -> Option<bool> {
-    if flag {
-        Some(true)
-    } else {
-        None
-    }
+    if flag { Some(true) } else { None }
 }
 
 // `search`, `context` and `status` had their own CLI implementations, which

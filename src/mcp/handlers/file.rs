@@ -2,7 +2,7 @@
 
 use crate::db::Database;
 use crate::mcp::types::FileRequest;
-use crate::ops::{self, present, Format};
+use crate::ops::{self, Format, present};
 
 pub fn handle_file(db: &Database, req: &FileRequest) -> Result<String, String> {
     present(

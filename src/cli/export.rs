@@ -27,15 +27,15 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
-use crate::coupling::{boundary_of, build_module_graph, score_coupling, Granularity};
+use crate::coupling::{Granularity, boundary_of, build_module_graph, score_coupling};
 use crate::db::Database;
 use crate::mcp::handlers::churn::file_churn;
 use crate::mcp::handlers::god_struct::rank_god_structs;
-use crate::{index_codebase, IndexConfig};
+use crate::{IndexConfig, index_codebase};
 
 use super::db_utils::{open_project_database, rebuild_project_database};
 
@@ -634,11 +634,13 @@ mod tests {
             snapshot["id"],
             format!("symgraph:acme/app@{commit}:snapshot").as_str()
         );
-        assert!(records
-            .iter()
-            .any(|r| r["record_type"] == "directory_coupling"
-                && r["directory"] == "src/a"
-                && r["fan_out"] == 1));
+        assert!(
+            records
+                .iter()
+                .any(|r| r["record_type"] == "directory_coupling"
+                    && r["directory"] == "src/a"
+                    && r["fan_out"] == 1)
+        );
 
         // Not confirmed yet (cursor still 0): the same records again.
         let (again, resent) = run(&mirrors, &state, 0);

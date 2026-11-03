@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use crate::db::Database;
-use crate::mcp::types::{wants_json, DispatchSitesRequest};
+use crate::mcp::types::{DispatchSitesRequest, wants_json};
 
 #[derive(Debug, Serialize)]
 struct DispatchReport {

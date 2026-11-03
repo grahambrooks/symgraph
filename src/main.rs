@@ -27,10 +27,10 @@ use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 
 use symgraph::cli::{
-    canonicalize_path, index_command, open_project_database, print_unsupported_types,
-    prune_command, tools, where_command, OutputFormat,
+    OutputFormat, canonicalize_path, index_command, open_project_database, print_unsupported_types,
+    prune_command, tools, where_command,
 };
-use symgraph::{index_codebase, IndexConfig};
+use symgraph::{IndexConfig, index_codebase};
 
 const BIN: &str = "symgraph";
 
@@ -210,11 +210,13 @@ fn main() -> Result<()> {
 
     // Global `--db <path>` override: seeds SYMGRAPH_DB (consulted first by the
     // path resolver). Strip the flag+value so positional parsing is unaffected.
-    if let Some(i) = args.iter().position(|a| a == "--db") {
-        if i + 1 < args.len() {
-            env::set_var("SYMGRAPH_DB", &args[i + 1]);
-            args.drain(i..=i + 1);
-        }
+    if let Some(i) = args.iter().position(|a| a == "--db")
+        && i + 1 < args.len()
+    {
+        // SAFETY: first thing `main` does after collecting args, before
+        // tracing, the async runtime or any other thread exists.
+        unsafe { env::set_var("SYMGRAPH_DB", &args[i + 1]) };
+        args.drain(i..=i + 1);
     }
 
     // Global `--format <text|json>` for command output (default: text).

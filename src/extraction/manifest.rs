@@ -494,30 +494,28 @@ fn extract_pyproject_toml(
         .and_then(|t| t.get("poetry"))
         .and_then(|p| p.get("name"))
         .and_then(|n| n.as_str())
-    {
-        if !result
+        && !result
             .nodes
             .iter()
             .any(|n| n.kind == NodeKind::Module && n.name != filename_from_path(file_path))
-        {
-            let version = toml
-                .get("tool")
-                .and_then(|t| t.get("poetry"))
-                .and_then(|p| p.get("version"))
-                .and_then(|v| v.as_str());
-            let sig = version.map(|v| format!("{name}@{v}"));
-            add_node(
-                result,
-                next_id,
-                file_id,
-                NodeKind::Module,
-                name.to_string(),
-                file_path,
-                language,
-                1,
-                sig,
-            );
-        }
+    {
+        let version = toml
+            .get("tool")
+            .and_then(|t| t.get("poetry"))
+            .and_then(|p| p.get("version"))
+            .and_then(|v| v.as_str());
+        let sig = version.map(|v| format!("{name}@{v}"));
+        add_node(
+            result,
+            next_id,
+            file_id,
+            NodeKind::Module,
+            name.to_string(),
+            file_path,
+            language,
+            1,
+            sig,
+        );
     }
 
     // PEP 621 dependencies
@@ -1067,15 +1065,14 @@ fn extract_gradle(
 
         let mut matched_config = None;
         for config in &dep_configs {
-            if let Some(rest) = trimmed.strip_prefix(config) {
-                if rest.starts_with('(')
+            if let Some(rest) = trimmed.strip_prefix(config)
+                && (rest.starts_with('(')
                     || rest.starts_with(' ')
                     || rest.starts_with('"')
-                    || rest.starts_with('\'')
-                {
-                    matched_config = Some(*config);
-                    break;
-                }
+                    || rest.starts_with('\''))
+            {
+                matched_config = Some(*config);
+                break;
             }
         }
 
@@ -1099,20 +1096,21 @@ fn extract_gradle(
         }
 
         // group = 'com.example' or group = "com.example"
-        if trimmed.starts_with("group") && trimmed.contains('=') {
-            if let Some(value) = extract_gradle_assignment(trimmed) {
-                add_node(
-                    result,
-                    next_id,
-                    file_id,
-                    NodeKind::Module,
-                    value,
-                    file_path,
-                    language,
-                    line_num as u32 + 1,
-                    None,
-                );
-            }
+        if trimmed.starts_with("group")
+            && trimmed.contains('=')
+            && let Some(value) = extract_gradle_assignment(trimmed)
+        {
+            add_node(
+                result,
+                next_id,
+                file_id,
+                NodeKind::Module,
+                value,
+                file_path,
+                language,
+                line_num as u32 + 1,
+                None,
+            );
         }
     }
 }
@@ -1216,26 +1214,26 @@ fn extract_build_sbt(
 
         // Library dependencies: "org.group" %% "artifact" % "version"
         // Also: "org.group" % "artifact" % "version" % "test"
-        if trimmed.contains("%%") || (trimmed.contains('%') && trimmed.contains('"')) {
-            if let Some((name, version, scope)) = parse_sbt_dependency(trimmed) {
-                let sig = match (version, scope) {
-                    (Some(v), Some(s)) => Some(format!("{s}: {v}")),
-                    (Some(v), None) => Some(v),
-                    (None, Some(s)) => Some(s),
-                    (None, None) => None,
-                };
-                add_node(
-                    result,
-                    next_id,
-                    file_id,
-                    NodeKind::Import,
-                    name,
-                    file_path,
-                    language,
-                    line_num as u32 + 1,
-                    sig,
-                );
-            }
+        if (trimmed.contains("%%") || (trimmed.contains('%') && trimmed.contains('"')))
+            && let Some((name, version, scope)) = parse_sbt_dependency(trimmed)
+        {
+            let sig = match (version, scope) {
+                (Some(v), Some(s)) => Some(format!("{s}: {v}")),
+                (Some(v), None) => Some(v),
+                (None, Some(s)) => Some(s),
+                (None, None) => None,
+            };
+            add_node(
+                result,
+                next_id,
+                file_id,
+                NodeKind::Import,
+                name,
+                file_path,
+                language,
+                line_num as u32 + 1,
+                sig,
+            );
         }
     }
 }
@@ -1750,13 +1748,17 @@ gem 'puma', '>= 5.0'
             .filter(|n| n.kind == NodeKind::Import)
             .collect();
         assert_eq!(imports.len(), 3); // 2 deps + 1 plugin
-        assert!(imports
-            .iter()
-            .any(|n| n.name == "org.springframework.boot:spring-boot-starter-web"));
+        assert!(
+            imports
+                .iter()
+                .any(|n| n.name == "org.springframework.boot:spring-boot-starter-web")
+        );
         assert!(imports.iter().any(|n| n.name == "junit:junit"));
-        assert!(imports
-            .iter()
-            .any(|n| n.name == "org.apache.maven.plugins:maven-compiler-plugin"));
+        assert!(
+            imports
+                .iter()
+                .any(|n| n.name == "org.apache.maven.plugins:maven-compiler-plugin")
+        );
 
         // Check scope is captured
         let junit = imports.iter().find(|n| n.name == "junit:junit").unwrap();
@@ -1797,13 +1799,17 @@ dependencies {
             .collect();
         // 2 plugins + 3 dependencies = 5
         assert_eq!(imports.len(), 5);
-        assert!(imports
-            .iter()
-            .any(|n| n.name == "org.springframework.boot:spring-boot-starter-web:3.1.0"));
+        assert!(
+            imports
+                .iter()
+                .any(|n| n.name == "org.springframework.boot:spring-boot-starter-web:3.1.0")
+        );
         assert!(imports.iter().any(|n| n.name == "junit:junit:4.13.2"));
-        assert!(imports
-            .iter()
-            .any(|n| n.name == "org.postgresql:postgresql:42.6.0"));
+        assert!(
+            imports
+                .iter()
+                .any(|n| n.name == "org.postgresql:postgresql:42.6.0")
+        );
         assert!(imports.iter().any(|n| n.name == "java"));
         assert!(imports.iter().any(|n| n.name == "org.springframework.boot"));
     }
@@ -1833,12 +1839,16 @@ dependencies {
             .iter()
             .filter(|n| n.kind == NodeKind::Import)
             .collect();
-        assert!(imports
-            .iter()
-            .any(|n| n.name == "io.ktor:ktor-server-core:2.3.0"));
-        assert!(imports
-            .iter()
-            .any(|n| n.name == "org.jetbrains.kotlin:kotlin-test"));
+        assert!(
+            imports
+                .iter()
+                .any(|n| n.name == "io.ktor:ktor-server-core:2.3.0")
+        );
+        assert!(
+            imports
+                .iter()
+                .any(|n| n.name == "org.jetbrains.kotlin:kotlin-test")
+        );
         assert!(imports.iter().any(|n| n.name == "org.jetbrains.kotlin.jvm"));
         assert!(imports.iter().any(|n| n.name == "application"));
     }

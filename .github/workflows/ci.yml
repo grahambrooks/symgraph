@@ -4,7 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+  schedule:
+    - cron: "17 6 * * 1" # weekly, so new RustSec advisories surface without a push
 
 permissions:
   contents: read
@@ -25,34 +26,16 @@ env:
 
 jobs:
   check:
-    name: Check
+    name: fmt, clippy, test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      # Installs the toolchain (and rustfmt/clippy) pinned in rust-toolchain.toml.
+      - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      - run: cargo check --all-features
-
-  fmt:
-    name: Format
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt
-      - run: cargo fmt --all -- --check
-
-  clippy:
-    name: Clippy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --all-features -- -D warnings
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets --all-features --locked -- -D warnings
+      - run: cargo test --all-features --locked
 
   cli-only:
     name: CLI-only build
@@ -63,14 +46,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy
+      - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
       - name: Clippy (CLI-only)
-        run: cargo clippy --bin symgraph --no-default-features --features sqlite -- -D warnings
+        run: cargo clippy --bin symgraph --no-default-features --features sqlite --locked -- -D warnings
       - name: Test (CLI-only)
-        run: cargo test --no-default-features --features sqlite
+        run: cargo test --no-default-features --features sqlite --locked
 
   msrv:
     name: MSRV (${{ needs.msrv-version.outputs.version }})
@@ -78,13 +59,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: ${{ needs.msrv-version.outputs.version }}
+      - run: rustup toolchain install ${{ needs.msrv-version.outputs.version }} --profile minimal
       - uses: Swatinem/rust-cache@v2
       # Builds against exactly the toolchain Cargo.toml claims, so the declared
-      # MSRV is verified rather than asserted.
-      - run: cargo check --all-features --all-targets
+      # MSRV is verified rather than asserted. `cargo +<floor>` explicitly, not
+      # bare `cargo`: rust-toolchain.toml would otherwise override whatever was
+      # installed and the job would test nothing.
+      - run: cargo +${{ needs.msrv-version.outputs.version }} check --all-features --all-targets --locked
 
   msrv-version:
     name: Read MSRV
@@ -94,11 +75,19 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - id: read
-        # Single source of truth: the number lives in Cargo.toml.
+        # Single source of truth: the number lives in Cargo.toml, and
+        # rust-toolchain.toml must pin exactly the same toolchain.
         run: |
-          version=$(grep -m1 '^rust-version' Cargo.toml | sed 's/.*= *"//;s/".*//')
+          set -euo pipefail
+          version=$(grep -m1 -E '^rust-version *=' Cargo.toml | cut -d'"' -f2)
+          pinned=$(grep -m1 -E '^channel *=' rust-toolchain.toml | cut -d'"' -f2)
           if [ -z "$version" ]; then
             echo "::error::rust-version missing from Cargo.toml"
+            exit 1
+          fi
+          echo "rust-version=$version  channel=$pinned"
+          if [ "$version" != "$pinned" ]; then
+            echo "::error::rust-version ($version) and rust-toolchain.toml channel ($pinned) have drifted"
             exit 1
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -108,24 +97,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
       - uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny
-      # Advisories, licenses, sources and bans — see deny.toml.
+      # Advisories (RustSec, so no separate cargo-audit job), licenses, sources
+      # and bans — see deny.toml.
       - run: cargo deny check
 
   test:
-    name: Test
+    name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        os: [macos-latest, windows-latest]
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
+      - run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --all-features
+      - run: cargo test --all-features --locked
 
   build:
     name: Build
@@ -145,15 +134,16 @@ jobs:
             target: x86_64-pc-windows-msvc
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
+      # Toolchain pinned in rust-toolchain.toml, plus this matrix target.
+      - run: |
+          rustup toolchain install
+          rustup target add ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
       - name: Install cross-compilation tools
         if: matrix.target == 'aarch64-unknown-linux-gnu'
         run: |
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
-      - run: cargo build --release --target ${{ matrix.target }}
+      - run: cargo build --release --locked --target ${{ matrix.target }}
         env:
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc

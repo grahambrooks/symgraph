@@ -5,7 +5,7 @@
 
 use crate::db::Database;
 use crate::mcp::types::{DefinitionRequest, SymbolRequest};
-use crate::ops::{self, present, Format, NotFound};
+use crate::ops::{self, Format, NotFound, present};
 
 pub fn handle_node(db: &Database, req: &SymbolRequest) -> Result<String, String> {
     let fmt = Format::from_request(&req.format);

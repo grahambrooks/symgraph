@@ -21,7 +21,7 @@ use std::{
 
 use crate::db::Database;
 use crate::git::run_git;
-use crate::{build_full_index, IndexConfig, IndexingStats};
+use crate::{IndexConfig, IndexingStats, build_full_index};
 
 const DB_DIR: &str = ".symgraph";
 const DB_FILE: &str = "index.db";
@@ -63,13 +63,13 @@ pub struct ResolvedDb {
 /// Resolve the on-disk index path for a project root, honoring overrides.
 pub fn resolve_db(project_root: &str) -> Result<ResolvedDb> {
     // 1. Explicit override.
-    if let Ok(p) = std::env::var("SYMGRAPH_DB") {
-        if !p.is_empty() {
-            return Ok(ResolvedDb {
-                path: PathBuf::from(p),
-                label: "explicit (SYMGRAPH_DB)",
-            });
-        }
+    if let Ok(p) = std::env::var("SYMGRAPH_DB")
+        && !p.is_empty()
+    {
+        return Ok(ResolvedDb {
+            path: PathBuf::from(p),
+            label: "explicit (SYMGRAPH_DB)",
+        });
     }
 
     // 2. Strategy from env, else auto-detect.
@@ -165,10 +165,10 @@ fn repo_key(project_root: &str) -> String {
 
 /// Cross-platform cache base dir, honoring `XDG_CACHE_HOME` when set.
 fn cache_base() -> Option<PathBuf> {
-    if let Ok(x) = std::env::var("XDG_CACHE_HOME") {
-        if !x.is_empty() {
-            return Some(PathBuf::from(x));
-        }
+    if let Ok(x) = std::env::var("XDG_CACHE_HOME")
+        && !x.is_empty()
+    {
+        return Some(PathBuf::from(x));
     }
     // Exactly one of these cfg'd bindings compiles per target.
     #[cfg(target_os = "macos")]
@@ -380,16 +380,14 @@ fn cache_entry_is_stale(dir: &Path, max_age: Option<std::time::Duration>, now: S
     }
 
     // Age-based eviction for entries that do legitimately belong in the cache.
-    if let Some(max_age) = max_age {
-        if let Ok(modified) = std::fs::metadata(dir.join(DB_FILE)).and_then(|m| m.modified()) {
-            if now
-                .duration_since(modified)
-                .map(|age| age > max_age)
-                .unwrap_or(false)
-            {
-                return true;
-            }
-        }
+    if let Some(max_age) = max_age
+        && let Ok(modified) = std::fs::metadata(dir.join(DB_FILE)).and_then(|m| m.modified())
+        && now
+            .duration_since(modified)
+            .map(|age| age > max_age)
+            .unwrap_or(false)
+    {
+        return true;
     }
 
     false
@@ -495,16 +493,22 @@ mod tests {
     }
 
     /// Minimal scoped env setter/restorer for tests.
+    ///
+    /// Callers must hold `ENV_LOCK`.
     fn temp_env<F: FnOnce()>(key: &str, val: Option<&str>, f: F) {
+        // SAFETY (all four calls): every env-mutating test holds ENV_LOCK, so no
+        // two threads write the environment at once. Concurrent readers in other
+        // tests go through `std::env::var`, which std synchronizes with these
+        // writes; nothing in the test binary reads the environment via libc.
         let prev = std::env::var(key).ok();
         match val {
-            Some(v) => std::env::set_var(key, v),
-            None => std::env::remove_var(key),
+            Some(v) => unsafe { std::env::set_var(key, v) },
+            None => unsafe { std::env::remove_var(key) },
         }
         f();
         match prev {
-            Some(v) => std::env::set_var(key, v),
-            None => std::env::remove_var(key),
+            Some(v) => unsafe { std::env::set_var(key, v) },
+            None => unsafe { std::env::remove_var(key) },
         }
     }
 }

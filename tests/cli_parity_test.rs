@@ -13,7 +13,7 @@ use std::process::Command;
 use symgraph::db::Database;
 use symgraph::mcp::handlers;
 use symgraph::mcp::{ContextRequest, SearchRequest, UnusedRequest};
-use symgraph::{build_full_index, IndexConfig};
+use symgraph::{IndexConfig, build_full_index};
 use tempfile::TempDir;
 
 /// Index a fixture and return its directory plus the on-disk index path.

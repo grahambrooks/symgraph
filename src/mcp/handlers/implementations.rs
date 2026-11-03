@@ -2,7 +2,7 @@
 
 use crate::db::Database;
 use crate::mcp::types::SymbolRequest;
-use crate::ops::{self, present, Format};
+use crate::ops::{self, Format, present};
 
 pub fn handle_implementations(db: &Database, req: &SymbolRequest) -> Result<String, String> {
     present(

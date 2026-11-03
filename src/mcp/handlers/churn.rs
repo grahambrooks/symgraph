@@ -4,8 +4,8 @@ use std::collections::HashMap;
 
 use crate::git::run_git;
 use crate::mcp::types::ChurnRequest;
-use crate::ops::constants::{effective_limit, MAX_CHURN_DAYS};
-use crate::ops::{present, ChurnEntry, ChurnResult, Format, Page};
+use crate::ops::constants::{MAX_CHURN_DAYS, effective_limit};
+use crate::ops::{ChurnEntry, ChurnResult, Format, Page, present};
 use crate::security::safe_join;
 
 const DEFAULT_DAYS: u32 = 90;

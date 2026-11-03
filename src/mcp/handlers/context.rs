@@ -2,8 +2,8 @@
 
 use crate::db::Database;
 use crate::mcp::types::ContextRequest;
-use crate::ops::constants::{effective_limit, DEFAULT_CONTEXT_MAX_NODES};
-use crate::ops::{self, present, Format};
+use crate::ops::constants::{DEFAULT_CONTEXT_MAX_NODES, effective_limit};
+use crate::ops::{self, Format, present};
 
 pub fn handle_context(
     db: &Database,

@@ -16,7 +16,7 @@ use symgraph::mcp::{
     DispatchSitesRequest, FileRequest, GodStructRequest, ModuleGraphRequest, PathRequest,
     SymbolRequest, UnusedRequest,
 };
-use symgraph::{build_full_index, IndexConfig};
+use symgraph::{IndexConfig, build_full_index};
 use tempfile::TempDir;
 
 /// A small but structurally real project: two modules, a trait with an impl,

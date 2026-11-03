@@ -23,8 +23,8 @@ use crate::security::{safe_join, validate_relative};
 use crate::types::{EdgeKind, Node};
 
 use constants::{
-    effective_limit, DEFAULT_CONTEXT_LINES, DEFAULT_GRAPH_LIMIT, DEFAULT_UNUSED_LIMIT,
-    MAX_REFERENCES_PER_KIND,
+    DEFAULT_CONTEXT_LINES, DEFAULT_GRAPH_LIMIT, DEFAULT_UNUSED_LIMIT, MAX_REFERENCES_PER_KIND,
+    effective_limit,
 };
 
 /// Output representation for a tool result.
@@ -1273,7 +1273,7 @@ mod tests {
 
     #[test]
     fn limit_is_clamped_and_zero_means_default() {
-        use constants::{effective_limit, MAX_LIMIT};
+        use constants::{MAX_LIMIT, effective_limit};
         assert_eq!(effective_limit(None, 20), 20);
         assert_eq!(effective_limit(Some(0), 20), 20);
         assert_eq!(effective_limit(Some(5), 20), 5);

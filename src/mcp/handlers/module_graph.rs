@@ -4,10 +4,10 @@
 //! reports the dependency structure (fan-in/out, cycles); `coupling-score`
 //! ranks module-pair edges on strength × distance × volatility.
 
-use crate::coupling::{build_module_graph, score_coupling, Granularity};
+use crate::coupling::{Granularity, build_module_graph, score_coupling};
 use crate::db::Database;
 use crate::mcp::handlers::churn::file_churn;
-use crate::mcp::types::{wants_json, ModuleGraphRequest};
+use crate::mcp::types::{ModuleGraphRequest, wants_json};
 
 const DEFAULT_DAYS: u32 = 90;
 const DEFAULT_LIMIT: usize = 30;
@@ -149,7 +149,9 @@ pub fn handle_coupling_score(
         "# Coupling score ({} granularity)\n\nimpact = strength × distance × volatility ({}).\n\
         Strength: 1 contract (calls), 2 model (field reads / imports), 3 intrusive (field writes / &mut).\n\
         Note: edges are heuristic (name-based resolution), best for ranking.\n\n{}",
-        graph.granularity, volatility_note, scope_note(include_tests)
+        graph.granularity,
+        volatility_note,
+        scope_note(include_tests)
     );
     out.push_str("| Impact | From | To | Str | Dist | Vol | Edges | Kinds |\n");
     out.push_str("|---:|---|---|---:|---:|---:|---:|---|\n");

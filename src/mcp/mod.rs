@@ -40,9 +40,10 @@ use std::sync::{Arc, Mutex};
 
 #[cfg(feature = "server")]
 use rmcp::{
+    ServerHandler,
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
     model::{ServerCapabilities, ServerConfig},
-    tool, tool_handler, tool_router, ServerHandler,
+    tool, tool_handler, tool_router,
 };
 
 #[cfg(feature = "server")]

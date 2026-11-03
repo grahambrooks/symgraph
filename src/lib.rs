@@ -289,14 +289,14 @@ fn run_index_codebase(
     // An incremental pass only touches changed files, so running one over a
     // stale index leaves the untouched rows in their old semantics and mixes
     // the two. Refuse rather than silently produce a half-migrated index.
-    if matches!(mode, IndexMode::Incremental) {
-        if let Some(stale) = db.staleness()? {
-            anyhow::bail!(
-                "cannot incrementally index a stale index ({}). Run a full rebuild: \
+    if matches!(mode, IndexMode::Incremental)
+        && let Some(stale) = db.staleness()?
+    {
+        anyhow::bail!(
+            "cannot incrementally index a stale index ({}). Run a full rebuild: \
                  `symgraph reindex`.",
-                stale
-            );
-        }
+            stale
+        );
     }
 
     let mut stats = IndexingStats::default();
@@ -435,10 +435,10 @@ fn collect_candidates(
         );
 
         // An explicit file list drops everything else before it is read.
-        if let Some(only) = &config.only_files {
-            if !only.iter().any(|f| f == &rel_path) {
-                continue;
-            }
+        if let Some(only) = &config.only_files
+            && !only.iter().any(|f| f == &rel_path)
+        {
+            continue;
         }
 
         // Incremental only: if size and mtime both match what was indexed,

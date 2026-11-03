@@ -2,7 +2,7 @@
 
 use crate::db::Database;
 use crate::mcp::types::PathRequest;
-use crate::ops::{self, present, Format};
+use crate::ops::{self, Format, present};
 
 pub fn handle_path(db: &Database, req: &PathRequest) -> Result<String, String> {
     present(

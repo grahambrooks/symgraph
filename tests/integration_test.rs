@@ -9,7 +9,7 @@ use symgraph::db::Database;
 use symgraph::extraction::Extractor;
 use symgraph::graph::Graph;
 use symgraph::types::{EdgeKind, FileRecord, Language, NodeKind};
-use symgraph::{build_full_index, index_codebase, IndexConfig};
+use symgraph::{IndexConfig, build_full_index, index_codebase};
 use tempfile::tempdir;
 
 /// Helper to set up a test database with indexed code

@@ -5,19 +5,19 @@
 use anyhow::Result;
 use axum::{
     extract::State,
-    http::{header, Request, StatusCode},
+    http::{Request, StatusCode, header},
     middleware::{self, Next},
     response::Response,
 };
 use rmcp::{
+    ServiceExt,
     transport::stdio,
     transport::streamable_http_server::{
-        session::local::LocalSessionManager, StreamableHttpServerConfig, StreamableHttpService,
+        StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
     },
-    ServiceExt,
 };
 use std::sync::Arc;
-use tracing::{info, warn, Level};
+use tracing::{Level, info, warn};
 use tracing_subscriber::FmtSubscriber;
 
 use symgraph::cli::initialize_server_database;

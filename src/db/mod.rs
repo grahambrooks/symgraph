@@ -9,7 +9,7 @@
 mod schema;
 
 use anyhow::{Context, Result};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::{
     fs,
     io::ErrorKind,
@@ -4214,11 +4214,12 @@ mod language_tests_2 {
         .unwrap();
 
         assert_eq!(db.resolve_references().unwrap(), 0);
-        assert!(db
-            .get_outgoing_edges(caller_id)
-            .unwrap()
-            .iter()
-            .all(|e| e.kind != EdgeKind::Calls));
+        assert!(
+            db.get_outgoing_edges(caller_id)
+                .unwrap()
+                .iter()
+                .all(|e| e.kind != EdgeKind::Calls)
+        );
         assert_eq!(db.get_unresolved_refs().unwrap().len(), 1);
     }
 

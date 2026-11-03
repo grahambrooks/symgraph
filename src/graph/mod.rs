@@ -117,7 +117,7 @@ impl<'a> Graph<'a> {
                     indirect_callers: Vec::new(),
                     total_impact: 0,
                     truncated: false,
-                })
+                });
             }
         };
 
@@ -185,7 +185,7 @@ impl<'a> Graph<'a> {
         symbol: &str,
         churn: Option<&std::collections::HashMap<String, u32>>,
     ) -> Result<Option<ImpactBreakdown>> {
-        use crate::coupling::{boundary_of, Granularity};
+        use crate::coupling::{Granularity, boundary_of};
         use crate::types::EdgeKind;
 
         let root = match self.db.find_node_by_name(symbol)? {
@@ -234,11 +234,7 @@ impl<'a> Graph<'a> {
                         .filter(|(p, _)| boundary_of(p, Granularity::Module) == module)
                         .map(|(_, n)| *n)
                         .sum();
-                    if total > 0 {
-                        Some(total)
-                    } else {
-                        None
-                    }
+                    if total > 0 { Some(total) } else { None }
                 });
                 ModuleImpact {
                     module,
@@ -290,30 +286,30 @@ impl<'a> Graph<'a> {
             let out_edges = self.db.get_outgoing_edges(node_id)?;
             for edge in out_edges {
                 // Filter by edge kind if specified
-                if let Some(ref kinds) = options.edge_kinds {
-                    if !kinds.contains(&edge.kind) {
-                        continue;
-                    }
+                if let Some(ref kinds) = options.edge_kinds
+                    && !kinds.contains(&edge.kind)
+                {
+                    continue;
                 }
 
                 edges.push(edge.clone());
 
-                if !visited.contains(&edge.target_id) {
-                    if let Some(target) = self.db.get_node(edge.target_id)? {
-                        // Filter by node kind if specified
-                        if let Some(ref kinds) = options.node_kinds {
-                            if !kinds.contains(&target.kind) {
-                                continue;
-                            }
-                        }
+                if !visited.contains(&edge.target_id)
+                    && let Some(target) = self.db.get_node(edge.target_id)?
+                {
+                    // Filter by node kind if specified
+                    if let Some(ref kinds) = options.node_kinds
+                        && !kinds.contains(&target.kind)
+                    {
+                        continue;
+                    }
 
-                        visited.insert(edge.target_id);
-                        nodes.insert(edge.target_id, target);
-                        queue.push_back((edge.target_id, depth + 1));
+                    visited.insert(edge.target_id);
+                    nodes.insert(edge.target_id, target);
+                    queue.push_back((edge.target_id, depth + 1));
 
-                        if nodes.len() >= options.limit as usize {
-                            break;
-                        }
+                    if nodes.len() >= options.limit as usize {
+                        break;
                     }
                 }
             }
@@ -321,29 +317,29 @@ impl<'a> Graph<'a> {
             // Get incoming edges
             let in_edges = self.db.get_incoming_edges(node_id)?;
             for edge in in_edges {
-                if let Some(ref kinds) = options.edge_kinds {
-                    if !kinds.contains(&edge.kind) {
-                        continue;
-                    }
+                if let Some(ref kinds) = options.edge_kinds
+                    && !kinds.contains(&edge.kind)
+                {
+                    continue;
                 }
 
                 edges.push(edge.clone());
 
-                if !visited.contains(&edge.source_id) {
-                    if let Some(source) = self.db.get_node(edge.source_id)? {
-                        if let Some(ref kinds) = options.node_kinds {
-                            if !kinds.contains(&source.kind) {
-                                continue;
-                            }
-                        }
+                if !visited.contains(&edge.source_id)
+                    && let Some(source) = self.db.get_node(edge.source_id)?
+                {
+                    if let Some(ref kinds) = options.node_kinds
+                        && !kinds.contains(&source.kind)
+                    {
+                        continue;
+                    }
 
-                        visited.insert(edge.source_id);
-                        nodes.insert(edge.source_id, source);
-                        queue.push_back((edge.source_id, depth + 1));
+                    visited.insert(edge.source_id);
+                    nodes.insert(edge.source_id, source);
+                    queue.push_back((edge.source_id, depth + 1));
 
-                        if nodes.len() >= options.limit as usize {
-                            break;
-                        }
+                    if nodes.len() >= options.limit as usize {
+                        break;
                     }
                 }
             }

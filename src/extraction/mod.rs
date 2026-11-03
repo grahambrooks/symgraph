@@ -296,12 +296,11 @@ impl<'a> ExtractionContext<'a> {
                 let name = self.get_node_text(&name_node);
                 if !name.is_empty() {
                     // Handle pointer declarators in C/C++
-                    if name_node.kind() == "pointer_declarator"
-                        || name_node.kind() == "function_declarator"
+                    if (name_node.kind() == "pointer_declarator"
+                        || name_node.kind() == "function_declarator")
+                        && let Some(id) = name_node.child_by_field_name("declarator")
                     {
-                        if let Some(id) = name_node.child_by_field_name("declarator") {
-                            return self.get_node_text(&id);
-                        }
+                        return self.get_node_text(&id);
                     }
                     return name;
                 }
@@ -375,10 +374,10 @@ impl<'a> ExtractionContext<'a> {
         }
 
         // Check for export keyword (JS/TS)
-        if let Some(parent) = node.parent() {
-            if parent.kind() == "export_statement" {
-                return Visibility::Public;
-            }
+        if let Some(parent) = node.parent()
+            && parent.kind() == "export_statement"
+        {
+            return Visibility::Public;
         }
 
         // Language-specific defaults
@@ -510,10 +509,10 @@ impl<'a> ExtractionContext<'a> {
             return true;
         }
         // Check for export default
-        if let Some(parent) = node.parent() {
-            if parent.kind() == "export_statement" {
-                return true;
-            }
+        if let Some(parent) = node.parent()
+            && parent.kind() == "export_statement"
+        {
+            return true;
         }
         false
     }
@@ -521,10 +520,10 @@ impl<'a> ExtractionContext<'a> {
     fn build_qualified_name(&self, name: &str) -> Option<String> {
         let mut parts = Vec::new();
         for &parent_id in &self.node_stack {
-            if let Some(parent) = self.result.nodes.iter().find(|n| n.id == parent_id) {
-                if parent.kind != NodeKind::File {
-                    parts.push(parent.name.clone());
-                }
+            if let Some(parent) = self.result.nodes.iter().find(|n| n.id == parent_id)
+                && parent.kind != NodeKind::File
+            {
+                parts.push(parent.name.clone());
             }
         }
         parts.push(name.to_string());
@@ -664,15 +663,16 @@ impl<'a> ExtractionContext<'a> {
                 if let Some(func_name) = self.extract_call_name(&node) {
                     self.push_ref(source_id, func_name, EdgeKind::Calls, &node, None);
                 }
-            } else if self.config.is_field_access_node(kind) && !self.is_call_callee(&node) {
-                if let Some(field_name) = self.extract_field_name(&node) {
-                    let edge_kind = if self.is_write_target(&node) {
-                        EdgeKind::Mutates
-                    } else {
-                        EdgeKind::Accesses
-                    };
-                    self.push_ref(source_id, field_name, edge_kind, &node, None);
-                }
+            } else if self.config.is_field_access_node(kind)
+                && !self.is_call_callee(&node)
+                && let Some(field_name) = self.extract_field_name(&node)
+            {
+                let edge_kind = if self.is_write_target(&node) {
+                    EdgeKind::Mutates
+                } else {
+                    EdgeKind::Accesses
+                };
+                self.push_ref(source_id, field_name, edge_kind, &node, None);
             }
 
             // Scattered enum dispatch: scan match/switch subtrees for qualified
@@ -720,24 +720,22 @@ impl<'a> ExtractionContext<'a> {
     /// True if `node` is the callee (function position) of a call expression,
     /// so a method call `obj.method()` isn't also counted as a field read.
     fn is_call_callee(&self, node: &tree_sitter::Node) -> bool {
-        if let Some(parent) = node.parent() {
-            if self.config.is_call_node(parent.kind()) {
-                if let Some(func) = parent.child_by_field_name("function") {
-                    return func.id() == node.id();
-                }
-            }
+        if let Some(parent) = node.parent()
+            && self.config.is_call_node(parent.kind())
+            && let Some(func) = parent.child_by_field_name("function")
+        {
+            return func.id() == node.id();
         }
         false
     }
 
     /// True if `node` is the left-hand side of an assignment (a field write).
     fn is_write_target(&self, node: &tree_sitter::Node) -> bool {
-        if let Some(parent) = node.parent() {
-            if self.config.is_assignment_node(parent.kind()) {
-                if let Some(left) = parent.child_by_field_name("left") {
-                    return left.id() == node.id();
-                }
-            }
+        if let Some(parent) = node.parent()
+            && self.config.is_assignment_node(parent.kind())
+            && let Some(left) = parent.child_by_field_name("left")
+        {
+            return left.id() == node.id();
         }
         false
     }
@@ -747,11 +745,7 @@ impl<'a> ExtractionContext<'a> {
         let field = self.config.field_name_field;
         let child = node.child_by_field_name(field)?;
         let text = self.get_node_text(&child);
-        if text.is_empty() {
-            None
-        } else {
-            Some(text)
-        }
+        if text.is_empty() { None } else { Some(text) }
     }
 
     /// Scan a match/switch construct for qualified enum variant references
@@ -819,30 +813,27 @@ impl<'a> ExtractionContext<'a> {
         };
         let mut cursor = params.walk();
         for param in params.children(&mut cursor) {
-            if let Some(ty) = param.child_by_field_name("type") {
-                if ty.kind() == "reference_type" && self.has_mut_specifier(&ty) {
-                    if let Some(inner) = ty.child_by_field_name("type") {
-                        if let Some(name) = self.type_base_name(&inner) {
-                            self.push_ref(
-                                source_id,
-                                name,
-                                EdgeKind::Mutates,
-                                &ty,
-                                Some("mut_param".to_string()),
-                            );
-                        }
-                    }
-                }
+            if let Some(ty) = param.child_by_field_name("type")
+                && ty.kind() == "reference_type"
+                && self.has_mut_specifier(&ty)
+                && let Some(inner) = ty.child_by_field_name("type")
+                && let Some(name) = self.type_base_name(&inner)
+            {
+                self.push_ref(
+                    source_id,
+                    name,
+                    EdgeKind::Mutates,
+                    &ty,
+                    Some("mut_param".to_string()),
+                );
             }
         }
     }
 
     fn has_mut_specifier(&self, node: &tree_sitter::Node) -> bool {
         let mut cursor = node.walk();
-        let found = node
-            .children(&mut cursor)
-            .any(|c| c.kind() == "mutable_specifier");
-        found
+        node.children(&mut cursor)
+            .any(|c| c.kind() == "mutable_specifier")
     }
 
     /// Base type name from a type node, dropping path prefix and generics:
@@ -874,14 +865,14 @@ impl<'a> ExtractionContext<'a> {
         }
 
         // Try first child as fallback
-        if let Some(first) = node.child(0) {
-            if first.kind() == "identifier" || first.kind() == "field_expression" {
-                let text = self.get_node_text(&first);
-                if let Some(dot_pos) = text.rfind('.') {
-                    return Some(text[dot_pos + 1..].to_string());
-                }
-                return Some(text);
+        if let Some(first) = node.child(0)
+            && (first.kind() == "identifier" || first.kind() == "field_expression")
+        {
+            let text = self.get_node_text(&first);
+            if let Some(dot_pos) = text.rfind('.') {
+                return Some(text[dot_pos + 1..].to_string());
             }
+            return Some(text);
         }
 
         None
@@ -920,15 +911,15 @@ fn test_name_heuristic(name: &str) -> bool {
     let after_test = name
         .strip_prefix("test")
         .or_else(|| name.strip_prefix("Test"));
-    if let Some(rest) = after_test {
-        if rest.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
-            return true;
-        }
+    if let Some(rest) = after_test
+        && rest.chars().next().is_some_and(|c| c.is_ascii_uppercase())
+    {
+        return true;
     }
-    if let Some(prefix) = name.strip_suffix("Test") {
-        if !prefix.is_empty() {
-            return true;
-        }
+    if let Some(prefix) = name.strip_suffix("Test")
+        && !prefix.is_empty()
+    {
+        return true;
     }
     false
 }
@@ -1020,9 +1011,11 @@ mod tests {
         let mut extractor = Extractor::new();
         let result = extractor.extract_file("test.xyz", "some content");
         assert!(!result.errors.is_empty());
-        assert!(result.errors[0]
-            .message
-            .contains("Unsupported file extension"));
+        assert!(
+            result.errors[0]
+                .message
+                .contains("Unsupported file extension")
+        );
     }
 
     // Rust extraction tests
@@ -1135,14 +1128,18 @@ fn other_func() {}
 
         // Should have unresolved references for the calls
         assert!(!result.unresolved_refs.is_empty());
-        assert!(result
-            .unresolved_refs
-            .iter()
-            .any(|r| r.reference_name == "helper"));
-        assert!(result
-            .unresolved_refs
-            .iter()
-            .any(|r| r.reference_name == "other_func"));
+        assert!(
+            result
+                .unresolved_refs
+                .iter()
+                .any(|r| r.reference_name == "helper")
+        );
+        assert!(
+            result
+                .unresolved_refs
+                .iter()
+                .any(|r| r.reference_name == "other_func")
+        );
     }
 
     #[test]
@@ -1413,22 +1410,30 @@ namespace MyApp
 "#;
         let result = extractor.extract_file("test.cs", code);
         assert!(result.errors.is_empty());
-        assert!(result
-            .nodes
-            .iter()
-            .any(|n| n.name == "Program" && n.kind == NodeKind::Class));
-        assert!(result
-            .nodes
-            .iter()
-            .any(|n| n.name == "Main" && n.kind == NodeKind::Method));
-        assert!(result
-            .nodes
-            .iter()
-            .any(|n| n.name == "Add" && n.kind == NodeKind::Method));
-        assert!(result
-            .nodes
-            .iter()
-            .any(|n| n.name == "MyApp" && n.kind == NodeKind::Module));
+        assert!(
+            result
+                .nodes
+                .iter()
+                .any(|n| n.name == "Program" && n.kind == NodeKind::Class)
+        );
+        assert!(
+            result
+                .nodes
+                .iter()
+                .any(|n| n.name == "Main" && n.kind == NodeKind::Method)
+        );
+        assert!(
+            result
+                .nodes
+                .iter()
+                .any(|n| n.name == "Add" && n.kind == NodeKind::Method)
+        );
+        assert!(
+            result
+                .nodes
+                .iter()
+                .any(|n| n.name == "MyApp" && n.kind == NodeKind::Module)
+        );
     }
 
     #[test]
@@ -1443,10 +1448,12 @@ public interface IRepository
 "#;
         let result = extractor.extract_file("test.cs", code);
         assert!(result.errors.is_empty());
-        assert!(result
-            .nodes
-            .iter()
-            .any(|n| n.name == "IRepository" && n.kind == NodeKind::Interface));
+        assert!(
+            result
+                .nodes
+                .iter()
+                .any(|n| n.name == "IRepository" && n.kind == NodeKind::Interface)
+        );
     }
 
     // Kotlin extraction tests
@@ -1479,10 +1486,12 @@ class Person(val name: String, val age: Int) {
 "#;
         let result = extractor.extract_file("test.kt", code);
         assert!(result.errors.is_empty());
-        assert!(result
-            .nodes
-            .iter()
-            .any(|n| n.name == "Person" && n.kind == NodeKind::Class));
+        assert!(
+            result
+                .nodes
+                .iter()
+                .any(|n| n.name == "Person" && n.kind == NodeKind::Class)
+        );
         assert!(result.nodes.iter().any(|n| n.name == "greet"));
     }
 
@@ -1496,10 +1505,12 @@ object Singleton {
 "#;
         let result = extractor.extract_file("test.kt", code);
         assert!(result.errors.is_empty());
-        assert!(result
-            .nodes
-            .iter()
-            .any(|n| n.name == "Singleton" && n.kind == NodeKind::Class));
+        assert!(
+            result
+                .nodes
+                .iter()
+                .any(|n| n.name == "Singleton" && n.kind == NodeKind::Class)
+        );
     }
 
     // Scala extraction tests
@@ -1516,10 +1527,12 @@ object Main {
         let result = extractor.extract_file("test.scala", code);
         assert!(result.errors.is_empty());
         assert!(result.nodes.iter().any(|n| n.name == "hello"));
-        assert!(result
-            .nodes
-            .iter()
-            .any(|n| n.name == "Main" && n.kind == NodeKind::Class));
+        assert!(
+            result
+                .nodes
+                .iter()
+                .any(|n| n.name == "Main" && n.kind == NodeKind::Class)
+        );
     }
 
     #[test]
@@ -1532,10 +1545,12 @@ trait Greeter {
 "#;
         let result = extractor.extract_file("test.scala", code);
         assert!(result.errors.is_empty());
-        assert!(result
-            .nodes
-            .iter()
-            .any(|n| n.name == "Greeter" && n.kind == NodeKind::Interface));
+        assert!(
+            result
+                .nodes
+                .iter()
+                .any(|n| n.name == "Greeter" && n.kind == NodeKind::Interface)
+        );
     }
 
     #[test]
@@ -1548,10 +1563,12 @@ class Person(val name: String, val age: Int) {
 "#;
         let result = extractor.extract_file("test.scala", code);
         assert!(result.errors.is_empty());
-        assert!(result
-            .nodes
-            .iter()
-            .any(|n| n.name == "Person" && n.kind == NodeKind::Class));
+        assert!(
+            result
+                .nodes
+                .iter()
+                .any(|n| n.name == "Person" && n.kind == NodeKind::Class)
+        );
     }
 
     // Inheritance extraction (review finding F8)
@@ -1828,14 +1845,18 @@ class Calculator {
             result.parse_failed,
             "expected the Groovy grammar to flag this idiomatic snippet"
         );
-        assert!(result
-            .nodes
-            .iter()
-            .any(|n| n.name == "Calculator" && n.kind == NodeKind::Class));
-        assert!(result
-            .nodes
-            .iter()
-            .any(|n| n.name == "add" && n.kind == NodeKind::Method));
+        assert!(
+            result
+                .nodes
+                .iter()
+                .any(|n| n.name == "Calculator" && n.kind == NodeKind::Class)
+        );
+        assert!(
+            result
+                .nodes
+                .iter()
+                .any(|n| n.name == "add" && n.kind == NodeKind::Method)
+        );
     }
 
     #[test]
@@ -1848,10 +1869,12 @@ interface Greeter {
 "#;
         let result = extractor.extract_file("test.groovy", code);
         assert!(result.errors.is_empty());
-        assert!(result
-            .nodes
-            .iter()
-            .any(|n| n.name == "Greeter" && n.kind == NodeKind::Interface));
+        assert!(
+            result
+                .nodes
+                .iter()
+                .any(|n| n.name == "Greeter" && n.kind == NodeKind::Interface)
+        );
     }
 
     #[test]
@@ -1866,10 +1889,12 @@ end
 "#;
         let result = extractor.extract_file("greeter.rb", code);
         assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-        assert!(result
-            .nodes
-            .iter()
-            .any(|n| n.name == "Greeter" && n.kind == NodeKind::Class));
+        assert!(
+            result
+                .nodes
+                .iter()
+                .any(|n| n.name == "Greeter" && n.kind == NodeKind::Class)
+        );
         assert!(result.nodes.iter().any(|n| n.name == "greet"));
     }
 
@@ -1958,14 +1983,18 @@ fn checks_addition() {
         let content = r#"{"name": "test-pkg", "dependencies": {"express": "^4.0"}}"#;
         let result = extractor.extract_file("package.json", content);
         assert!(result.errors.is_empty());
-        assert!(result
-            .nodes
-            .iter()
-            .any(|n| n.name == "test-pkg" && n.kind == NodeKind::Module));
-        assert!(result
-            .nodes
-            .iter()
-            .any(|n| n.name == "express" && n.kind == NodeKind::Import));
+        assert!(
+            result
+                .nodes
+                .iter()
+                .any(|n| n.name == "test-pkg" && n.kind == NodeKind::Module)
+        );
+        assert!(
+            result
+                .nodes
+                .iter()
+                .any(|n| n.name == "express" && n.kind == NodeKind::Import)
+        );
     }
 
     // ---- New coupling edges (accesses / mutates / imports / dispatch) ----
@@ -2045,12 +2074,14 @@ fn caller(m: &Foo) {
         assert!(glob.is_some(), "expected a glob import");
         assert_eq!(glob.unwrap().reference_name, "model");
         // Named import resolves to the symbol, no glob detail.
-        assert!(result
-            .unresolved_refs
-            .iter()
-            .any(|r| r.kind == EdgeKind::Imports
-                && r.reference_name == "Database"
-                && r.detail.is_none()));
+        assert!(
+            result
+                .unresolved_refs
+                .iter()
+                .any(|r| r.kind == EdgeKind::Imports
+                    && r.reference_name == "Database"
+                    && r.detail.is_none())
+        );
     }
 
     #[test]

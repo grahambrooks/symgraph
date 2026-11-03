@@ -8,7 +8,7 @@ use serde::Serialize;
 
 use crate::db::Database;
 use crate::mcp::handlers::churn::file_churn;
-use crate::mcp::types::{wants_json, GodStructRequest};
+use crate::mcp::types::{GodStructRequest, wants_json};
 
 const DEFAULT_DAYS: u32 = 90;
 const DEFAULT_LIMIT: usize = 20;

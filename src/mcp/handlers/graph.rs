@@ -3,9 +3,9 @@
 use crate::db::Database;
 use crate::graph::Graph;
 use crate::mcp::handlers::churn::file_churn;
-use crate::mcp::types::{wants_json, ImpactRequest, SymbolRequest};
+use crate::mcp::types::{ImpactRequest, SymbolRequest, wants_json};
 use crate::ops::constants::DEFAULT_IMPACT_DEPTH;
-use crate::ops::{self, present, Format};
+use crate::ops::{self, Format, present};
 
 pub fn handle_callers(db: &Database, req: &SymbolRequest) -> Result<String, String> {
     present(

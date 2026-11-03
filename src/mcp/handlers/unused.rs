@@ -2,7 +2,7 @@
 
 use crate::db::Database;
 use crate::mcp::types::UnusedRequest;
-use crate::ops::{self, present, Format};
+use crate::ops::{self, Format, present};
 
 pub fn handle_unused(db: &Database, req: &UnusedRequest) -> Result<String, String> {
     present(

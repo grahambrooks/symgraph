@@ -11,9 +11,9 @@
 use std::fs;
 use std::path::Path;
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use symgraph::db::Database;
-use symgraph::{build_full_index, index_codebase, IndexConfig};
+use symgraph::{IndexConfig, build_full_index, index_codebase};
 use tempfile::TempDir;
 
 /// Write `files` Rust modules, each with `per_file` functions that call each

@@ -3,7 +3,7 @@
 use crate::db::Database;
 use crate::git::run_git;
 use crate::mcp::types::DiffImpactRequest;
-use crate::ops::{present, DiffImpactResult, Format, RegionImpact};
+use crate::ops::{DiffImpactResult, Format, RegionImpact, present};
 use crate::security::safe_join;
 
 pub fn handle_diff_impact(
@@ -130,11 +130,11 @@ fn git_changed_regions(
                 let mut parts = spec.split(',');
                 let start: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
                 let count: u32 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(1);
-                if start > 0 {
-                    if let Some(file) = current_file.clone() {
-                        let end = if count == 0 { start } else { start + count - 1 };
-                        regions.push((file, start, end));
-                    }
+                if start > 0
+                    && let Some(file) = current_file.clone()
+                {
+                    let end = if count == 0 { start } else { start + count - 1 };
+                    regions.push((file, start, end));
                 }
             }
         }

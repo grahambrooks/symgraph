@@ -455,10 +455,11 @@ mod tests {
         assert_eq!(ab.count, 2);
         assert_eq!(ab.strength, 3);
         // src/a hub: a/x -> a/y are distinct modules so that's an a/x->a/y edge.
-        assert!(g
-            .edges
-            .iter()
-            .any(|e| e.from == "src/a/x" && e.to == "src/a/y"));
+        assert!(
+            g.edges
+                .iter()
+                .any(|e| e.from == "src/a/x" && e.to == "src/a/y")
+        );
     }
 
     #[test]

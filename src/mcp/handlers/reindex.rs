@@ -4,9 +4,9 @@ use crate::cli::rebuild_project_database;
 use crate::db::Database;
 use crate::mcp::types::ReindexRequest;
 use crate::ops::format::normalize_path;
-use crate::ops::{present, Format, ReindexResult};
+use crate::ops::{Format, ReindexResult, present};
 use crate::security::validate_relative;
-use crate::{index_codebase, IndexConfig};
+use crate::{IndexConfig, index_codebase};
 
 pub fn handle_reindex(
     db: &mut Database,
