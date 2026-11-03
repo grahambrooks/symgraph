@@ -1,0 +1,91 @@
+.github/workflows/ci.yml
+  s_3af201839d09d6::t_f38f3f499d80fe 7-8,29,33-34,36-38,49,52,54,62,65-68,78-79,81-83,88-92,103-104,108,112,115,117,137-140,147
+Cargo.lock
+  s_3af201839d09d6::t_cc538f3fa388a5 1-2181
+Cargo.toml
+  s_3af201839d09d6::t_a56abb718b5da8 4-9
+benches/indexing.rs
+  s_3af201839d09d6::t_93fce9c82840dd 14,16
+rust-toolchain.toml
+  s_3af201839d09d6::t_6acedbff17a0d6 1-4
+src/cli/db_utils.rs
+  s_3af201839d09d6::t_95f53e93ebc0dc 24,66-72,168-171,383-390,496-497,499-502,505-506,510-511
+src/cli/export.rs
+  s_3af201839d09d6::t_42d4a4fa39279e 30,32,34,38,637-643
+src/cli/tools.rs
+  s_3af201839d09d6::t_65e1859ee8022f 8,114
+src/coupling.rs
+  s_3af201839d09d6::t_075adad1cb8a36 458-462
+src/db/mod.rs
+  s_3af201839d09d6::t_57c76908503e97 12,4217-4222
+src/extraction/manifest.rs
+  s_3af201839d09d6::t_28d1a2f6b5d7a0 497,501-518,1068-1069,1072-1075,1099-1113,1217-1236,1751-1755,1757-1761,1802-1806,1808-1812,1842-1851
+src/extraction/mod.rs
+  s_3af201839d09d6::t_11fc026afeb40e 299-301,303,377-380,512-515,523-526,666-675,723-727,734-738,748,816-828,835-836,868-873,875,914-917,919-922,1014-1018,1131-1142,1413-1436,1451-1456,1489-1494,1508-1513,1530-1535,1548-1553,1566-1571,1848-1859,1872-1877,1892-1897,1986-1997,2077-2084
+src/graph/mod.rs
+  s_3af201839d09d6::t_49987f957f2888 120,188,237,289-292,297-312,320-323,328-342
+src/lib.rs
+  s_3af201839d09d6::t_98ac538a230381 292-296,298-299,438-441
+src/main.rs
+  s_3af201839d09d6::t_2e657bedddc540 30-31,33,213-219
+src/mcp/handlers/blame.rs
+  s_3af201839d09d6::t_5647569810fc06 6
+src/mcp/handlers/churn.rs
+  s_3af201839d09d6::t_805d40b8c911ee 7-8
+src/mcp/handlers/context.rs
+  s_3af201839d09d6::t_ae042b8d237c13 5-6
+src/mcp/handlers/diff_impact.rs
+  s_3af201839d09d6::t_a27c8becdca2f1 6,133-137
+src/mcp/handlers/dispatch_sites.rs
+  s_3af201839d09d6::t_c31ee275bab0ca 12
+src/mcp/handlers/file.rs
+  s_3af201839d09d6::t_f66e3e84b93f04 5
+src/mcp/handlers/god_struct.rs
+  s_3af201839d09d6::t_040250e1842a12 11
+src/mcp/handlers/graph.rs
+  s_3af201839d09d6::t_bb388df54595b7 6,8
+src/mcp/handlers/hierarchy.rs
+  s_3af201839d09d6::t_048c0cac6b0021 5
+src/mcp/handlers/implementations.rs
+  s_3af201839d09d6::t_3d32b672ab423a 5
+src/mcp/handlers/module_graph.rs
+  s_3af201839d09d6::t_d94ad9f27b8ab4 7,10,152-154
+src/mcp/handlers/path.rs
+  s_3af201839d09d6::t_24e07c520d82fe 5
+src/mcp/handlers/reindex.rs
+  s_3af201839d09d6::t_136ba9f05c1c01 7,9
+src/mcp/handlers/search.rs
+  s_3af201839d09d6::t_ded5c32cd08a02 5
+src/mcp/handlers/symbol.rs
+  s_3af201839d09d6::t_438ecf5d7e3540 8
+src/mcp/handlers/unused.rs
+  s_3af201839d09d6::t_04114363e6df95 5
+src/mcp/mod.rs
+  s_3af201839d09d6::t_301828f3980f55 43,46
+src/ops/mod.rs
+  s_3af201839d09d6::t_81f791876e26d7 26-27,1276
+src/server.rs
+  s_3af201839d09d6::t_c439119a24dc4b 8,13,16,20
+tests/cli_parity_test.rs
+  s_3af201839d09d6::t_fff22f3ff54193 16
+tests/handlers_test.rs
+  s_3af201839d09d6::t_364fe25f088265 19
+tests/integration_test.rs
+  s_3af201839d09d6::t_e74f28e354b04e 12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "69a77e4e40dbf01ff131cddeafddb61c197faa36",
+  "prompts": {},
+  "sessions": {
+    "s_3af201839d09d6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ca62a504-f3e7-484c-9e2d-47cfc6cd0491",
+        "model": "claude-opus-5-5"
+      },
+      "human_author": "Graham Brooks <graham@grahambrooks.com>"
+    }
+  }
+}
