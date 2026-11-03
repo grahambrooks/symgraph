@@ -7,7 +7,9 @@
 # auto-managed's monthly job create it — and this workflow:
 #   1. plans the build from .release.env and the tag,
 #   2. makes sure a GitHub Release exists for the tag (auto-managed creates one),
-#   3. stamps the tag's version into Cargo.toml and builds every target,
+#   3. stamps the tag's version into Cargo.toml (and the workspace's own entries
+#      in a committed Cargo.lock) and builds every target — with --locked when
+#      Cargo.lock is committed, so a release ships the dependencies CI tested —
 #      uploading <bin>-<tag>-<target>.tar.gz (.zip on Windows) with the binaries
 #      at the archive root — the layout bx and Homebrew both expect,
 #   4. publishes SHA256SUMS, then opens and merges one PR that updates the in-repo
@@ -53,6 +55,7 @@ jobs:
       features: ${{ steps.plan.outputs.features }}
       manifest_path: ${{ steps.plan.outputs.manifest_path }}
       publish_crate: ${{ steps.plan.outputs.publish_crate }}
+      locked: ${{ steps.plan.outputs.locked }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -95,6 +98,15 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      # A rust-toolchain.toml overrides the stable toolchain above, and that pinned
+      # toolchain needs the target too (cross-compiled targets fail without it).
+      - name: Add ${{ matrix.target }} to the pinned toolchain
+        shell: bash
+        working-directory: ${{ matrix.workspace }}
+        run: |
+          set -euo pipefail
+          rustup toolchain install --no-self-update
+          rustup target add "${{ matrix.target }}"
       - uses: Swatinem/rust-cache@v2
         with:
           key: release-${{ matrix.target }}
@@ -109,6 +121,7 @@ jobs:
           features: ${{ needs.plan.outputs.features }}
           manifest-path: ${{ needs.plan.outputs.manifest_path }}
           target: ${{ matrix.target }}
+          locked: ${{ needs.plan.outputs.locked }}
           archive: ${{ needs.plan.outputs.archive }}
           tar: unix
           zip: windows

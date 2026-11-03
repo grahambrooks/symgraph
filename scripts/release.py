@@ -12,12 +12,13 @@ Byte-identical in every repo; repo specifics come from .release.env:
     FORMULA_NAME=colab          Homebrew formula file/name
     FORMULA_CLASS=Colab         Ruby class name
     FORMULA_DESC=...            one-line description
-    FORMULA_LICENSE=MIT         SPDX id
+    FORMULA_LICENSE=MIT         SPDX id or expression, e.g. MIT OR Apache-2.0
 
 Subcommands (all run by .github/workflows/release.yml):
 
     plan TAG                    validate the tag and config; write GitHub step outputs
-    set-version VERSION         write VERSION into the Cargo.toml(s) that own BINS
+    set-version VERSION         write VERSION into the Cargo.toml(s) that own BINS, and
+                                into a committed Cargo.lock (see cmd_set_version)
     sums DIR                    print SHA256SUMS for the archives in DIR
     formula TAG SHA256SUMS      write Formula/<FORMULA_NAME>.rb
     publish-crate VERSION       cargo publish PACKAGE unless VERSION is already on crates.io
@@ -97,6 +98,18 @@ def output(**values: str) -> None:
     print("\n".join(lines))
 
 
+def find_lockfile(crate_dir: str) -> Path | None:
+    """The Cargo.lock that governs CRATE_DIR: the nearest one at or above it, within the repo."""
+    repo = Path.cwd().resolve()
+    d = (repo / crate_dir).resolve()
+    while True:
+        if (d / "Cargo.lock").is_file():
+            return d / "Cargo.lock"
+        if d == repo or d.parent == d:
+            return None
+        d = d.parent
+
+
 def cmd_plan(tag: str) -> None:
     m = TAG_RE.match(tag)
     if not m:
@@ -121,6 +134,8 @@ def cmd_plan(tag: str) -> None:
         features=cfg.get("FEATURES", ""),
         manifest_path="" if crate_dir == "." else f"{crate_dir}/Cargo.toml",
         publish_crate="true" if cfg.get("PUBLISH_CRATE", "").lower() == "true" else "false",
+        # Build with --locked when the repo commits its lockfile.
+        locked="true" if find_lockfile(crate_dir) else "false",
     )
 
 
@@ -140,11 +155,24 @@ def set_toml_version(path: Path, section: str, version: str) -> bool:
 
 
 def cmd_set_version(version: str) -> None:
+    """Stamp VERSION into Cargo.toml, keeping a committed Cargo.lock authoritative.
+
+    The release build runs `cargo build --locked` when Cargo.lock is committed, but
+    stamping changes the workspace's own entries in it. So: first check the lock
+    is current for the committed Cargo.toml and fetch what it pins (`cargo fetch
+    --locked` fails on a stale lock instead of quietly re-resolving it); then stamp;
+    then rewrite only the workspace's own packages in the lock, offline, so no
+    dependency can move. Without a committed lock, cargo resolves one as before.
+    """
     cfg = load_config()
     crate_dir = Path(cfg["CRATE_DIR"])
     meta = json.loads(subprocess.run(
         ["cargo", "metadata", "--no-deps", "--format-version", "1"],
         cwd=crate_dir, check=True, capture_output=True, text=True).stdout)
+    lock = Path(meta["workspace_root"]) / "Cargo.lock"
+    locked = lock.is_file()
+    if locked and subprocess.run(["cargo", "fetch", "--locked", "--quiet"], cwd=crate_dir).returncode != 0:
+        fail(f"{lock} is out of date with Cargo.toml — run `cargo update --workspace`, commit it, and re-tag")
     wanted = set(bins(cfg))
     owners = [p for p in meta["packages"]
               if (cfg.get("PACKAGE") and p["name"] == cfg["PACKAGE"])
@@ -161,9 +189,12 @@ def cmd_set_version(version: str) -> None:
             changed.append(str(manifest))
     if not changed:
         fail("found no literal version to set (neither [workspace.package] nor the owning [package])")
-    # Refresh Cargo.lock's entries for the workspace's own packages.
-    subprocess.run(["cargo", "metadata", "--format-version", "1"], cwd=crate_dir, check=True,
-                   stdout=subprocess.DEVNULL)
+    if locked:
+        # Only the workspace's own entries change; everything else stays as committed.
+        subprocess.run(["cargo", "update", "--workspace", "--offline"], cwd=crate_dir, check=True)
+    else:
+        subprocess.run(["cargo", "metadata", "--format-version", "1"], cwd=crate_dir, check=True,
+                       stdout=subprocess.DEVNULL)
     print(f"set version {version} in: {', '.join(changed)}")
 
 
@@ -182,7 +213,7 @@ class {cls} < Formula
   desc "{desc}"
   homepage "https://github.com/{repo}"
   version "{version}"
-  license "{license}"
+  license {license}
 
   on_macos do
     on_arm do
@@ -217,6 +248,73 @@ end
 """
 
 
+def formula_license(expr: str) -> str:
+    """Render an SPDX license expression as the argument of Homebrew's `license`.
+
+    `MIT` -> `"MIT"`; `MIT OR Apache-2.0` -> `any_of: ["MIT", "Apache-2.0"]`;
+    AND -> `all_of`, `X WITH Y` -> `"X" => { with: "Y" }`. AND binds tighter than
+    OR, parentheses group, and Cargo's legacy `MIT/Apache-2.0` means OR.
+    """
+    tokens = re.findall(r"\(|\)|[^\s()]+", expr.replace("/", " OR "))
+    if not tokens:
+        fail("FORMULA_LICENSE is empty")
+    pos = 0
+
+    def peek() -> str | None:
+        return tokens[pos] if pos < len(tokens) else None
+
+    def take() -> str:
+        nonlocal pos
+        if pos >= len(tokens):
+            fail(f"FORMULA_LICENSE {expr!r}: unexpected end of expression")
+        pos += 1
+        return tokens[pos - 1]
+
+    # A node is ("id", name, exception-or-None) or ("any_of"|"all_of", [nodes]).
+    def parse(op: str, sub) -> tuple:
+        nodes = [sub()]
+        while (peek() or "").upper() == op:
+            take()
+            nodes.append(sub())
+        if len(nodes) == 1:
+            return nodes[0]
+        kind = "any_of" if op == "OR" else "all_of"
+        flat = []
+        for n in nodes:  # (A OR B) OR C is any_of: [A, B, C]
+            flat.extend(n[1] if n[0] == kind else [n])
+        return (kind, flat)
+
+    def atom() -> tuple:
+        tok = take()
+        if tok == "(":
+            node = parse("OR", lambda: parse("AND", atom))
+            if take() != ")":
+                fail(f"FORMULA_LICENSE {expr!r}: expected ')'")
+            return node
+        if tok == ")" or tok.upper() in ("AND", "OR", "WITH"):
+            fail(f"FORMULA_LICENSE {expr!r}: unexpected {tok!r}")
+        if (peek() or "").upper() == "WITH":
+            take()
+            return ("id", tok, take())
+        return ("id", tok, None)
+
+    tree = parse("OR", lambda: parse("AND", atom))
+    if peek() is not None:
+        fail(f"FORMULA_LICENSE {expr!r}: unexpected {peek()!r}")
+
+    def ruby(node: tuple, top: bool) -> str:
+        if node[0] == "id":
+            _, name, exc = node
+            if exc is None:
+                return f'"{name}"'
+            pair = f'"{name}" => {{ with: "{exc}" }}'
+            return pair if top else f"{{ {pair} }}"
+        inner = f'{node[0]}: [{", ".join(ruby(n, False) for n in node[1])}]'
+        return inner if top else f"{{ {inner} }}"
+
+    return ruby(tree, True)
+
+
 def cmd_formula(tag: str, sums_file: str) -> None:
     cfg = load_config()
     repo = os.environ.get("GITHUB_REPOSITORY") or fail("GITHUB_REPOSITORY is not set")
@@ -237,7 +335,7 @@ def cmd_formula(tag: str, sums_file: str) -> None:
     out = Path("Formula") / f"{cfg['FORMULA_NAME']}.rb"
     out.write_text(FORMULA.format(
         tag=tag, cls=cfg["FORMULA_CLASS"], desc=cfg["FORMULA_DESC"].replace('"', '\\"'),
-        repo=repo, version=tag[1:], license=cfg["FORMULA_LICENSE"],
+        repo=repo, version=tag[1:], license=formula_license(cfg["FORMULA_LICENSE"]),
         base=f"https://github.com/{repo}/releases/download/{tag}",
         install="\n".join(f'    bin.install "{b}"' for b in names),
         test="\n".join(f'    assert_path_exists bin/"{b}"' for b in names),
