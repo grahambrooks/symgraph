@@ -4,7 +4,7 @@
 //! - Symbols (functions, classes, methods, etc.)
 //! - Relationships (calls, contains, imports, etc.)
 
-mod languages;
+pub(crate) mod languages;
 pub mod manifest;
 
 use std::path::Path;
@@ -29,8 +29,27 @@ impl Extractor {
         }
     }
 
-    /// Extract symbols from a source file
+    /// Extract symbols from a source file, in the language its extension
+    /// names, else the one its `#!` line runs.
     pub fn extract_file<P: AsRef<Path>>(&mut self, path: P, content: &str) -> ExtractionResult {
+        let path = path.as_ref();
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+        let mut language = Language::from_extension(ext);
+        if language == Language::Unknown {
+            language = Language::from_shebang(content.lines().next().unwrap_or(""));
+        }
+        self.extract_file_as(path, content, language)
+    }
+
+    /// Extract symbols from a source file in `language`, whatever its name
+    /// says: for a caller that decided the language itself (from a `#!`
+    /// line, say). Manifests are still recognised by their file name.
+    pub fn extract_file_as<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+        content: &str,
+        language: Language,
+    ) -> ExtractionResult {
         let path = path.as_ref();
 
         // Check for package manager manifest files first (detected by filename)
@@ -40,8 +59,6 @@ impl Extractor {
         }
 
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        let language = Language::from_extension(ext);
-
         if language == Language::Unknown {
             return ExtractionResult {
                 errors: vec![ExtractionError {
@@ -850,6 +867,14 @@ impl<'a> ExtractionContext<'a> {
     }
 
     fn extract_call_name(&self, node: &tree_sitter::Node) -> Option<String> {
+        // A shell command names what it runs in its `name` field. Taken
+        // whole: a shell function may well be called `log.info` or `ns::f`.
+        // A command that only assigns (`FOO=1`) has no name.
+        if self.language == Language::Bash {
+            let name = self.get_node_text(&node.child_by_field_name("name")?);
+            return (!name.is_empty()).then_some(name);
+        }
+
         // Look for function name in call expression
         if let Some(func) = node.child_by_field_name("function") {
             let text = self.get_node_text(&func);
@@ -1896,6 +1921,72 @@ end
                 .any(|n| n.name == "Greeter" && n.kind == NodeKind::Class)
         );
         assert!(result.nodes.iter().any(|n| n.name == "greet"));
+    }
+
+    /// The calls each shell function makes, by name.
+    fn shell_calls(result: &ExtractionResult, function: &str) -> Vec<String> {
+        let id = result
+            .nodes
+            .iter()
+            .find(|n| n.name == function && n.kind == NodeKind::Function)
+            .unwrap_or_else(|| panic!("no function {function}: {:?}", result.nodes))
+            .id;
+        result
+            .unresolved_refs
+            .iter()
+            .filter(|r| r.source_node_id == id && r.kind == EdgeKind::Calls)
+            .map(|r| r.reference_name.clone())
+            .collect()
+    }
+
+    #[test]
+    fn test_extract_shell_functions_and_calls() {
+        let mut extractor = Extractor::new();
+        let code = r#"
+log.info() { echo "$@" >&2; }
+
+function deploy {
+    FOO=1
+    log.info "deploying"
+    ls -l | grep x
+}
+
+main() {
+    deploy "$@"
+}
+
+main "$@"
+"#;
+        let result = extractor.extract_file("lib/util.sh", code);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        assert_eq!(
+            result
+                .nodes
+                .iter()
+                .find(|n| n.name == "deploy")
+                .unwrap()
+                .language,
+            Language::Bash
+        );
+        assert_eq!(shell_calls(&result, "deploy"), ["log.info", "ls", "grep"]);
+        assert_eq!(shell_calls(&result, "main"), ["deploy"]);
+        assert_eq!(shell_calls(&result, "log.info"), ["echo"]);
+    }
+
+    #[test]
+    fn test_extract_script_by_its_shebang() {
+        let mut extractor = Extractor::new();
+        let code = "#!/usr/bin/env bash\nmain() { run; }\n";
+        let result = extractor.extract_file("bin/deploy", code);
+        assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+        assert_eq!(shell_calls(&result, "main"), ["run"]);
+        // Without one, an extensionless file is still unsupported.
+        let result = extractor.extract_file("bin/notes", "main() { run; }\n");
+        assert!(result.nodes.is_empty());
+        assert!(!result.errors.is_empty());
+        // A caller that knows better says so.
+        let result = extractor.extract_file_as("bin/notes", "main() { run; }\n", Language::Bash);
+        assert_eq!(shell_calls(&result, "main"), ["run"]);
     }
 
     #[test]

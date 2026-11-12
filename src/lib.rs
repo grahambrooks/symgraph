@@ -180,6 +180,58 @@ pub struct IndexConfig {
     /// cost in time and memory out of all proportion to the symbols it yields,
     /// and nothing else in the pipeline bounds it.
     pub max_file_bytes: u64,
+    /// How an extensionless file — `bin/deploy`, `.envrc` — gets a language
+    /// from its `#!` line.
+    pub shebang: Shebang,
+}
+
+/// How the walk reads a language off an extensionless file's `#!` line.
+///
+/// Only files with no extension are read for one, so the cost is one short
+/// read per such file. A file found this way is indexed when the extension
+/// allow-list is empty or holds its language's extension
+/// ([`Language::extension`]).
+#[derive(Debug, Clone, Copy, Default)]
+pub enum Shebang {
+    /// Index extensionless files only as manifests.
+    Off,
+    /// [`Language::from_shebang`].
+    #[default]
+    Builtin,
+    /// The caller's own reading of the first line, so a host such as an
+    /// editor that already picks a language from it indexes a script as
+    /// the language it shows it in. [`Language::Unknown`] skips the file.
+    Custom(fn(&str) -> Language),
+}
+
+impl Shebang {
+    /// The language `first_line` gives a file.
+    pub fn language(self, first_line: &str) -> Language {
+        match self {
+            Shebang::Off => Language::Unknown,
+            Shebang::Builtin => Language::from_shebang(first_line),
+            Shebang::Custom(detect) => detect(first_line),
+        }
+    }
+}
+
+/// The first line of `path`, read no further than a `#!` line can sensibly
+/// run. Empty when the file can't be read or doesn't start with `#!`.
+#[cfg(feature = "sqlite")]
+fn first_line(path: &Path) -> String {
+    use std::io::Read;
+    let mut head = [0u8; 256];
+    let n = std::fs::File::open(path)
+        .and_then(|mut f| f.read(&mut head))
+        .unwrap_or(0);
+    let head = &head[..n];
+    if !head.starts_with(b"#!") {
+        return String::new();
+    }
+    let line = head.split(|&b| b == b'\n').next().unwrap_or(head);
+    String::from_utf8_lossy(line)
+        .trim_end_matches('\r')
+        .to_string()
 }
 
 impl Default for IndexConfig {
@@ -206,6 +258,10 @@ impl Default for IndexConfig {
                 "scala".to_string(),
                 "groovy".to_string(),
                 "rb".to_string(),
+                "sh".to_string(),
+                "bash".to_string(),
+                "zsh".to_string(),
+                "ksh".to_string(),
             ],
             exclude_dirs: vec![
                 "node_modules".to_string(),
@@ -224,6 +280,7 @@ impl Default for IndexConfig {
             show_progress: false,
             trust_file_stat: true,
             max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+            shebang: Shebang::Builtin,
         }
     }
 }
@@ -375,11 +432,21 @@ fn collect_candidates(
         let is_manifest = extraction::manifest::is_manifest_file(filename);
 
         let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
-        let language = if is_manifest {
+        let mut language = if is_manifest {
             extraction::manifest::manifest_language(filename)
         } else {
             Language::from_extension(ext)
         };
+        // An extensionless script: its `#!` line says what it is.
+        let by_shebang = language == Language::Unknown
+            && ext.is_empty()
+            && !matches!(config.shebang, Shebang::Off);
+        if by_shebang {
+            language = config.shebang.language(&first_line(path));
+            if language != Language::Unknown && !extraction::languages::has_grammar(language) {
+                language = Language::Unknown;
+            }
+        }
         // Files with no parser get skipped. Track the extension (when it's a
         // recognized source type) so the CLI can report which source file types
         // were left out of the index.
@@ -391,9 +458,17 @@ fn collect_candidates(
         // A language symgraph can parse, but its extension isn't in the active
         // allow-list — skip it, and report it as an unsupported source type if
         // it names source code the caller might have wanted indexed.
+        let allowed_ext = if by_shebang {
+            language.extension().unwrap_or_default()
+        } else {
+            ext
+        };
         if !is_manifest
             && !config.extensions.is_empty()
-            && !config.extensions.iter().any(|allowed| allowed == ext)
+            && !config
+                .extensions
+                .iter()
+                .any(|allowed| allowed == allowed_ext)
         {
             record_unsupported_source(config, &mut stats.unsupported_types, ext);
             continue;
@@ -527,7 +602,8 @@ fn extract_chunk(
         .into_par_iter()
         .map(|entry| {
             let mut extractor = Extractor::new();
-            let result = extractor.extract_file(&entry.rel_path, &entry.content);
+            // The walk's language, which may have come from a `#!` line.
+            let result = extractor.extract_file_as(&entry.rel_path, &entry.content, entry.language);
             progress.inc(1);
             ExtractedFile { entry, result }
         })

@@ -1024,3 +1024,86 @@ fn test_indexed_paths_use_forward_slashes() {
         "a forward-slash path must find the file's symbols"
     );
 }
+
+/// A project with a shell library, a script that uses it with no extension,
+/// a script in a language symgraph can't parse, and plain text.
+fn shell_project() -> tempfile::TempDir {
+    let dir = tempdir().unwrap();
+    for (path, text) in [
+        ("lib/util.sh", "deploy() {\n    ls -l\n}\n"),
+        (
+            "bin/run",
+            "#!/usr/bin/env bash\nsource lib/util.sh\nmain() {\n    deploy \"$@\"\n}\nmain \"$@\"\n",
+        ),
+        ("bin/report", "#!/usr/bin/env perl\nsub report { 1 }\n"),
+        ("README", "deploy() { not code; }\n"),
+    ] {
+        let path = dir.path().join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+    dir
+}
+
+fn index_shell_project(dir: &tempfile::TempDir, config: IndexConfig) -> (Database, u64) {
+    let mut db = Database::in_memory().unwrap();
+    let config = IndexConfig {
+        root: dir.path().display().to_string(),
+        ..config
+    };
+    let stats = build_full_index(&mut db, &config).unwrap();
+    (db, stats.files)
+}
+
+#[test]
+fn test_shell_scripts_call_across_files_by_shebang() {
+    let dir = shell_project();
+    let (db, files) = index_shell_project(&dir, IndexConfig::default());
+    // util.sh by its extension, bin/run by its `#!` line; perl and text skipped.
+    assert_eq!(files, 2);
+    let callers = Graph::new(&db).find_callers("deploy", 10).unwrap();
+    assert_eq!(callers.len(), 1, "{callers:?}");
+    assert_eq!(callers[0].name, "main");
+    assert_eq!(callers[0].file_path, "bin/run");
+    assert_eq!(callers[0].language, Language::Bash);
+}
+
+#[test]
+fn test_shebang_detection_follows_the_config() {
+    let dir = shell_project();
+
+    // Off: only the `.sh` file.
+    let config = IndexConfig {
+        shebang: symgraph::Shebang::Off,
+        ..Default::default()
+    };
+    assert_eq!(index_shell_project(&dir, config).1, 1);
+
+    // A script found by its `#!` line passes the allow-list as its
+    // language's extension.
+    let config = IndexConfig {
+        extensions: vec!["sh".into()],
+        ..Default::default()
+    };
+    assert_eq!(index_shell_project(&dir, config).1, 2);
+    let config = IndexConfig {
+        extensions: vec!["rs".into()],
+        ..Default::default()
+    };
+    assert_eq!(index_shell_project(&dir, config).1, 0);
+
+    // The caller's own reading: here, perl is "shell" and bash is nothing.
+    let config = IndexConfig {
+        shebang: symgraph::Shebang::Custom(|line| {
+            if line.ends_with("perl") {
+                Language::Bash
+            } else {
+                Language::Unknown
+            }
+        }),
+        ..Default::default()
+    };
+    let (db, files) = index_shell_project(&dir, config);
+    assert_eq!(files, 2);
+    assert!(db.find_node_by_name("main").unwrap().is_none());
+}

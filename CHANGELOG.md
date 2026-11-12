@@ -11,6 +11,16 @@ release-pipeline follow-ups to the release-kit v2 adoption in 2026.9.2.
 
 ### Added
 
+- **Shell scripts** (`.sh`, `.bash`, `.zsh`, `.ksh`): functions and the calls
+  between them, so callers, callees and impact work across sourced files.
+  Commands that name no project function (`ls`, builtins) resolve to nothing.
+- **Scripts found by their `#!` line.** An extensionless file such as
+  `bin/deploy` is indexed in the language its interpreter runs (shell, Python,
+  JavaScript, Ruby). `IndexConfig::shebang` turns this off or takes the
+  caller's own detector (`Shebang::Custom`), so an editor can index a script
+  as the language it shows it in. `Extractor::extract_file_as` parses a file
+  in a language the caller chose; `watch` now notices edits to such scripts.
+
 - **`symgraph export`**: code-structure records as JSON Lines for every git
   mirror under a directory, in the software-analytics delivery schema
   (`coupling_snapshot`, `directory_coupling`, `coupling_edge`, `god_struct`),

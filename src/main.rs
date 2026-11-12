@@ -650,8 +650,10 @@ fn scan_signature(root: &str) -> (usize, i64) {
         }) {
             continue;
         }
+        // Extensionless files too: any may be a script the index found by
+        // its `#!` line, and a change to one that isn't costs a no-op pass.
         let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
-        if !defaults.extensions.iter().any(|e| e == ext) {
+        if !ext.is_empty() && !defaults.extensions.iter().any(|e| e == ext) {
             continue;
         }
         count += 1;

@@ -163,8 +163,14 @@ pub fn get_language(lang: Language) -> Option<TsLanguage> {
         Language::Scala => Some(tree_sitter_scala::LANGUAGE.into()),
         Language::Groovy => Some(tree_sitter_groovy::LANGUAGE.into()),
         Language::Ruby => Some(tree_sitter_ruby::LANGUAGE.into()),
+        Language::Bash => Some(tree_sitter_bash::LANGUAGE.into()),
         _ => None,
     }
+}
+
+/// Whether symgraph can parse `lang`.
+pub fn has_grammar(lang: Language) -> bool {
+    get_language(lang).is_some()
 }
 
 /// Get the language configuration for a given Language
@@ -183,6 +189,7 @@ pub fn get_config(lang: Language) -> &'static LanguageConfig {
         Language::Scala => &SCALA_CONFIG,
         Language::Groovy => &GROOVY_CONFIG,
         Language::Ruby => &RUBY_CONFIG,
+        Language::Bash => &BASH_CONFIG,
         _ => &DEFAULT_CONFIG,
     }
 }
@@ -515,6 +522,32 @@ static RUBY_CONFIG: LanguageConfig = LanguageConfig {
     field_types: &[],
     enum_member_types: &[],
     extends_clause_types: &["superclass"],
+    implements_clause_types: &[],
+};
+
+/// Shell scripts have functions and commands, nothing else worth a node. A
+/// call is any command: one naming a function in the project resolves to
+/// it, and the rest (`ls`, `grep`, builtins) resolve to nothing and drop out.
+static BASH_CONFIG: LanguageConfig = LanguageConfig {
+    function_types: &["function_definition"],
+    method_types: &[],
+    class_types: &[],
+    struct_types: &[],
+    interface_types: &[],
+    enum_types: &[],
+    import_types: &[],
+    call_types: &["command"],
+    type_alias_types: &[],
+    constant_types: &[],
+    variable_types: &[],
+    module_types: &[],
+    field_access_types: &[],
+    field_name_field: "",
+    assignment_types: &[],
+    enum_match_types: &[],
+    field_types: &[],
+    enum_member_types: &[],
+    extends_clause_types: &[],
     implements_clause_types: &[],
 };
 

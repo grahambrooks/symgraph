@@ -14,7 +14,8 @@ binary deployment of MCP Servers.
 ## Features
 
 - **Multi-language support**: Rust, TypeScript, JavaScript, Python, Go, Java, C,
-  C++, C#, Kotlin, Scala, Groovy, Ruby — plus package manifests
+  C++, C#, Kotlin, Scala, Groovy, Ruby, shell (sh/bash/zsh/ksh) — plus package
+  manifests. Extensionless scripts are recognised by their `#!` line
 - **Symbol extraction**: functions, classes, methods, structs, interfaces, traits, enums, constants
 - **Relationship tracking**: calls, contains, imports, exports, extends, implements,
   field reads/writes, enum dispatch

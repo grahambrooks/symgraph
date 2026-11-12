@@ -290,6 +290,9 @@ pub enum Language {
     Kotlin,
     Scala,
     Groovy,
+    /// POSIX shell scripts: sh, bash, zsh and ksh, all read with the bash
+    /// grammar.
+    Bash,
     Unknown,
 }
 
@@ -313,6 +316,7 @@ impl Language {
             "kt" | "kts" => Language::Kotlin,
             "scala" | "sc" => Language::Scala,
             "groovy" => Language::Groovy,
+            "sh" | "bash" | "zsh" | "ksh" => Language::Bash,
             _ => Language::Unknown,
         }
     }
@@ -336,6 +340,7 @@ impl Language {
             "kotlin" => Language::Kotlin,
             "scala" => Language::Scala,
             "groovy" => Language::Groovy,
+            "bash" | "shell" | "sh" => Language::Bash,
             _ => Language::Unknown,
         }
     }
@@ -359,9 +364,68 @@ impl Language {
             Language::Kotlin => "kotlin",
             Language::Scala => "scala",
             Language::Groovy => "groovy",
+            Language::Bash => "bash",
             Language::Unknown => "unknown",
         }
     }
+
+    /// The language of a script's `#!` line (`#!/bin/sh`,
+    /// `#!/usr/bin/env bash`, `#!/usr/bin/env -S python3 -u`, …), as
+    /// Emacs's `interpreter-mode-alist` reads it. `env`, its flags and its
+    /// `VAR=x` assignments are skipped; a version suffix on the interpreter
+    /// (`python3.12`, `node20`) is ignored.
+    pub fn from_shebang(line: &str) -> Self {
+        Self::from_interpreter(shebang_interpreter(line).unwrap_or(""))
+    }
+
+    /// The language an interpreter, named as in a `#!` line, runs.
+    pub fn from_interpreter(program: &str) -> Self {
+        let name = program.trim_end_matches(|c: char| c.is_ascii_digit() || c == '.');
+        match name {
+            "sh" | "bash" | "zsh" | "dash" | "ksh" | "mksh" | "ash" => Language::Bash,
+            "python" | "pypy" => Language::Python,
+            "node" | "nodejs" => Language::JavaScript,
+            "ruby" => Language::Ruby,
+            _ => Language::Unknown,
+        }
+    }
+
+    /// An extension files of this language carry, for checking a file found
+    /// by its `#!` line against an extension allow-list.
+    pub fn extension(&self) -> Option<&'static str> {
+        Some(match self {
+            Language::Rust => "rs",
+            Language::TypeScript => "ts",
+            Language::Tsx => "tsx",
+            Language::JavaScript => "js",
+            Language::Jsx => "jsx",
+            Language::Python => "py",
+            Language::Go => "go",
+            Language::Java => "java",
+            Language::C => "c",
+            Language::Cpp => "cpp",
+            Language::CSharp => "cs",
+            Language::Php => "php",
+            Language::Ruby => "rb",
+            Language::Swift => "swift",
+            Language::Kotlin => "kt",
+            Language::Scala => "scala",
+            Language::Groovy => "groovy",
+            Language::Bash => "sh",
+            Language::Unknown => return None,
+        })
+    }
+}
+
+/// The interpreter a `#!` line runs, without its directory: `bash` for
+/// `#!/usr/bin/env -S bash -eu`. `None` when `line` isn't a `#!` line.
+pub fn shebang_interpreter(line: &str) -> Option<&str> {
+    let mut words = line.strip_prefix("#!")?.split_whitespace();
+    let program = words.next()?.rsplit('/').next()?;
+    if program == "env" {
+        return words.find(|w| !w.starts_with('-') && !w.contains('='));
+    }
+    Some(program)
 }
 
 /// A location in source code
@@ -810,6 +874,40 @@ mod tests {
         assert_eq!(Language::from_extension("RS"), Language::Rust);
         assert_eq!(Language::from_extension("Ts"), Language::TypeScript);
         assert_eq!(Language::from_extension("PY"), Language::Python);
+    }
+
+    #[test]
+    fn shell_scripts_are_bash() {
+        for ext in ["sh", "bash", "zsh", "ksh"] {
+            assert_eq!(Language::from_extension(ext), Language::Bash, "{ext}");
+        }
+        assert_eq!(Language::parse("shell"), Language::Bash);
+        assert_eq!(Language::parse(Language::Bash.as_str()), Language::Bash);
+    }
+
+    #[test]
+    fn scripts_are_found_by_their_shebang() {
+        let cases = [
+            ("#!/bin/sh", Language::Bash),
+            ("#!/bin/bash -e", Language::Bash),
+            ("#!/usr/bin/env zsh", Language::Bash),
+            ("#!/usr/bin/env -S bash -eu", Language::Bash),
+            ("#! /usr/bin/env python3.12", Language::Python),
+            ("#!/usr/bin/env FOO=1 node", Language::JavaScript),
+            ("#!/usr/bin/ruby", Language::Ruby),
+            ("#!/usr/bin/env perl", Language::Unknown),
+            ("#!/usr/bin/env", Language::Unknown),
+            ("echo hi", Language::Unknown),
+            ("", Language::Unknown),
+        ];
+        for (line, want) in cases {
+            assert_eq!(Language::from_shebang(line), want, "{line}");
+        }
+        assert_eq!(
+            shebang_interpreter("#!/usr/bin/env -S bash -eu"),
+            Some("bash")
+        );
+        assert_eq!(shebang_interpreter("echo hi"), None);
     }
 
     #[test]
