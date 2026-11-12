@@ -57,7 +57,7 @@ tree-sitter-groovy = "0.1.2"
 tree-sitter-ruby = "0.23"
 
 # Database
-rusqlite = { version = "0.41", features = ["bundled"], optional = true }
+rusqlite = { version = "0.42", features = ["bundled"], optional = true }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
