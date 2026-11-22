@@ -10,7 +10,12 @@
 # Fail on anything with a filed advisory. Add an `ignore = ["RUSTSEC-..."]`
 # entry with a comment when a finding is genuinely not exploitable here.
 yanked = "deny"
-ignore = []
+ignore = [
+  # chrono is unmaintained (all versions); it arrives only transitively via
+  # rmcp and schemars, with no maintained release to move to. Not a
+  # vulnerability. Drop this once rmcp/schemars switch to jiff or time.
+  { id = "RUSTSEC-2026-0543", reason = "transitive via rmcp/schemars; unmaintained, not vulnerable" },
+]
 
 [licenses]
 # symgraph ships MIT. These are the permissive licenses compatible with
