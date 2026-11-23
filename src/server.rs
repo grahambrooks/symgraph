@@ -86,22 +86,22 @@ pub async fn start_http(cfg: HttpConfig) -> Result<()> {
     let (project_root, db) = initialize_server_database(cfg.in_memory)?;
     info!("Project root: {}", project_root);
 
-    // Wrap database in Arc for sharing across HTTP sessions
-    let db: symgraph::mcp::SharedDatabase = Arc::new(std::sync::Mutex::new(db));
-    // One reindex guard for the whole server, not one per session — sessions
-    // share the database, so they must share the flag that protects it.
-    let is_reindexing = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // One set of roots for the whole server, not one per session: sessions
+    // share the indexes, so they must share the reindex guards that protect
+    // them. Confined to the server's root, since HTTP may face other users.
+    let roots = Arc::new(
+        symgraph::mcp::roots::Roots::new(
+            project_root,
+            Arc::new(std::sync::Mutex::new(db)),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        )
+        .confined(),
+    );
     let cancellation_token = tokio_util::sync::CancellationToken::new();
 
-    // Create HTTP service - each session gets a handler with shared database
+    // Create HTTP service - each session gets a handler over the shared roots
     let service = StreamableHttpService::new(
-        move || {
-            Ok(SymgraphHandler::new_shared(
-                db.clone(),
-                project_root.clone(),
-                is_reindexing.clone(),
-            ))
-        },
+        move || Ok(SymgraphHandler::new_shared(roots.clone())),
         LocalSessionManager::default().into(),
         {
             let mut config = StreamableHttpServerConfig::default();

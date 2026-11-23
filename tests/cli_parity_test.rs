@@ -125,6 +125,7 @@ fn cli_search_matches_the_handler() {
             semantic: None,
             limit: None,
             format: Some("json".to_string()),
+            root: None,
         },
     )
     .unwrap();
@@ -158,6 +159,7 @@ fn cli_context_matches_the_handler() {
             task: "engine settings".to_string(),
             limit: None,
             format: Some("json".to_string()),
+            root: None,
         },
     )
     .unwrap();
@@ -205,6 +207,7 @@ fn cli_unused_matches_the_handler() {
             offset: None,
             ignore_test_callers: None,
             format: Some("json".to_string()),
+            root: None,
         },
     )
     .unwrap();

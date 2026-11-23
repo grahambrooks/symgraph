@@ -211,6 +211,21 @@ keeps its mirrors at `origin/HEAD`.
 
 ## MCP Tools
 
+Every tool takes an optional `root`: the repository to answer for, as an
+absolute path or relative to the server's root (`"emx"`). A file or
+directory inside a repository means that repository's git root. Without
+it, the server's own root is used, unless that is a workspace of
+repositories rather than one project, which is refused with the list of
+repositories to pass instead. One server can so answer for every
+repository in a workspace; over HTTP, roots are confined to the server's
+root.
+
+The first query against a root brings its index up to date: a full build
+when it is empty or from an older version, else an incremental pass over
+changed files (a fraction of a second on a current index). `symgraph-status`
+reports the root and what that pass did. `SYMGRAPH_AUTO_INDEX=0` turns it
+off.
+
 ### Core Tools
 
 | Tool                 | Description                                       |
@@ -442,6 +457,7 @@ Then point your MCP client at `http://localhost:8080/mcp`.
 | `SYMGRAPH_DB`        | Explicit index database path (highest priority) | —               |
 | `SYMGRAPH_STORAGE`   | Index location strategy: `git` / `cache` / `local` | auto         |
 | `SYMGRAPH_IN_MEMORY` | `1` ⇒ ephemeral in-memory index (no disk writes) | off            |
+| `SYMGRAPH_AUTO_INDEX`| `0` ⇒ the server doesn't index a root on its first query | on       |
 | `SYMGRAPH_AUTH_TOKEN`| Bearer token for HTTP `/mcp`                  | —                 |
 
 ### Index Storage

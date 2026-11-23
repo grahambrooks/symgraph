@@ -731,7 +731,8 @@ fn print_usage() {
          ENVIRONMENT:\n\
          \x20   SYMGRAPH_ROOT           Project root directory (default: cwd)\n\
          \x20   SYMGRAPH_DB             Explicit index database path\n\
-         \x20   SYMGRAPH_STORAGE        Index location strategy: git | cache | local\n\n\
+         \x20   SYMGRAPH_STORAGE        Index location strategy: git | cache | local\n\
+         \x20   SYMGRAPH_AUTO_INDEX     0: the server doesn't index a root on its first query\n\n\
          EXAMPLES:\n\
          \x20   {BIN} index                       # incremental index of the current project\n\
          \x20   {BIN} reindex ~/projects/myapp    # full rebuild of a specific project\n\
@@ -869,6 +870,9 @@ fn print_man_page() {
     out.push_str(".TP\n.B SYMGRAPH_ROOT\nProject root directory (default: current directory).\n");
     out.push_str(".TP\n.B SYMGRAPH_DB\nExplicit index database path.\n");
     out.push_str(".TP\n.B SYMGRAPH_STORAGE\nIndex location strategy: git | cache | local.\n");
+    out.push_str(
+        ".TP\n.B SYMGRAPH_AUTO_INDEX\n0: the server doesn't index a root on its first query.\n",
+    );
     out.push_str(".SH EXAMPLES\n");
     out.push_str(&format!(
         ".TP\n.B {BIN} index\nIncrementally index the current project.\n"

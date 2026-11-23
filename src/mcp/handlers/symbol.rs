@@ -93,6 +93,7 @@ mod security_tests {
             qualified_name: None,
             context_lines: None,
             format: None,
+            root: None,
         };
         let err = handle_definition(&db, tmp.path().to_str().unwrap(), &req).unwrap_err();
         assert!(

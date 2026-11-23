@@ -121,12 +121,14 @@ fn symbol(name: &str) -> SymbolRequest {
         limit: None,
         offset: None,
         format: None,
+        root: None,
     }
 }
 
 fn json(name: &str) -> SymbolRequest {
     SymbolRequest {
         format: Some("json".to_string()),
+        root: None,
         ..symbol(name)
     }
 }
@@ -197,6 +199,7 @@ fn file_lists_symbols_by_forward_slash_path() {
     let req = FileRequest {
         path: "src/engine.rs".to_string(),
         format: None,
+        root: None,
     };
     let out = handlers::file::handle_file(&db, &req).unwrap();
     assert!(out.contains("Engine"), "output was:\n{out}");
@@ -209,6 +212,7 @@ fn file_rejects_a_traversal_path() {
     let req = FileRequest {
         path: "../../etc/passwd".to_string(),
         format: None,
+        root: None,
     };
     let err = handlers::file::handle_file(&db, &req).unwrap_err();
     assert!(err.contains("path") || err.contains("unsafe"), "got: {err}");
@@ -229,6 +233,7 @@ fn unused_finds_dead_code_and_pages_it() {
             offset: None,
             ignore_test_callers: None,
             format: Some("json".to_string()),
+            root: None,
         },
     )
     .unwrap();
@@ -246,6 +251,7 @@ fn path_finds_a_call_chain() {
         from: "slow_pass".to_string(),
         to: "quick_pass".to_string(),
         format: None,
+        root: None,
     };
     let out = handlers::path::handle_path(&db, &req).unwrap();
     assert!(out.contains("quick_pass"), "output was:\n{out}");
@@ -258,6 +264,7 @@ fn path_between_unconnected_symbols_reports_no_path() {
         from: "never_called_anywhere".to_string(),
         to: "summarize".to_string(),
         format: None,
+        root: None,
     };
     let out = handlers::path::handle_path(&db, &req).unwrap();
     assert!(out.contains("No call path"), "output was:\n{out}");
@@ -272,6 +279,7 @@ fn graph_req(format: Option<&str>) -> ModuleGraphRequest {
         days: None,
         include_tests: None,
         format: format.map(str::to_string),
+        root: None,
         limit: None,
     }
 }
@@ -311,6 +319,7 @@ fn god_struct_ranks_the_struct_with_public_fields() {
         days: None,
         include_tests: None,
         format: Some("json".to_string()),
+        root: None,
         limit: Some(10),
     };
     let v = parse(&handlers::god_struct::handle_god_struct(&db, &root, &req).unwrap());
@@ -325,6 +334,7 @@ fn dispatch_sites_finds_where_an_enum_is_matched() {
     let req = DispatchSitesRequest {
         symbol: "Mode".to_string(),
         format: None,
+        root: None,
     };
     let out = handlers::dispatch_sites::handle_dispatch_sites(&db, &req).unwrap();
     // Either it names the matching file, or it says plainly that it found none.
@@ -359,6 +369,7 @@ fn definition_returns_source_for_a_symbol() {
         qualified_name: None,
         context_lines: Some(1),
         format: None,
+        root: None,
     };
     let out = handlers::symbol::handle_definition(&db, &root, &req).unwrap();
     assert!(out.contains("summarize"), "output was:\n{out}");

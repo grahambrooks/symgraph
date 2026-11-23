@@ -98,6 +98,7 @@ fn symbol_req(q: &SymbolQuery, fmt: OutputFormat) -> SymbolRequest {
         limit: q.limit,
         offset: q.offset,
         format: fmt.request_format(),
+        root: None,
     }
 }
 
@@ -137,6 +138,7 @@ pub fn search(
             semantic: if semantic { Some(true) } else { None },
             limit,
             format: fmt.request_format(),
+            root: None,
         },
     ))
 }
@@ -150,6 +152,7 @@ pub fn context(path: &str, task: &str, limit: Option<u32>, fmt: OutputFormat) ->
             task: task.to_string(),
             limit,
             format: fmt.request_format(),
+            root: None,
         },
     ))
 }
@@ -215,6 +218,7 @@ pub fn unused(
             offset,
             ignore_test_callers: flag_opt(ignore_test_callers),
             format: fmt.request_format(),
+            root: None,
         },
     ))
 }
@@ -226,6 +230,7 @@ pub fn file(path: &str, file_path: &str, fmt: OutputFormat) -> Result<()> {
         &FileRequest {
             path: file_path.to_string(),
             format: fmt.request_format(),
+            root: None,
         },
     ))
 }
@@ -238,6 +243,7 @@ pub fn path_between(path: &str, from: &str, to: &str, fmt: OutputFormat) -> Resu
             from: from.to_string(),
             to: to.to_string(),
             format: fmt.request_format(),
+            root: None,
         },
     ))
 }
@@ -258,6 +264,7 @@ pub fn definition(
             qualified_name: q.qualified_name.clone(),
             context_lines,
             format: fmt.request_format(),
+            root: None,
         },
     ))
 }
@@ -279,6 +286,7 @@ pub fn impact(
         churn: churn_opt(churn),
         days,
         format: fmt.request_format(),
+        root: None,
     };
     emit(handlers::graph::handle_impact(&db, &root, &req))
 }
@@ -301,6 +309,7 @@ pub fn diff_impact(
             end_line,
             git_ref,
             format: fmt.request_format(),
+            root: None,
         },
     ))
 }
@@ -317,6 +326,7 @@ pub fn reindex_files(path: &str, files: Vec<String>, fmt: OutputFormat) -> Resul
         &ReindexRequest {
             files: Some(files),
             format: fmt.request_format(),
+            root: None,
         },
     ))
 }
@@ -333,6 +343,7 @@ pub fn blame(path: &str, q: &SymbolQuery, fmt: OutputFormat) -> Result<()> {
             file: q.file.clone(),
             qualified_name: q.qualified_name.clone(),
             format: fmt.request_format(),
+            root: None,
         },
     ))
 }
@@ -353,6 +364,7 @@ pub fn churn(
             days,
             limit,
             format: fmt.request_format(),
+            root: None,
         },
     ))
 }
@@ -375,6 +387,7 @@ pub fn module_graph(
         days,
         include_tests: flag_opt(include_tests),
         format: fmt.request_format(),
+        root: None,
         limit,
     };
     emit(handlers::module_graph::handle_module_graph(
@@ -398,6 +411,7 @@ pub fn coupling_score(
         days,
         include_tests: flag_opt(include_tests),
         format: fmt.request_format(),
+        root: None,
         limit,
     };
     emit(handlers::module_graph::handle_coupling_score(
@@ -419,6 +433,7 @@ pub fn god_struct(
         days,
         include_tests: flag_opt(include_tests),
         format: fmt.request_format(),
+        root: None,
         limit,
     };
     emit(handlers::god_struct::handle_god_struct(&db, &root, &req))
@@ -431,6 +446,7 @@ pub fn dispatch_sites(path: &str, symbol: &str, fmt: OutputFormat) -> Result<()>
         &DispatchSitesRequest {
             symbol: symbol.to_string(),
             format: fmt.request_format(),
+            root: None,
         },
     ))
 }

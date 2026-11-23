@@ -124,6 +124,7 @@ mod tests {
             &ReindexRequest {
                 files: None,
                 format: None,
+                root: None,
             },
         )
         .unwrap();
@@ -156,6 +157,7 @@ mod tests {
             &ReindexRequest {
                 files: Some(vec!["src/a.rs".to_string()]),
                 format: None,
+                root: None,
             },
         )
         .unwrap();

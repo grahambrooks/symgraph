@@ -26,6 +26,9 @@
 
 /// Tool handlers, shared by the MCP server and the CLI (`cli::tools`).
 pub mod handlers;
+/// One index per repository root, chosen per call.
+#[cfg(feature = "server")]
+pub mod roots;
 mod types;
 
 pub use types::*;
@@ -71,41 +74,32 @@ pub type SharedDatabase = Arc<Mutex<Database>>;
 pub struct SymgraphHandler {
     #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
-    db: SharedDatabase,
-    project_root: String,
-    /// Flag indicating whether a background reindex is currently in progress.
-    is_reindexing: Arc<AtomicBool>,
+    /// The indexes this server answers from, one per root, shared by every
+    /// session of an HTTP server.
+    roots: Arc<roots::Roots>,
 }
 
 #[cfg(feature = "server")]
 #[tool_router]
 impl SymgraphHandler {
     pub fn new(db: Database, project_root: String) -> Self {
-        Self {
-            tool_router: Self::tool_router(),
-            db: Arc::new(Mutex::new(db)),
+        Self::new_shared(Arc::new(roots::Roots::new(
             project_root,
-            is_reindexing: Arc::new(AtomicBool::new(false)),
-        }
+            Arc::new(Mutex::new(db)),
+            Arc::new(AtomicBool::new(false)),
+        )))
     }
 
-    /// Create a handler over a pre-wrapped database shared with other sessions.
+    /// Create a handler over roots shared with other sessions.
     ///
-    /// `is_reindexing` is passed in rather than created here: the HTTP
-    /// transport builds a fresh handler per session over the *same* database,
-    /// so a per-handler flag would let each session start its own rebuild and
-    /// pile up on the write lock. The guard is only a guard when every handler
-    /// sharing a database shares the flag.
-    pub fn new_shared(
-        db: SharedDatabase,
-        project_root: String,
-        is_reindexing: Arc<AtomicBool>,
-    ) -> Self {
+    /// The HTTP transport builds a fresh handler per session over the *same*
+    /// roots, so every session sees the same indexes and the same reindex
+    /// guards: a per-session guard would let each session start its own
+    /// rebuild and pile up on the write lock.
+    pub fn new_shared(roots: Arc<roots::Roots>) -> Self {
         Self {
             tool_router: Self::tool_router(),
-            db,
-            project_root,
-            is_reindexing,
+            roots,
         }
     }
 
@@ -119,16 +113,29 @@ impl SymgraphHandler {
     ///
     /// The lock is taken *inside* the closure so it is acquired and released
     /// on the blocking thread, never held across an await point.
-    async fn blocking_db<F>(&self, f: F) -> Result<String, String>
+    async fn blocking_db<F>(&self, root: Option<String>, f: F) -> Result<String, String>
     where
-        F: FnOnce(&Database) -> Result<String, String> + Send + 'static,
+        F: FnOnce(&Database, &str) -> Result<String, String> + Send + 'static,
     {
-        let db = Arc::clone(&self.db);
+        self.blocking_entry(root, move |entry, db| f(db, &entry.root))
+            .await
+    }
+
+    /// As [`Self::blocking_db`], with the root's whole entry (its reindex
+    /// guard and first-use note) as well as its database. The root is
+    /// resolved, and indexed on first use, on the blocking pool too.
+    async fn blocking_entry<F>(&self, root: Option<String>, f: F) -> Result<String, String>
+    where
+        F: FnOnce(&roots::RootIndex, &Database) -> Result<String, String> + Send + 'static,
+    {
+        let roots = Arc::clone(&self.roots);
         tokio::task::spawn_blocking(move || {
-            let guard = db
+            let entry = roots.open(root.as_deref())?;
+            let guard = entry
+                .db
                 .lock()
                 .map_err(|e| format!("database lock poisoned: {}", e))?;
-            f(&guard)
+            f(&entry, &guard)
         })
         .await
         .map_err(|e| format!("tool task failed: {}", e))?
@@ -153,9 +160,10 @@ impl SymgraphHandler {
         &self,
         Parameters(req): Parameters<ContextRequest>,
     ) -> Result<String, String> {
-        let project_root = self.project_root.clone();
-        self.blocking_db(move |db| handlers::context::handle_context(db, &project_root, &req))
-            .await
+        self.blocking_db(req.root.clone(), move |db, project_root| {
+            handlers::context::handle_context(db, project_root, &req)
+        })
+        .await
     }
 
     /// Quick symbol search by name
@@ -167,8 +175,10 @@ impl SymgraphHandler {
         &self,
         Parameters(req): Parameters<SearchRequest>,
     ) -> Result<String, String> {
-        self.blocking_db(move |db| handlers::search::handle_search(db, &req))
-            .await
+        self.blocking_db(req.root.clone(), move |db, _root| {
+            handlers::search::handle_search(db, &req)
+        })
+        .await
     }
 
     /// Find all callers of a symbol
@@ -180,8 +190,10 @@ impl SymgraphHandler {
         &self,
         Parameters(req): Parameters<SymbolRequest>,
     ) -> Result<String, String> {
-        self.blocking_db(move |db| handlers::graph::handle_callers(db, &req))
-            .await
+        self.blocking_db(req.root.clone(), move |db, _root| {
+            handlers::graph::handle_callers(db, &req)
+        })
+        .await
     }
 
     /// Find all callees of a symbol
@@ -193,8 +205,10 @@ impl SymgraphHandler {
         &self,
         Parameters(req): Parameters<SymbolRequest>,
     ) -> Result<String, String> {
-        self.blocking_db(move |db| handlers::graph::handle_callees(db, &req))
-            .await
+        self.blocking_db(req.root.clone(), move |db, _root| {
+            handlers::graph::handle_callees(db, &req)
+        })
+        .await
     }
 
     /// Analyze the impact of changing a symbol
@@ -206,9 +220,10 @@ impl SymgraphHandler {
         &self,
         Parameters(req): Parameters<ImpactRequest>,
     ) -> Result<String, String> {
-        let project_root = self.project_root.clone();
-        self.blocking_db(move |db| handlers::graph::handle_impact(db, &project_root, &req))
-            .await
+        self.blocking_db(req.root.clone(), move |db, project_root| {
+            handlers::graph::handle_impact(db, project_root, &req)
+        })
+        .await
     }
 
     /// Get the full source code definition of a symbol
@@ -220,9 +235,10 @@ impl SymgraphHandler {
         &self,
         Parameters(req): Parameters<DefinitionRequest>,
     ) -> Result<String, String> {
-        let project_root = self.project_root.clone();
-        self.blocking_db(move |db| handlers::symbol::handle_definition(db, &project_root, &req))
-            .await
+        self.blocking_db(req.root.clone(), move |db, project_root| {
+            handlers::symbol::handle_definition(db, project_root, &req)
+        })
+        .await
     }
 
     /// List all symbols in a specific file
@@ -234,8 +250,10 @@ impl SymgraphHandler {
         &self,
         Parameters(req): Parameters<FileRequest>,
     ) -> Result<String, String> {
-        self.blocking_db(move |db| handlers::file::handle_file(db, &req))
-            .await
+        self.blocking_db(req.root.clone(), move |db, _root| {
+            handlers::file::handle_file(db, &req)
+        })
+        .await
     }
 
     /// Find all references to a symbol
@@ -247,8 +265,10 @@ impl SymgraphHandler {
         &self,
         Parameters(req): Parameters<SymbolRequest>,
     ) -> Result<String, String> {
-        self.blocking_db(move |db| handlers::symbol::handle_references(db, &req))
-            .await
+        self.blocking_db(req.root.clone(), move |db, _root| {
+            handlers::symbol::handle_references(db, &req)
+        })
+        .await
     }
 
     /// Trigger background reindexing (runs in background, returns immediately)
@@ -260,8 +280,11 @@ impl SymgraphHandler {
         &self,
         Parameters(req): Parameters<ReindexRequest>,
     ) -> Result<String, String> {
-        // If a reindex is already running, refuse to start another one.
-        if self
+        // Resolving and opening touch only the filesystem; the rebuild
+        // itself runs in the background. No first-use pass: this is one.
+        let entry = self.roots.entry(req.root.as_deref())?;
+        // If a reindex of this root is already running, refuse another.
+        if entry
             .is_reindexing
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
             .is_err()
@@ -269,9 +292,9 @@ impl SymgraphHandler {
             return Ok("Reindex already in progress. Use symgraph-status to check.".to_string());
         }
 
-        let db = Arc::clone(&self.db);
-        let project_root = self.project_root.clone();
-        let is_reindexing = Arc::clone(&self.is_reindexing);
+        let db = Arc::clone(&entry.db);
+        let project_root = entry.root.clone();
+        let is_reindexing = Arc::clone(&entry.is_reindexing);
 
         let file_count_hint = req.files.as_ref().map(|f| f.len());
 
@@ -310,8 +333,10 @@ impl SymgraphHandler {
         &self,
         Parameters(req): Parameters<SymbolRequest>,
     ) -> Result<String, String> {
-        self.blocking_db(move |db| handlers::symbol::handle_node(db, &req))
-            .await
+        self.blocking_db(req.root.clone(), move |db, _root| {
+            handlers::symbol::handle_node(db, &req)
+        })
+        .await
     }
 
     /// Get index statistics
@@ -323,14 +348,20 @@ impl SymgraphHandler {
         &self,
         Parameters(req): Parameters<FormatRequest>,
     ) -> Result<String, String> {
-        let reindexing = self.is_reindexing.load(Ordering::SeqCst);
         let json = crate::mcp::types::wants_json(&req.format);
-        self.blocking_db(move |db| {
+        self.blocking_entry(req.root.clone(), move |entry, db| {
             let mut output = handlers::status::handle_status(db, req.format.clone())?;
-            // The in-progress note is a markdown affordance; the JSON result
-            // has its own shape and must stay parseable.
-            if reindexing && !json {
-                output.push_str("\n**Reindex:** In progress\n");
+            // The root, first-use and in-progress notes are a markdown
+            // affordance; the JSON result has its own shape and must stay
+            // parseable.
+            if !json {
+                output.push_str(&format!("\n**Root:** {}\n", entry.root));
+                if let Some(note) = entry.prepared() {
+                    output.push_str(&format!("**Index:** {note}\n"));
+                }
+                if entry.is_reindexing.load(Ordering::SeqCst) {
+                    output.push_str("**Reindex:** In progress\n");
+                }
             }
             Ok(output)
         })
@@ -346,8 +377,10 @@ impl SymgraphHandler {
         &self,
         Parameters(req): Parameters<SymbolRequest>,
     ) -> Result<String, String> {
-        self.blocking_db(move |db| handlers::hierarchy::handle_hierarchy(db, &req))
-            .await
+        self.blocking_db(req.root.clone(), move |db, _root| {
+            handlers::hierarchy::handle_hierarchy(db, &req)
+        })
+        .await
     }
 
     /// Find call path between two symbols
@@ -359,8 +392,10 @@ impl SymgraphHandler {
         &self,
         Parameters(req): Parameters<PathRequest>,
     ) -> Result<String, String> {
-        self.blocking_db(move |db| handlers::path::handle_path(db, &req))
-            .await
+        self.blocking_db(req.root.clone(), move |db, _root| {
+            handlers::path::handle_path(db, &req)
+        })
+        .await
     }
 
     /// Find unused/dead code
@@ -372,8 +407,10 @@ impl SymgraphHandler {
         &self,
         Parameters(req): Parameters<UnusedRequest>,
     ) -> Result<String, String> {
-        self.blocking_db(move |db| handlers::unused::handle_unused(db, &req))
-            .await
+        self.blocking_db(req.root.clone(), move |db, _root| {
+            handlers::unused::handle_unused(db, &req)
+        })
+        .await
     }
 
     /// Find implementations of an interface/trait
@@ -385,8 +422,10 @@ impl SymgraphHandler {
         &self,
         Parameters(req): Parameters<SymbolRequest>,
     ) -> Result<String, String> {
-        self.blocking_db(move |db| handlers::implementations::handle_implementations(db, &req))
-            .await
+        self.blocking_db(req.root.clone(), move |db, _root| {
+            handlers::implementations::handle_implementations(db, &req)
+        })
+        .await
     }
 
     /// Analyze impact of code changes
@@ -398,9 +437,8 @@ impl SymgraphHandler {
         &self,
         Parameters(req): Parameters<DiffImpactRequest>,
     ) -> Result<String, String> {
-        let project_root = self.project_root.clone();
-        self.blocking_db(move |db| {
-            handlers::diff_impact::handle_diff_impact(db, &project_root, &req)
+        self.blocking_db(req.root.clone(), move |db, project_root| {
+            handlers::diff_impact::handle_diff_impact(db, project_root, &req)
         })
         .await
     }
@@ -414,9 +452,10 @@ impl SymgraphHandler {
         &self,
         Parameters(req): Parameters<BlameRequest>,
     ) -> Result<String, String> {
-        let project_root = self.project_root.clone();
-        self.blocking_db(move |db| handlers::blame::handle_blame(db, &project_root, &req))
-            .await
+        self.blocking_db(req.root.clone(), move |db, project_root| {
+            handlers::blame::handle_blame(db, project_root, &req)
+        })
+        .await
     }
 
     /// Git churn / change-frequency analysis
@@ -428,11 +467,16 @@ impl SymgraphHandler {
         &self,
         Parameters(req): Parameters<ChurnRequest>,
     ) -> Result<String, String> {
-        let project_root = self.project_root.clone();
+        let roots = Arc::clone(&self.roots);
+        let root = req.root.clone();
         // No database access, but it still shells out to git — which is
         // exactly the kind of multi-second blocking call the reactor must not
         // be asked to wait on.
-        Self::blocking(move || handlers::churn::handle_churn(&project_root, &req)).await
+        Self::blocking(move || {
+            let project_root = roots.resolve(root.as_deref())?;
+            handlers::churn::handle_churn(&project_root, &req)
+        })
+        .await
     }
 
     /// Module dependency graph: fan-in/out and cycles at a chosen boundary
@@ -444,9 +488,8 @@ impl SymgraphHandler {
         &self,
         Parameters(req): Parameters<ModuleGraphRequest>,
     ) -> Result<String, String> {
-        let project_root = self.project_root.clone();
-        self.blocking_db(move |db| {
-            handlers::module_graph::handle_module_graph(db, &project_root, &req)
+        self.blocking_db(req.root.clone(), move |db, project_root| {
+            handlers::module_graph::handle_module_graph(db, project_root, &req)
         })
         .await
     }
@@ -460,9 +503,8 @@ impl SymgraphHandler {
         &self,
         Parameters(req): Parameters<ModuleGraphRequest>,
     ) -> Result<String, String> {
-        let project_root = self.project_root.clone();
-        self.blocking_db(move |db| {
-            handlers::module_graph::handle_coupling_score(db, &project_root, &req)
+        self.blocking_db(req.root.clone(), move |db, project_root| {
+            handlers::module_graph::handle_coupling_score(db, project_root, &req)
         })
         .await
     }
@@ -476,9 +518,10 @@ impl SymgraphHandler {
         &self,
         Parameters(req): Parameters<GodStructRequest>,
     ) -> Result<String, String> {
-        let project_root = self.project_root.clone();
-        self.blocking_db(move |db| handlers::god_struct::handle_god_struct(db, &project_root, &req))
-            .await
+        self.blocking_db(req.root.clone(), move |db, project_root| {
+            handlers::god_struct::handle_god_struct(db, project_root, &req)
+        })
+        .await
     }
 
     /// Dispatch sites: files that match/switch on an enum's members
@@ -490,8 +533,10 @@ impl SymgraphHandler {
         &self,
         Parameters(req): Parameters<DispatchSitesRequest>,
     ) -> Result<String, String> {
-        self.blocking_db(move |db| handlers::dispatch_sites::handle_dispatch_sites(db, &req))
-            .await
+        self.blocking_db(req.root.clone(), move |db, _root| {
+            handlers::dispatch_sites::handle_dispatch_sites(db, &req)
+        })
+        .await
     }
 }
 
@@ -533,6 +578,11 @@ impl ServerHandler for SymgraphHandler {
         let mut info = ServerConfig::new(ServerCapabilities::builder().enable_tools().build());
         info.instructions = Some(
             "symgraph provides semantic code intelligence for exploring codebases. \
+            Every tool takes an optional `root`: the repository to query, absolute or relative \
+            to the server's root (e.g. \"emx\"); pass it whenever the session spans several \
+            repositories or you are working outside the server's root. The first query against \
+            a root indexes it (or brings its index up to date), so no separate index step is \
+            needed; symgraph-status shows the root and what that pass did. \
             Use symgraph-context to build task-focused context, symgraph-search for quick lookups, \
             symgraph-callers/callees/impact for understanding code relationships, \
             symgraph-definition to view source code, symgraph-file to list symbols in a file, \
@@ -556,26 +606,31 @@ impl ServerHandler for SymgraphHandler {
 mod tests {
     use super::*;
 
-    /// The HTTP transport builds one handler per session over a shared
-    /// database. If each got its own `is_reindexing`, the "already in
-    /// progress" guard would be invisible to every other session and two
-    /// clients could kick off concurrent full rebuilds.
+    fn in_memory_roots() -> Arc<roots::Roots> {
+        Arc::new(roots::Roots::new(
+            ".".to_string(),
+            Arc::new(Mutex::new(Database::in_memory().unwrap())),
+            Arc::new(AtomicBool::new(false)),
+        ))
+    }
+
+    /// The HTTP transport builds one handler per session over shared roots.
+    /// If each got its own `is_reindexing`, the "already in progress" guard
+    /// would be invisible to every other session and two clients could kick
+    /// off concurrent full rebuilds.
     #[test]
     fn shared_handlers_share_the_reindex_guard() {
-        let db = Arc::new(Mutex::new(Database::in_memory().unwrap()));
-        let flag = Arc::new(AtomicBool::new(false));
+        let roots = in_memory_roots();
+        let session_a = SymgraphHandler::new_shared(roots.clone());
+        let session_b = SymgraphHandler::new_shared(roots.clone());
 
-        let session_a = SymgraphHandler::new_shared(db.clone(), ".".to_string(), flag.clone());
-        let session_b = SymgraphHandler::new_shared(db.clone(), ".".to_string(), flag.clone());
+        let a = session_a.roots.entry(None).unwrap();
+        let b = session_b.roots.entry(None).unwrap();
+        assert!(Arc::ptr_eq(&a.is_reindexing, &b.is_reindexing));
 
-        assert!(Arc::ptr_eq(
-            &session_a.is_reindexing,
-            &session_b.is_reindexing
-        ));
-
-        session_a.is_reindexing.store(true, Ordering::SeqCst);
+        a.is_reindexing.store(true, Ordering::SeqCst);
         assert!(
-            session_b.is_reindexing.load(Ordering::SeqCst),
+            b.is_reindexing.load(Ordering::SeqCst),
             "a reindex started in one session must be visible to the others"
         );
     }
@@ -585,7 +640,8 @@ mod tests {
     #[test]
     fn owned_handler_gets_its_own_guard() {
         let handler = SymgraphHandler::new(Database::in_memory().unwrap(), ".".to_string());
-        assert!(!handler.is_reindexing.load(Ordering::SeqCst));
+        let entry = handler.roots.entry(None).unwrap();
+        assert!(!entry.is_reindexing.load(Ordering::SeqCst));
     }
 
     /// A failing tool must reach the client as an MCP error, not as a
@@ -633,8 +689,8 @@ mod tests {
             .enable_all()
             .build()
             .unwrap();
-        let result =
-            runtime.block_on(handler.blocking_db(|_db| Err("something broke".to_string())));
+        let result = runtime
+            .block_on(handler.blocking_db(None, |_db, _root| Err("something broke".to_string())));
         assert_eq!(result, Err("something broke".to_string()));
     }
 }

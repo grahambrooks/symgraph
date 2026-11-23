@@ -14,6 +14,11 @@ pub struct ContextRequest {
     pub limit: Option<u32>,
     #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
     pub format: Option<String>,
+    #[serde(default)]
+    #[schemars(
+        description = "Optional: the repository to query, as an absolute path or a path relative to the server root (e.g. `emx`). Defaults to the server root; a file path inside a repo resolves to the git root above it."
+    )]
+    pub root: Option<String>,
 }
 
 /// Request for search tool
@@ -29,6 +34,11 @@ pub struct SearchRequest {
     pub limit: Option<u32>,
     #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
     pub format: Option<String>,
+    #[serde(default)]
+    #[schemars(
+        description = "Optional: the repository to query, as an absolute path or a path relative to the server root (e.g. `emx`). Defaults to the server root; a file path inside a repo resolves to the git root above it."
+    )]
+    pub root: Option<String>,
 }
 
 /// Request for symbol-based tools (callers, callees, node, references,
@@ -53,6 +63,11 @@ pub struct SymbolRequest {
     pub offset: Option<u32>,
     #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
     pub format: Option<String>,
+    #[serde(default)]
+    #[schemars(
+        description = "Optional: the repository to query, as an absolute path or a path relative to the server root (e.g. `emx`). Defaults to the server root; a file path inside a repo resolves to the git root above it."
+    )]
+    pub root: Option<String>,
 }
 
 /// Request for the impact tool (symbol + coupling-breakdown options)
@@ -74,6 +89,11 @@ pub struct ImpactRequest {
     pub days: Option<u32>,
     #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
     pub format: Option<String>,
+    #[serde(default)]
+    #[schemars(
+        description = "Optional: the repository to query, as an absolute path or a path relative to the server root (e.g. `emx`). Defaults to the server root; a file path inside a repo resolves to the git root above it."
+    )]
+    pub root: Option<String>,
 }
 
 /// Request for file-based tools
@@ -83,6 +103,11 @@ pub struct FileRequest {
     pub path: String,
     #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
     pub format: Option<String>,
+    #[serde(default)]
+    #[schemars(
+        description = "Optional: the repository to query, as an absolute path or a path relative to the server root (e.g. `emx`). Defaults to the server root; a file path inside a repo resolves to the git root above it."
+    )]
+    pub root: Option<String>,
 }
 
 /// Request for definition tool with context options
@@ -100,6 +125,11 @@ pub struct DefinitionRequest {
     pub context_lines: Option<u32>,
     #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
     pub format: Option<String>,
+    #[serde(default)]
+    #[schemars(
+        description = "Optional: the repository to query, as an absolute path or a path relative to the server root (e.g. `emx`). Defaults to the server root; a file path inside a repo resolves to the git root above it."
+    )]
+    pub root: Option<String>,
 }
 
 /// Request carrying only an output format (for parameterless tools like unused).
@@ -111,6 +141,11 @@ pub struct FormatRequest {
     pub offset: Option<u32>,
     #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
     pub format: Option<String>,
+    #[serde(default)]
+    #[schemars(
+        description = "Optional: the repository to query, as an absolute path or a path relative to the server root (e.g. `emx`). Defaults to the server root; a file path inside a repo resolves to the git root above it."
+    )]
+    pub root: Option<String>,
 }
 
 /// Request for the unused-symbol tool.
@@ -129,6 +164,11 @@ pub struct UnusedRequest {
     pub ignore_test_callers: Option<bool>,
     #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
     pub format: Option<String>,
+    #[serde(default)]
+    #[schemars(
+        description = "Optional: the repository to query, as an absolute path or a path relative to the server root (e.g. `emx`). Defaults to the server root; a file path inside a repo resolves to the git root above it."
+    )]
+    pub root: Option<String>,
 }
 
 /// Request for reindex tool
@@ -140,6 +180,11 @@ pub struct ReindexRequest {
     pub files: Option<Vec<String>>,
     #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
     pub format: Option<String>,
+    #[serde(default)]
+    #[schemars(
+        description = "Optional: the repository to query, as an absolute path or a path relative to the server root (e.g. `emx`). Defaults to the server root; a file path inside a repo resolves to the git root above it."
+    )]
+    pub root: Option<String>,
 }
 
 /// Request for call path tool
@@ -151,6 +196,11 @@ pub struct PathRequest {
     pub to: String,
     #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
     pub format: Option<String>,
+    #[serde(default)]
+    #[schemars(
+        description = "Optional: the repository to query, as an absolute path or a path relative to the server root (e.g. `emx`). Defaults to the server root; a file path inside a repo resolves to the git root above it."
+    )]
+    pub root: Option<String>,
 }
 
 /// Request for diff impact tool
@@ -168,6 +218,11 @@ pub struct DiffImpactRequest {
     pub git_ref: Option<String>,
     #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
     pub format: Option<String>,
+    #[serde(default)]
+    #[schemars(
+        description = "Optional: the repository to query, as an absolute path or a path relative to the server root (e.g. `emx`). Defaults to the server root; a file path inside a repo resolves to the git root above it."
+    )]
+    pub root: Option<String>,
 }
 
 /// Request for blame tool
@@ -183,6 +238,11 @@ pub struct BlameRequest {
     pub qualified_name: Option<String>,
     #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
     pub format: Option<String>,
+    #[serde(default)]
+    #[schemars(
+        description = "Optional: the repository to query, as an absolute path or a path relative to the server root (e.g. `emx`). Defaults to the server root; a file path inside a repo resolves to the git root above it."
+    )]
+    pub root: Option<String>,
 }
 
 /// Request for churn tool
@@ -198,6 +258,11 @@ pub struct ChurnRequest {
     pub limit: Option<u32>,
     #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
     pub format: Option<String>,
+    #[serde(default)]
+    #[schemars(
+        description = "Optional: the repository to query, as an absolute path or a path relative to the server root (e.g. `emx`). Defaults to the server root; a file path inside a repo resolves to the git root above it."
+    )]
+    pub root: Option<String>,
 }
 
 /// Request for the module-graph and coupling-score tools.
@@ -219,6 +284,11 @@ pub struct ModuleGraphRequest {
     pub include_tests: Option<bool>,
     #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
     pub format: Option<String>,
+    #[serde(default)]
+    #[schemars(
+        description = "Optional: the repository to query, as an absolute path or a path relative to the server root (e.g. `emx`). Defaults to the server root; a file path inside a repo resolves to the git root above it."
+    )]
+    pub root: Option<String>,
     #[schemars(description = "Max rows to show in markdown output (default: 30)")]
     pub limit: Option<u32>,
 }
@@ -238,6 +308,11 @@ pub struct GodStructRequest {
     pub include_tests: Option<bool>,
     #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
     pub format: Option<String>,
+    #[serde(default)]
+    #[schemars(
+        description = "Optional: the repository to query, as an absolute path or a path relative to the server root (e.g. `emx`). Defaults to the server root; a file path inside a repo resolves to the git root above it."
+    )]
+    pub root: Option<String>,
     #[schemars(description = "Max structs to show (default: 20)")]
     pub limit: Option<u32>,
 }
@@ -249,6 +324,11 @@ pub struct DispatchSitesRequest {
     pub symbol: String,
     #[schemars(description = "Output format: 'markdown' (default) or 'json'")]
     pub format: Option<String>,
+    #[serde(default)]
+    #[schemars(
+        description = "Optional: the repository to query, as an absolute path or a path relative to the server root (e.g. `emx`). Defaults to the server root; a file path inside a repo resolves to the git root above it."
+    )]
+    pub root: Option<String>,
 }
 
 /// Helper: does this format string request JSON output?
