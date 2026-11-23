@@ -498,6 +498,37 @@ impl SymgraphHandler {
 #[cfg(feature = "server")]
 #[tool_handler]
 impl ServerHandler for SymgraphHandler {
+    /// The router's dispatch, inside one telemetry span per tool call
+    /// (`crate::telemetry`): the tool's name and whether it succeeded,
+    /// never its arguments. Inert when telemetry is off.
+    async fn call_tool(
+        &self,
+        request: rmcp::model::CallToolRequestParams,
+        context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::CallToolResponse, rmcp::ErrorData> {
+        let mut span = crate::telemetry::mcp_span(&request.name);
+        let tcc = rmcp::handler::server::tool::ToolCallContext::new(self, request, context);
+        let response = self.tool_router.call(tcc).await;
+        if span.is_recording() {
+            let failed = match &response {
+                Ok(rmcp::model::CallToolResponse::Complete(result)) => {
+                    result.is_error == Some(true)
+                }
+                Ok(_) => false,
+                Err(_) => true,
+            };
+            span.set_bool("success", !failed);
+            if failed {
+                span.fail(if response.is_err() {
+                    "protocol"
+                } else {
+                    "tool"
+                });
+            }
+        }
+        response
+    }
+
     fn get_info(&self) -> ServerConfig {
         let mut info = ServerConfig::new(ServerCapabilities::builder().enable_tools().build());
         info.instructions = Some(

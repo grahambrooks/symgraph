@@ -201,8 +201,24 @@ fn setup_logging(log_file: Option<&std::path::Path>) {
 }
 
 fn main() -> Result<()> {
-    let mut args: Vec<String> = env::args().collect();
+    let args: Vec<String> = env::args().collect();
+    // Telemetry (src/telemetry.rs): off unless the environment or the user
+    // config file names a collector. The MCP server exports off its request
+    // path; a CLI command exports its one span at exit.
+    symgraph::telemetry::init(args.get(1).is_some_and(|a| a == "serve"));
+    symgraph::telemetry::start_command(&args, &all_command_names());
+    let result = run(args);
+    symgraph::telemetry::finish_command(if result.is_ok() { 0 } else { 1 });
+    result
+}
 
+/// Exit with `code`, recording it on the command's span first.
+fn exit(code: i32) -> ! {
+    symgraph::telemetry::finish_command(code);
+    std::process::exit(code)
+}
+
+fn run(mut args: Vec<String>) -> Result<()> {
     if args.len() < 2 {
         print_usage();
         return Ok(());
@@ -229,7 +245,7 @@ fn main() -> Result<()> {
             }
             _ => {
                 eprintln!("Invalid or missing value for --format (expected: text | json)");
-                std::process::exit(2);
+                exit(2);
             }
         }
     }
@@ -280,7 +296,7 @@ fn main() -> Result<()> {
                  `server` feature.\nInstall the default build, or rebuild with \
                  `cargo build --release`."
             );
-            std::process::exit(2);
+            exit(2);
         }
 
         // ---- indexing ----
@@ -460,7 +476,7 @@ fn main() -> Result<()> {
                 eprintln!(
                     "Usage: {BIN} export --mirrors DIR --state DIR [--since N] [--top N] [--days N]"
                 );
-                std::process::exit(2);
+                exit(2);
             };
             let opts = symgraph::cli::export::ExportOptions {
                 mirrors: mirrors.into(),
@@ -522,7 +538,7 @@ fn main() -> Result<()> {
             Some(shell) => print_completions(shell)?,
             None => {
                 eprintln!("Usage: {BIN} completions <bash|zsh|fish>");
-                std::process::exit(2);
+                exit(2);
             }
         },
         "man" => print_man_page(),
@@ -532,7 +548,7 @@ fn main() -> Result<()> {
         cmd => {
             eprintln!("Unknown command: {}", cmd);
             print_usage();
-            std::process::exit(2);
+            exit(2);
         }
     }
 
@@ -745,7 +761,7 @@ fn print_completions(shell: &str) -> Result<()> {
         "fish" => print!("{}", fish_completions()),
         other => {
             eprintln!("Unsupported shell: {other} (expected: bash | zsh | fish)");
-            std::process::exit(2);
+            exit(2);
         }
     }
     Ok(())

@@ -464,6 +464,48 @@ The index is persistent and shared between the CLI and the MCP server, so you
 `local` storage writes a self-`.gitignore` so even in-tree indexes don't dirty
 `git status`.
 
+## Telemetry
+
+symgraph can report its own use as OpenTelemetry traces to any OTLP/HTTP
+collector, such as [habit](https://github.com/grahambrooks/habit), an
+OpenTelemetry Collector or Jaeger. It is off unless a collector is named.
+
+- **One span per CLI command** (`symgraph <subcommand>`): the subcommand, flag
+  *names*, exit code and duration. **One span per MCP tool call**
+  (`symgraph mcp <tool>`): the tool name and whether it succeeded. Spans also
+  carry `service.version` and the repository's directory name.
+- **Never recorded:** argument values, symbol names, queries, paths or file
+  contents.
+- **Never in the way:** a command exports once at exit, within the timeout
+  (500 ms by default); the MCP server exports from a background thread and
+  drops spans rather than delay a response.
+
+Configure it with the standard environment variables, or with a `[telemetry]`
+table in `$XDG_CONFIG_HOME/symgraph/config.toml` (default
+`~/.config/symgraph/config.toml`). The file is for launchers that don't pass
+`OTEL_*` on to the programs they start, such as Claude Code's Bash tool and
+MCP servers.
+
+```toml
+[telemetry]
+endpoint = "http://127.0.0.1:4318"   # OTLP/HTTP base URL; /v1/traces is appended
+# enabled = false                    # off, whatever the environment says
+# service_name = "symgraph"
+# timeout_ms = 500
+```
+
+| Setting | Effect |
+|---|---|
+| `OTEL_SDK_DISABLED=true`, or `OTEL_TRACES_EXPORTER` without `otlp` | Off, always. |
+| `enabled = false` (file) | Off, even when the environment names an endpoint. |
+| `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` | The traces URL, used as given. Wins over the next two. |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | The collector's base URL. Wins over the file's `endpoint`. |
+| `endpoint` (file) | The collector's base URL. `enabled = true` with no endpoint anywhere means `http://127.0.0.1:4318`. |
+| `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`, or port 4317 | Sent to the same host's OTLP/HTTP port, 4318: symgraph speaks OTLP/HTTP with JSON only. `https://` endpoints turn export off. |
+| `OTEL_SERVICE_NAME`, then `service_name` (file) | The service name (default `symgraph`). |
+| `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_EXPORTER_OTLP_(TRACES_)HEADERS` | Extra resource attributes and request headers. |
+| `OTEL_EXPORTER_OTLP_(TRACES_)TIMEOUT`, then `timeout_ms` (file) | Export timeout in milliseconds (default 500). |
+
 ## Architecture
 
 ```

@@ -39,6 +39,7 @@ pub mod mcp;
 #[cfg(feature = "sqlite")]
 pub mod ops;
 pub mod security;
+pub mod telemetry;
 pub mod types;
 
 use std::collections::BTreeMap;

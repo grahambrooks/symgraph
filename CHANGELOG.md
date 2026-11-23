@@ -11,6 +11,13 @@ release-pipeline follow-ups to the release-kit v2 adoption in 2026.9.2.
 
 ### Added
 
+- **Telemetry: OpenTelemetry traces of symgraph's own use**, to habit or any
+  OTLP/HTTP collector. One span per CLI command (subcommand, flag names, exit
+  code) and one per MCP tool call (tool name, success); never arguments,
+  symbols, queries or paths. Configured by the standard `OTEL_*` variables or
+  a `[telemetry]` table in `~/.config/symgraph/config.toml`, for launchers
+  that don't pass `OTEL_*` on. Off unless a collector is named. See README
+  § Telemetry.
 - **Shell scripts** (`.sh`, `.bash`, `.zsh`, `.ksh`): functions and the calls
   between them, so callers, callees and impact work across sourced files.
   Commands that name no project function (`ls`, builtins) resolve to nothing.
