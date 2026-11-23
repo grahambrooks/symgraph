@@ -581,8 +581,9 @@ impl ServerHandler for SymgraphHandler {
             Every tool takes an optional `root`: the repository to query, absolute or relative \
             to the server's root (e.g. \"emx\"); pass it whenever the session spans several \
             repositories or you are working outside the server's root. The first query against \
-            a root indexes it (or brings its index up to date), so no separate index step is \
-            needed; symgraph-status shows the root and what that pass did. \
+            a root indexes it, and every query picks up files changed, added or deleted since, \
+            so no separate index step is needed; symgraph-status shows the root and what the \
+            first pass did. \
             Use symgraph-context to build task-focused context, symgraph-search for quick lookups, \
             symgraph-callers/callees/impact for understanding code relationships, \
             symgraph-definition to view source code, symgraph-file to list symbols in a file, \

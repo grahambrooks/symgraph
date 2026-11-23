@@ -502,6 +502,15 @@ impl Database {
         }
     }
 
+    /// Every indexed file's path, relative to the project root.
+    pub fn indexed_file_paths(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare("SELECT path FROM files")?;
+        let paths = stmt
+            .query_map([], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<String>>>()?;
+        Ok(paths)
+    }
+
     /// Delete a file and its nodes/edges
     pub fn delete_file(&self, path: &str) -> Result<()> {
         // Delete edges where source or target is in this file

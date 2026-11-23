@@ -220,11 +220,14 @@ repositories to pass instead. One server can so answer for every
 repository in a workspace; over HTTP, roots are confined to the server's
 root.
 
-The first query against a root brings its index up to date: a full build
-when it is empty or from an older version, else an incremental pass over
-changed files (a fraction of a second on a current index). `symgraph-status`
-reports the root and what that pass did. `SYMGRAPH_AUTO_INDEX=0` turns it
-off.
+The first query against a root builds its index when it is empty or from
+an older version. Every query then refreshes it first: files deleted from
+disk are dropped, changed and new files re-indexed, and references
+re-resolved only when something changed, so edits made during a session
+show up in the next answer. A refresh that finds nothing changed costs a
+walk and a stat per file (tens of milliseconds on a few hundred files);
+calls within a second of one share it. `symgraph-status` reports the root
+and what the first pass did. `SYMGRAPH_AUTO_INDEX=0` turns both off.
 
 ### Core Tools
 
@@ -457,7 +460,7 @@ Then point your MCP client at `http://localhost:8080/mcp`.
 | `SYMGRAPH_DB`        | Explicit index database path (highest priority) | —               |
 | `SYMGRAPH_STORAGE`   | Index location strategy: `git` / `cache` / `local` | auto         |
 | `SYMGRAPH_IN_MEMORY` | `1` ⇒ ephemeral in-memory index (no disk writes) | off            |
-| `SYMGRAPH_AUTO_INDEX`| `0` ⇒ the server doesn't index a root on its first query | on       |
+| `SYMGRAPH_AUTO_INDEX`| `0` ⇒ no first-use index and no per-query refresh | on       |
 | `SYMGRAPH_AUTH_TOKEN`| Bearer token for HTTP `/mcp`                  | —                 |
 
 ### Index Storage
