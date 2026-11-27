@@ -534,7 +534,7 @@ symgraph/
 │   ├── lib.rs           # Core indexing logic
 │   ├── types.rs         # Type definitions (Node, Edge, etc.)
 │   ├── db/              # SQLite database operations
-│   ├── extraction/      # Tree-sitter code extraction
+│   ├── extraction/      # Code extraction (rust-analyzer's parser, tree-sitter)
 │   ├── graph/           # Graph traversal algorithms
 │   ├── context/         # Context building for AI tasks
 │   └── mcp/             # MCP protocol handlers
@@ -571,7 +571,7 @@ make install         # Build and install to /usr/local/bin
 |--------------|------------------------------------------------------------|
 | `types`      | Core type definitions (NodeKind, EdgeKind, Language, etc.) |
 | `db`         | SQLite database schema and operations                      |
-| `extraction` | Tree-sitter based code parsing and symbol extraction       |
+| `extraction` | Parsing and symbol extraction: Rust by rust-analyzer's parser, the rest by tree-sitter |
 | `graph`      | Graph algorithms (callers, callees, impact analysis)       |
 | `context`    | Context builder for AI task assistance                     |
 | `mcp`        | MCP protocol server implementation                         |

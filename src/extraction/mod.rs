@@ -1,11 +1,18 @@
 //! Code extraction module
 //!
-//! Uses tree-sitter to parse source code and extract:
+//! Parses source code and extracts:
 //! - Symbols (functions, classes, methods, etc.)
 //! - Relationships (calls, contains, imports, etc.)
+//!
+//! Rust is read by rust-analyzer's parser (`rust`); every other language by
+//! tree-sitter, through the per-language tables in `languages`. The text
+//! rules both share — signatures, visibility, imports, docstrings, how a
+//! reference is recorded — are the free functions below, so the two paths
+//! cannot drift apart on them.
 
 pub(crate) mod languages;
 pub mod manifest;
+mod rust;
 
 use std::path::Path;
 use tree_sitter::Parser;
@@ -71,6 +78,19 @@ impl Extractor {
             };
         }
 
+        if language == Language::Rust {
+            return rust::extract(path, content);
+        }
+        self.extract_tree_sitter(path, content, language)
+    }
+
+    /// Extract with the tree-sitter grammar for `language`.
+    fn extract_tree_sitter(
+        &mut self,
+        path: &Path,
+        content: &str,
+        language: Language,
+    ) -> ExtractionResult {
         let Some(ts_lang) = languages::get_language(language) else {
             return ExtractionResult {
                 errors: vec![ExtractionError {
@@ -125,45 +145,19 @@ impl Extractor {
             None
         };
 
-        let config = languages::get_config(language);
-        let file_path = path.display().to_string();
-
+        let file = FileStart::new(path, content, language);
         let mut ctx = ExtractionContext {
-            result: ExtractionResult::default(),
-            file_path: file_path.clone(),
+            result: file.result,
+            file_path: file.file_path,
             content,
             language,
-            config,
-            node_stack: Vec::new(),
-            next_id: 1,
-            file_is_test: false,
-            file_is_generated: false,
+            config: languages::get_config(language),
+            node_stack: vec![FILE_NODE_ID],
+            next_id: FILE_NODE_ID + 1,
+            file_is_test: file.is_test,
+            file_is_generated: file.is_generated,
             seen_refs: std::collections::HashSet::new(),
         };
-
-        let file_is_test = is_test_path(&file_path);
-        let file_is_generated = is_generated_path(&file_path) || is_generated_content(content);
-
-        // Create file node
-        let file_name = path
-            .file_name()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .to_string();
-        let file_node = Node::builder(NodeKind::File, file_name, file_path.clone(), language)
-            .id(ctx.next_id)
-            .span(0, content.lines().count() as u32, 0, 0)
-            .qualified_name(Some(file_path.clone()))
-            .visibility(Visibility::Public)
-            .is_exported(true)
-            .is_test(file_is_test)
-            .is_generated(file_is_generated)
-            .build();
-        ctx.file_is_test = file_is_test;
-        ctx.file_is_generated = file_is_generated;
-        ctx.next_id += 1;
-        ctx.result.nodes.push(file_node);
-        ctx.node_stack.push(1); // file node ID
 
         // Traverse the tree
         ctx.traverse_node(root);
@@ -224,12 +218,6 @@ impl<'a> ExtractionContext<'a> {
                         let container_id = self.node_stack.last().copied().unwrap_or(1);
                         self.find_import_target(&node, container_id);
                     }
-                    // Rust puts inheritance on the impl block rather than on
-                    // the type declaration, so it is matched here rather than
-                    // through the clause scan.
-                    if self.language == Language::Rust && node_type == "impl_item" {
-                        self.find_rust_impl(&node);
-                    }
                     if let Some(kind) = self.config.node_type_to_kind(node_type) {
                         let name = self.extract_name(&node, kind);
                         if name.is_empty() {
@@ -284,11 +272,6 @@ impl<'a> ExtractionContext<'a> {
             self.result.edges.push(edge);
         }
 
-        // `&mut T` parameters are an intrusive/common-coupling signal.
-        if matches!(kind, NodeKind::Function | NodeKind::Method) {
-            self.find_mut_params(&node, symbol_id);
-        }
-
         // What this type inherits from: base classes and implemented
         // interfaces, read off the declaration's inheritance clauses.
         if matches!(
@@ -336,48 +319,13 @@ impl<'a> ExtractionContext<'a> {
     }
 
     fn extract_signature(&self, node: &tree_sitter::Node, kind: NodeKind) -> Option<String> {
-        match kind {
-            NodeKind::Function | NodeKind::Method => {
-                // Get the first line or until opening brace
-                let text = self.get_node_text(node);
-                let sig = text.lines().next().unwrap_or("");
-                // Truncate at opening brace or newline
-                let sig = sig.split('{').next().unwrap_or(sig).trim();
-                if sig.len() > 200 {
-                    let boundary = (0..=200)
-                        .rev()
-                        .find(|&i| sig.is_char_boundary(i))
-                        .unwrap_or(0);
-                    Some(format!("{}...", &sig[..boundary]))
-                } else {
-                    Some(sig.to_string())
-                }
-            }
-            NodeKind::Class | NodeKind::Struct | NodeKind::Interface | NodeKind::Trait => {
-                let text = self.get_node_text(node);
-                let sig = text.lines().next().unwrap_or("");
-                let sig = sig.split('{').next().unwrap_or(sig).trim();
-                Some(sig.to_string())
-            }
-            _ => None,
-        }
+        signature_of(&self.get_node_text(node), kind)
     }
 
     fn extract_visibility(&self, node: &tree_sitter::Node) -> Visibility {
         let text = self.get_node_text(node);
-        let first_line = text.lines().next().unwrap_or("");
-
-        if first_line.starts_with("pub ") || first_line.contains(" pub ") {
-            return Visibility::Public;
-        }
-        if first_line.starts_with("public ") || first_line.contains(" public ") {
-            return Visibility::Public;
-        }
-        if first_line.starts_with("private ") || first_line.contains(" private ") {
-            return Visibility::Private;
-        }
-        if first_line.starts_with("protected ") || first_line.contains(" protected ") {
-            return Visibility::Protected;
+        if let Some(visibility) = visibility_from_first_line(&text) {
+            return visibility;
         }
 
         // Check for visibility modifier child
@@ -399,7 +347,6 @@ impl<'a> ExtractionContext<'a> {
 
         // Language-specific defaults
         match self.language {
-            Language::Rust => Visibility::Private,
             Language::Go | Language::Python => Visibility::Public,
             Language::TypeScript | Language::JavaScript | Language::Tsx | Language::Jsx => {
                 // In JS/TS, top-level functions without export are module-private
@@ -438,7 +385,7 @@ impl<'a> ExtractionContext<'a> {
                             || text.starts_with("'''")
                             || text.starts_with("r\"\"\"")
                         {
-                            return Some(self.clean_docstring(&text));
+                            return Some(clean_docstring(&text));
                         }
                         break;
                     }
@@ -447,7 +394,7 @@ impl<'a> ExtractionContext<'a> {
             return None;
         }
         comments.reverse();
-        Some(self.clean_docstring(&comments.join("\n")))
+        Some(clean_docstring(&comments.join("\n")))
     }
 
     fn is_test_symbol(&self, node: &tree_sitter::Node, name: &str, kind: NodeKind) -> bool {
@@ -463,14 +410,7 @@ impl<'a> ExtractionContext<'a> {
         // Walk back through preceding sibling annotations/attributes/decorators.
         let mut prev = node.prev_sibling();
         while let Some(p) = prev {
-            let text = self.get_node_text(&p);
-            let trimmed = text.trim();
-            if trimmed.contains("#[test]")
-                || trimmed.contains("#[tokio::test]")
-                || trimmed.contains("#[cfg(test)]")
-                || trimmed.contains("@Test")
-                || trimmed.contains("@pytest.")
-            {
+            if has_test_marker(&self.get_node_text(&p)) {
                 return true;
             }
             // Stop walking once we leave attribute/decorator/annotation territory.
@@ -485,24 +425,6 @@ impl<'a> ExtractionContext<'a> {
             prev = p.prev_sibling();
         }
         false
-    }
-
-    fn clean_docstring(&self, text: &str) -> String {
-        text.lines()
-            .map(|line| {
-                line.trim()
-                    .trim_start_matches("///")
-                    .trim_start_matches("//!")
-                    .trim_start_matches("//")
-                    .trim_start_matches("/**")
-                    .trim_start_matches("/*")
-                    .trim_start_matches('*')
-                    .trim_end_matches("*/")
-                    .trim()
-            })
-            .filter(|line| !line.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n")
     }
 
     fn check_async(&self, node: &tree_sitter::Node) -> bool {
@@ -535,16 +457,7 @@ impl<'a> ExtractionContext<'a> {
     }
 
     fn build_qualified_name(&self, name: &str) -> Option<String> {
-        let mut parts = Vec::new();
-        for &parent_id in &self.node_stack {
-            if let Some(parent) = self.result.nodes.iter().find(|n| n.id == parent_id)
-                && parent.kind != NodeKind::File
-            {
-                parts.push(parent.name.clone());
-            }
-        }
-        parts.push(name.to_string());
-        Some(parts.join("::"))
+        qualified_name(&self.result.nodes, &self.node_stack, name)
     }
 
     /// Emit `Extends` / `Implements` edges for a type declaration.
@@ -632,40 +545,6 @@ impl<'a> ExtractionContext<'a> {
         }
     }
 
-    /// Rust records inheritance on the `impl` block rather than the type, so
-    /// `impl Render for Engine` has to be matched back to `Engine`.
-    ///
-    /// The type is looked up among the symbols already extracted from this
-    /// file. An impl for a type declared elsewhere is skipped: there is no
-    /// node here to hang the edge on, and guessing would attribute it to
-    /// whatever else shares the name.
-    fn find_rust_impl(&mut self, node: &tree_sitter::Node) {
-        let Some(trait_node) = node.child_by_field_name("trait") else {
-            return; // an inherent `impl Type`, which implements nothing
-        };
-        let Some(type_node) = node.child_by_field_name("type") else {
-            return;
-        };
-        let (Some(trait_name), Some(type_name)) = (
-            self.type_base_name(&trait_node),
-            self.type_base_name(&type_node),
-        ) else {
-            return;
-        };
-
-        let implementor = self.result.nodes.iter().find(|n| {
-            n.name == type_name
-                && matches!(
-                    n.kind,
-                    NodeKind::Struct | NodeKind::Enum | NodeKind::Class | NodeKind::TypeAlias
-                )
-        });
-        if let Some(implementor) = implementor {
-            let id = implementor.id;
-            self.push_ref(id, trait_name, EdgeKind::Implements, &trait_node, None);
-        }
-    }
-
     /// Walk a symbol's body iteratively (stack-safe on deeply nested ASTs) and
     /// record references:
     /// - `Calls` for call expressions,
@@ -716,22 +595,14 @@ impl<'a> ExtractionContext<'a> {
         node: &tree_sitter::Node,
         detail: Option<String>,
     ) {
-        if name.is_empty() {
-            return;
-        }
-        if kind != EdgeKind::Calls && !self.seen_refs.insert((source_id, kind, name.clone())) {
-            return;
-        }
         let start = node.start_position();
-        self.result.unresolved_refs.push(UnresolvedReference {
-            source_node_id: source_id,
-            reference_name: name,
-            kind,
-            file_path: self.file_path.clone(),
-            line: start.row as u32 + 1,
-            column: start.column as u32,
-            detail,
-        });
+        push_unresolved(
+            &mut self.result,
+            &mut self.seen_refs,
+            &self.file_path,
+            (source_id, name, kind, detail),
+            (start.row as u32 + 1, start.column as u32),
+        );
     }
 
     /// True if `node` is the callee (function position) of a call expression,
@@ -791,79 +662,15 @@ impl<'a> ExtractionContext<'a> {
     /// Emit an `Imports` edge from `container_id` to the imported target.
     /// Glob imports (`use x::*`, `from x import *`) carry detail "glob".
     fn find_import_target(&mut self, node: &tree_sitter::Node, container_id: i64) {
-        let text = self.get_node_text(node);
-        let is_glob = text.contains('*');
-        let tokens: Vec<&str> = text
-            .split(|c: char| !(c.is_alphanumeric() || c == '_'))
-            .filter(|t| {
-                !t.is_empty()
-                    && !matches!(
-                        *t,
-                        "use" | "import" | "from" | "as" | "pub" | "crate" | "self" | "super"
-                    )
-            })
-            .collect();
-        if let Some(&name) = tokens.last() {
-            let detail = if is_glob {
-                Some("glob".to_string())
-            } else {
-                None
-            };
-            self.push_ref(
-                container_id,
-                name.to_string(),
-                EdgeKind::Imports,
-                node,
-                detail,
-            );
+        if let Some((name, detail)) = import_target(&self.get_node_text(node)) {
+            self.push_ref(container_id, name, EdgeKind::Imports, node, detail);
         }
-    }
-
-    /// Detect `&mut T` parameters (Rust) and record a `Mutates` edge from the
-    /// function to the borrowed type — a common-coupling signal.
-    fn find_mut_params(&mut self, node: &tree_sitter::Node, source_id: i64) {
-        if self.language != Language::Rust {
-            return;
-        }
-        let Some(params) = node.child_by_field_name("parameters") else {
-            return;
-        };
-        let mut cursor = params.walk();
-        for param in params.children(&mut cursor) {
-            if let Some(ty) = param.child_by_field_name("type")
-                && ty.kind() == "reference_type"
-                && self.has_mut_specifier(&ty)
-                && let Some(inner) = ty.child_by_field_name("type")
-                && let Some(name) = self.type_base_name(&inner)
-            {
-                self.push_ref(
-                    source_id,
-                    name,
-                    EdgeKind::Mutates,
-                    &ty,
-                    Some("mut_param".to_string()),
-                );
-            }
-        }
-    }
-
-    fn has_mut_specifier(&self, node: &tree_sitter::Node) -> bool {
-        let mut cursor = node.walk();
-        node.children(&mut cursor)
-            .any(|c| c.kind() == "mutable_specifier")
     }
 
     /// Base type name from a type node, dropping path prefix and generics:
     /// `crate::model::Model<T>` -> `Model`.
     fn type_base_name(&self, node: &tree_sitter::Node) -> Option<String> {
-        let text = self.get_node_text(node);
-        let base = text.split('<').next().unwrap_or(&text);
-        let seg = base.rsplit("::").next().unwrap_or(base).trim();
-        if seg.is_empty() {
-            None
-        } else {
-            Some(seg.to_string())
-        }
+        type_base_name(&self.get_node_text(node))
     }
 
     fn extract_call_name(&self, node: &tree_sitter::Node) -> Option<String> {
@@ -877,16 +684,7 @@ impl<'a> ExtractionContext<'a> {
 
         // Look for function name in call expression
         if let Some(func) = node.child_by_field_name("function") {
-            let text = self.get_node_text(&func);
-            // Handle method calls: obj.method() -> method
-            if let Some(dot_pos) = text.rfind('.') {
-                return Some(text[dot_pos + 1..].to_string());
-            }
-            // Handle path calls: foo::bar() -> bar
-            if let Some(colon_pos) = text.rfind("::") {
-                return Some(text[colon_pos + 2..].to_string());
-            }
-            return Some(text);
+            return Some(callee_name_from_text(&self.get_node_text(&func)));
         }
 
         // Try first child as fallback
@@ -918,6 +716,203 @@ impl Default for Extractor {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// The id of a file's own node, the first one extracted from it and the
+/// container of everything declared at its top level.
+const FILE_NODE_ID: i64 = 1;
+
+/// What every extraction starts from: a result holding the file's node, and
+/// what the file's path and content say about all its symbols.
+struct FileStart {
+    result: ExtractionResult,
+    file_path: String,
+    is_test: bool,
+    is_generated: bool,
+}
+
+impl FileStart {
+    fn new(path: &Path, content: &str, language: Language) -> Self {
+        let file_path = path.display().to_string();
+        let is_test = is_test_path(&file_path);
+        let is_generated = is_generated_path(&file_path) || is_generated_content(content);
+        let file_name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let file_node = Node::builder(NodeKind::File, file_name, file_path.clone(), language)
+            .id(FILE_NODE_ID)
+            .span(0, content.lines().count() as u32, 0, 0)
+            .qualified_name(Some(file_path.clone()))
+            .visibility(Visibility::Public)
+            .is_exported(true)
+            .is_test(is_test)
+            .is_generated(is_generated)
+            .build();
+        let result = ExtractionResult {
+            nodes: vec![file_node],
+            ..Default::default()
+        };
+        Self {
+            result,
+            file_path,
+            is_test,
+            is_generated,
+        }
+    }
+}
+
+/// A symbol's name qualified by the symbols enclosing it (`stack`, outermost
+/// first; the file is left out): `outer::inner::name`.
+fn qualified_name(nodes: &[Node], stack: &[i64], name: &str) -> Option<String> {
+    let mut parts = Vec::new();
+    for &parent_id in stack {
+        if let Some(parent) = nodes.iter().find(|n| n.id == parent_id)
+            && parent.kind != NodeKind::File
+        {
+            parts.push(parent.name.clone());
+        }
+    }
+    parts.push(name.to_string());
+    Some(parts.join("::"))
+}
+
+/// Record a reference to be resolved once every file is indexed.
+///
+/// `what` is (source node, target name, edge kind, detail); `at` the
+/// 1-based line and byte column. Structural (non-call) edges are deduped per
+/// (source, kind, name) in `seen`, so common field reads don't explode the
+/// graph; calls are not, to keep call-graph semantics.
+fn push_unresolved(
+    result: &mut ExtractionResult,
+    seen: &mut std::collections::HashSet<(i64, EdgeKind, String)>,
+    file_path: &str,
+    what: (i64, String, EdgeKind, Option<String>),
+    at: (u32, u32),
+) {
+    let (source_id, name, kind, detail) = what;
+    if name.is_empty() {
+        return;
+    }
+    if kind != EdgeKind::Calls && !seen.insert((source_id, kind, name.clone())) {
+        return;
+    }
+    result.unresolved_refs.push(UnresolvedReference {
+        source_node_id: source_id,
+        reference_name: name,
+        kind,
+        file_path: file_path.to_string(),
+        line: at.0,
+        column: at.1,
+        detail,
+    });
+}
+
+/// A symbol's signature, from its declaration's text: the first line, up to
+/// any opening brace, for functions and types; nothing for other kinds.
+fn signature_of(text: &str, kind: NodeKind) -> Option<String> {
+    let first = text.lines().next().unwrap_or("");
+    let sig = first.split('{').next().unwrap_or(first).trim();
+    match kind {
+        NodeKind::Function | NodeKind::Method => {
+            if sig.len() > 200 {
+                let boundary = (0..=200)
+                    .rev()
+                    .find(|&i| sig.is_char_boundary(i))
+                    .unwrap_or(0);
+                Some(format!("{}...", &sig[..boundary]))
+            } else {
+                Some(sig.to_string())
+            }
+        }
+        NodeKind::Class | NodeKind::Struct | NodeKind::Interface | NodeKind::Trait => {
+            Some(sig.to_string())
+        }
+        _ => None,
+    }
+}
+
+/// The visibility a declaration's first line spells with a keyword, if any.
+fn visibility_from_first_line(text: &str) -> Option<Visibility> {
+    let first_line = text.lines().next().unwrap_or("");
+    let has = |word: &str| {
+        first_line.starts_with(&format!("{word} ")) || first_line.contains(&format!(" {word} "))
+    };
+    if has("pub") || has("public") {
+        Some(Visibility::Public)
+    } else if has("private") {
+        Some(Visibility::Private)
+    } else if has("protected") {
+        Some(Visibility::Protected)
+    } else {
+        None
+    }
+}
+
+/// Whether an attribute, annotation or decorator's text marks a test.
+fn has_test_marker(text: &str) -> bool {
+    let text = text.trim();
+    text.contains("#[test]")
+        || text.contains("#[tokio::test]")
+        || text.contains("#[cfg(test)]")
+        || text.contains("@Test")
+        || text.contains("@pytest.")
+}
+
+/// Comment markers stripped from each line, and empty lines dropped.
+fn clean_docstring(text: &str) -> String {
+    text.lines()
+        .map(|line| {
+            line.trim()
+                .trim_start_matches("///")
+                .trim_start_matches("//!")
+                .trim_start_matches("//")
+                .trim_start_matches("/**")
+                .trim_start_matches("/*")
+                .trim_start_matches('*')
+                .trim_end_matches("*/")
+                .trim()
+        })
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The target an import statement names — its last word that isn't a
+/// keyword — and the detail "glob" when it imports with `*`.
+fn import_target(text: &str) -> Option<(String, Option<String>)> {
+    let name = text
+        .split(|c: char| !(c.is_alphanumeric() || c == '_'))
+        .rfind(|t| {
+            !t.is_empty()
+                && !matches!(
+                    *t,
+                    "use" | "import" | "from" | "as" | "pub" | "crate" | "self" | "super"
+                )
+        })?;
+    let detail = text.contains('*').then(|| "glob".to_string());
+    Some((name.to_string(), detail))
+}
+
+/// Base type name from a type's text, dropping path prefix and generics:
+/// `crate::model::Model<T>` -> `Model`.
+fn type_base_name(text: &str) -> Option<String> {
+    let base = text.split('<').next().unwrap_or(text);
+    let seg = base.rsplit("::").next().unwrap_or(base).trim();
+    (!seg.is_empty()).then(|| seg.to_string())
+}
+
+/// The name a callee's text calls: the method of `obj.method`, the last
+/// segment of `foo::bar`, else the whole text.
+fn callee_name_from_text(text: &str) -> String {
+    if let Some(dot_pos) = text.rfind('.') {
+        return text[dot_pos + 1..].to_string();
+    }
+    if let Some(colon_pos) = text.rfind("::") {
+        return text[colon_pos + 2..].to_string();
+    }
+    text.to_string()
 }
 
 /// Heuristic: does the given symbol name look like a test?

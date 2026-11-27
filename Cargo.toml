@@ -39,9 +39,13 @@ tokio = { version = "1", features = ["full"], optional = true }
 # exclude the server stack.
 schemars = "1.2"
 
-# Tree-sitter for code parsing
+# Rust is parsed by rust-analyzer's parser: pure Rust, lossless, and it reads
+# macro-heavy code tree-sitter-rust gave errors on. Its 0.0.x releases are
+# weekly and may break the API, so a bump is a reviewed change, not a refresh.
+ra_ap_syntax = "0.0.364"
+
+# Tree-sitter for parsing every other language
 tree-sitter = "0.27"
-tree-sitter-rust = "0.24"
 tree-sitter-javascript = "0.25"
 tree-sitter-typescript = "0.23"
 tree-sitter-python = "0.25"

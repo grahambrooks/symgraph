@@ -28,14 +28,14 @@ Quick reference for AI agents working in this Rust MCP server repository.
 - `types.rs`: Node, Edge, Language enums
 - `cli/`: Command implementations, DB utilities
 - `db/`: SQLite CRUD, queries, transactions
-- `extraction/`: Tree-sitter parsing, symbol detection
+- `extraction/`: Parsing (rust-analyzer's parser for Rust, tree-sitter for the rest), symbol detection
 - `graph/`: Traversal algorithms (callers, callees, impact)
 - `context/`: AI context building
 - `mcp/`: Protocol, tool definitions, handlers
 
-**Data Flow**: Source Files → Extraction (tree-sitter) → Database (SQLite) → Resolution (link refs) → Graph Queries → MCP Tools
+**Data Flow**: Source Files → Extraction (`ra_ap_syntax` for Rust, tree-sitter otherwise) → Database (SQLite) → Resolution (link refs) → Graph Queries → MCP Tools
 
-**Key Dependencies**: `rmcp` (MCP), `tree-sitter` (parsing), `rusqlite` (DB), `axum` (HTTP), `ignore` (file walking)
+**Key Dependencies**: `rmcp` (MCP), `ra_ap_syntax` (Rust parsing), `tree-sitter` (other languages), `rusqlite` (DB), `axum` (HTTP), `ignore` (file walking)
 
 **Database**: `.symgraph/index.db` with tables: `files`, `nodes`, `edges`, `unresolved_refs`
 Indexes on: `nodes(name)`, `edges(source_id)`, `edges(target_id)`, `files(path)`

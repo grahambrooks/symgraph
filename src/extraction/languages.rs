@@ -1,4 +1,6 @@
-//! Language-specific configurations for tree-sitter extraction
+//! Language-specific configurations for tree-sitter extraction.
+//!
+//! Rust is not here: it is read by rust-analyzer's parser (`super::rust`).
 
 use tree_sitter::Language as TsLanguage;
 
@@ -148,7 +150,6 @@ impl LanguageConfig {
 /// Get the tree-sitter language for a given Language
 pub fn get_language(lang: Language) -> Option<TsLanguage> {
     match lang {
-        Language::Rust => Some(tree_sitter_rust::LANGUAGE.into()),
         Language::TypeScript | Language::Tsx => {
             Some(tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into())
         }
@@ -168,15 +169,15 @@ pub fn get_language(lang: Language) -> Option<TsLanguage> {
     }
 }
 
-/// Whether symgraph can parse `lang`.
+/// Whether symgraph can parse `lang`: with rust-analyzer's parser for Rust,
+/// else a tree-sitter grammar.
 pub fn has_grammar(lang: Language) -> bool {
-    get_language(lang).is_some()
+    lang == Language::Rust || get_language(lang).is_some()
 }
 
 /// Get the language configuration for a given Language
 pub fn get_config(lang: Language) -> &'static LanguageConfig {
     match lang {
-        Language::Rust => &RUST_CONFIG,
         Language::TypeScript | Language::Tsx => &TYPESCRIPT_CONFIG,
         Language::JavaScript | Language::Jsx => &JAVASCRIPT_CONFIG,
         Language::Python => &PYTHON_CONFIG,
@@ -214,30 +215,6 @@ static DEFAULT_CONFIG: LanguageConfig = LanguageConfig {
     field_types: &[],
     enum_member_types: &[],
     // no grammar, so nothing to read
-    extends_clause_types: &[],
-    implements_clause_types: &[],
-};
-
-static RUST_CONFIG: LanguageConfig = LanguageConfig {
-    function_types: &["function_item"],
-    method_types: &["function_item"], // Methods are also function_item in impl blocks
-    class_types: &[],
-    struct_types: &["struct_item"],
-    interface_types: &["trait_item"],
-    enum_types: &["enum_item"],
-    import_types: &["use_declaration"],
-    call_types: &["call_expression", "macro_invocation"],
-    type_alias_types: &["type_item"],
-    constant_types: &["const_item", "static_item"],
-    variable_types: &["let_declaration"],
-    module_types: &["mod_item"],
-    field_access_types: &["field_expression"],
-    field_name_field: "field",
-    assignment_types: &["assignment_expression", "compound_assignment_expr"],
-    enum_match_types: &["match_expression"],
-    field_types: &["field_declaration"],
-    enum_member_types: &["enum_variant"],
-    // handled via impl_item
     extends_clause_types: &[],
     implements_clause_types: &[],
 };

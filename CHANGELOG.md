@@ -159,6 +159,38 @@ release-pipeline follow-ups to the release-kit v2 adoption in 2026.9.2.
 
 ### Changed
 
+- **Rust is parsed by rust-analyzer's parser** (`ra_ap_syntax`) instead of
+  tree-sitter-rust, which is gone; every other language stays on tree-sitter.
+  Measured against the old extractor on the Cargo registry's 122,871 `.rs`
+  files: 5,350 that tree-sitter read with syntax errors (macro-heavy code,
+  mostly), and so indexed partially, now parse cleanly, against 51 the other
+  way, in 144 s against 311 s. On files both parse, the symbols are the same
+  ones except where tree-sitter-rust's shape was wrong:
+  - **Docstrings** belong to their item. Docs above an attribute
+    (`/// …` then `#[derive(…)]`) were missed; `//!` module docs and
+    blank-line-separated `// --- section ---` banners were taken as the next
+    item's.
+  - **`is_async` / `is_static`** come from the declaration. They were read
+    off the whole text, so a function whose body held `async move` or a
+    trait with an `async fn` was async, and one with a local `static` static.
+  - **`is_test`** no longer spreads from a `#[cfg(test)]` anywhere in the
+    preceding item.
+  - **Calls**: a turbofish method call is `collect`, not `collect::<Vec<_>>`
+    plus a field read of `collect`; qualified macros (`serde_json::json!`,
+    `anyhow::bail!`) are calls; a closure called in place no longer makes a
+    name of its source text.
+  - **Enum dispatch** takes struct-variant patterns (`Event::Key { .. }`,
+    previously the enum `Event`) and no longer counts macro or type paths
+    inside a match.
+  - `self: &mut T` is a `&mut` parameter; a syntax error is reported at its
+    own line, not line 1.
+  - A `const _: () = { … }` block is no longer a symbol named `_`, so what it
+    holds is qualified by its own names; nor is a bare `use x;` an Import
+    symbol (it is still an import edge).
+
+  The extractor version is now 5, so an index built before reports itself
+  stale until it is rebuilt.
+
 - **rmcp 3.** The MCP server is built on rmcp 3.7 (from 2.2). Tools, the
   stdio and HTTP transports, and the advertised capabilities are unchanged;
   rmcp 3 adds support for the 2026-07-28 protocol version, which it serves

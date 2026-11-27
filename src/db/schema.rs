@@ -130,7 +130,10 @@ pub const SCHEMA_VERSION: u32 = 1;
 /// - v4: minified files (`.min.js`, a first line over 2,000 characters) are
 ///   marked generated, and the dependency graph leaves generated code out. A
 ///   vendored `mermaid.min.js` had been the top fan-in node of a project.
-pub const EXTRACTOR_VERSION: u32 = 4;
+/// - v5: Rust is read by rust-analyzer's parser. Indexes built before this
+///   hold tree-sitter-rust's partial reads of macro-heavy files, and its
+///   docstrings, `async`/`static`/test flags, call names and dispatch edges.
+pub const EXTRACTOR_VERSION: u32 = 5;
 
 /// Additive schema migrations applied after CREATE TABLE IF NOT EXISTS.
 ///
